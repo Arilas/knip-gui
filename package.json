@@ -20,7 +20,7 @@
     "dev:client": "vite --config client/vite.config.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
+    "test:e2e": "tsx scripts/e2e-fixture.ts --reap-only && playwright test",
     "e2e:fixture": "tsx scripts/e2e-fixture.ts",
     "typecheck": "tsc --noEmit && tsc -p client/tsconfig.json"
   },

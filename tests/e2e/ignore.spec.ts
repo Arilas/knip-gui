@@ -33,7 +33,12 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
   // Preview: the ignore compiler writes an ignoreDependencies entry into the
   // fixture's knip.json (findKnipConfig prefers a dedicated knip.json over
   // package.json#knip when one exists — see src/ignore/config-writer.ts).
-  await expect(page.getByTestId('diff-view-knip.json')).toBeVisible({ timeout: 10_000 });
+  // Assert the diff CONTENT, not just visibility: the added lines must be
+  // the ignoreDependencies entry naming left-pad.
+  const knipJsonDiff = page.getByTestId('diff-view-knip.json');
+  await expect(knipJsonDiff).toBeVisible({ timeout: 10_000 });
+  await expect(knipJsonDiff).toContainText('ignoreDependencies');
+  await expect(knipJsonDiff).toContainText('left-pad');
 
   await page.getByRole('button', { name: 'Apply' }).click();
 

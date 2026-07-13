@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+// Keep in sync with scripts/e2e-fixture.ts's E2E_PORT (which reaps stray
+// servers left bound to it by abnormally-terminated previous runs).
 const PORT = 4818;
 const FIXTURE_DIR = '.tmp-tests/e2e-fixture';
 

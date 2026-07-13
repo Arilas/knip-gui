@@ -42,8 +42,13 @@ test('select unused export + unused file, fix, rescan clears them, commit', asyn
 
   // Preview step: exactly 2 diffs (src/used.ts strip-export, src/orphan.ts delete).
   await expect(page.locator('[data-testid^="diff-view-"]')).toHaveCount(2, { timeout: 10_000 });
-  await expect(page.getByTestId('diff-view-src/used.ts')).toBeVisible();
-  await expect(page.getByTestId('diff-view-src/orphan.ts')).toBeVisible();
+  // Not just visible — the diff CONTENT must show the right change: the
+  // used.ts diff touches the unusedHelper declaration, and the orphan.ts
+  // diff is a whole-file deletion (renderDiff diffs against empty content
+  // when patch.kind === 'delete' — see src/fix/diff.ts), so its single line
+  // of content shows up as a `-` removal line.
+  await expect(page.getByTestId('diff-view-src/used.ts')).toContainText('unusedHelper');
+  await expect(page.getByTestId('diff-view-src/orphan.ts')).toContainText('-export const nobodyImportsMe');
 
   await page.getByRole('button', { name: 'Apply' }).click();
 
