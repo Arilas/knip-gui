@@ -88,6 +88,7 @@ export function normalize(raw: unknown, workspaceDirs: string[]): Issue[] {
     symbol: string | undefined,
     parentSymbol: string | undefined,
     position: { line?: number; col?: number; pos?: number },
+    duplicateMembers?: Issue['duplicateMembers'],
   ): void {
     const fixModes = FIX_MODES_BY_TYPE[type];
     const keyParts = [workspace, filePath, type, parentSymbol, symbol];
@@ -106,6 +107,7 @@ export function normalize(raw: unknown, workspaceDirs: string[]): Issue[] {
       pos: position.pos,
       fixable: fixModes.length > 0,
       fixModes,
+      ...(duplicateMembers ? { duplicateMembers } : {}),
     });
   }
 
@@ -119,13 +121,15 @@ export function normalize(raw: unknown, workspaceDirs: string[]): Issue[] {
       if (type === 'duplicates') {
         // One Issue per duplicate group (not per name): symbol is every duplicated
         // name joined together, position is the original declaration's (the group's
-        // first element).
+        // first element). duplicateMembers preserves every member's own position
+        // (knip's order: original first, aliases after) so fix engines can locate
+        // each alias to remove.
         for (const group of duplicateGroups(entry[type])) {
-          const symbol = group
-            .map((g) => g.name)
-            .filter((n): n is string => !!n)
-            .join(', ');
-          pushIssue(type, filePath, workspace, symbol, undefined, group[0]!);
+          const members = group
+            .filter((g): g is RawEntry & { name: string } => !!g.name)
+            .map((g) => ({ symbol: g.name, line: g.line, col: g.col, pos: g.pos }));
+          const symbol = members.map((m) => m.symbol).join(', ');
+          pushIssue(type, filePath, workspace, symbol, undefined, group[0]!, members);
         }
         continue;
       }

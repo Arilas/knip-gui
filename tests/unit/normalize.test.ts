@@ -62,6 +62,28 @@ describe('normalize', () => {
     expect(issues.filter((i) => i.type === 'duplicates')).toHaveLength(1);
   });
 
+  it('carries every duplicate-group member with its own position in duplicateMembers', () => {
+    const dup = issues.find((i) => i.type === 'duplicates')!;
+    expect(dup.duplicateMembers).toHaveLength(2);
+    const [original, alias] = dup.duplicateMembers!;
+    // knip's order: original declaration first, aliases after.
+    expect(original!.symbol).toBe('dupeSource');
+    expect(alias!.symbol).toBe('dupeAlias');
+    // Each member keeps its own position; the alias's differs from the issue's
+    // top-level (original's) position, so a fix engine can locate the alias.
+    expect(original!.pos).toBe(dup.pos);
+    expect(original!.line).toBe(dup.line);
+    expect(alias!.pos).toBeGreaterThan(0);
+    expect(alias!.pos).not.toBe(dup.pos);
+    expect(alias!.line).toBeGreaterThan(dup.line!);
+  });
+
+  it('does not attach duplicateMembers to non-duplicates issues', () => {
+    for (const i of issues) {
+      if (i.type !== 'duplicates') expect(i.duplicateMembers).toBeUndefined();
+    }
+  });
+
   it('flattens the unused named export from an export { a, b } list', () => {
     const e = issues.find((i) => i.type === 'exports' && i.symbol === 'listUnused');
     expect(e).toMatchObject({ filePath: 'src/forms.ts', fixModes: ['strip-export', 'delete-declaration'] });

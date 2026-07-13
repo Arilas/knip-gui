@@ -39,6 +39,14 @@ export interface Issue {
   pos?: number;
   fixable: boolean;
   fixModes: FixMode[];
+  /**
+   * Only for type 'duplicates': every member of the duplicate-export group with
+   * its own position, in knip's order (original declaration first, aliases after).
+   * The top-level symbol/line/col/pos summarize the group (joined names + the
+   * original declaration's position); fix engines removing an alias must target
+   * the positions in duplicateMembers[1..], not the top-level position.
+   */
+  duplicateMembers?: { symbol: string; line?: number; col?: number; pos?: number }[];
 }
 
 export interface Report {
