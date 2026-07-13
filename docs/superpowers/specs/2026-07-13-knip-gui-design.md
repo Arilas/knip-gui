@@ -3,6 +3,18 @@
 **Date:** 2026-07-13
 **Status:** Approved for planning
 
+## Errata / approved deviations
+
+- **No SSE for scan progress** (Plan 1): `POST /api/scan` is a single awaited request.
+  Knip emits no incremental progress, so SSE bought nothing.
+- **`classMembers` does not exist in knip 6** (discovered against knip 6.26.0 ground
+  truth): knip's real issue-type universe is files, dependencies, devDependencies,
+  optionalPeerDependencies, unlisted, binaries, unresolved, exports, nsExports,
+  types, nsTypes, enumMembers, namespaceMembers, duplicates, catalog, cycles. Every
+  mention of class members below should be read as enum/namespace members. Member
+  entries carry a `namespace` field naming the parent. Supported knip floor is v6;
+  older majors work but issue types they emit that knip 6 doesn't are ignored.
+
 ## Summary
 
 `knip-gui` is an npm package run via `npx knip-gui` in a project root. It runs the
