@@ -23,6 +23,7 @@
     "@hono/node-server": "^2.0.8",
     "diff": "^9.0.0",
     "hono": "^4.12.30",
+    "jsonc-parser": "^3.3.1",
     "magic-string": "^0.30.21",
     "open": "^11.0.0",
     "oxc-parser": "^0.137.0"
