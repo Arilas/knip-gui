@@ -79,3 +79,38 @@
 .code-pane-html .shiki code .line.code-pane-flagged-line {
   background-color: rgba(245, 158, 11, 0.14);
 }
+
+/*
+ * DiffView (Task 5): the same shiki dual-theme strategy as .code-pane-html
+ * above, scoped separately (its own class rather than reusing .code-pane-html)
+ * since a diff block has no gutter-marker overlay to keep in sync with and
+ * wants a tighter, no-line-number layout instead.
+ */
+.diff-view-html .shiki,
+.diff-view-html .shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .diff-view-html .shiki,
+  .diff-view-html .shiki span {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg, transparent);
+  }
+}
+
+.diff-view-html .shiki {
+  margin: 0;
+  padding: 0.5rem;
+  overflow-x: auto;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-view-html .shiki code .line {
+  display: inline-block;
+  width: 100%;
+}

@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ActionModal } from './components/ActionModal.js';
 import { CodePane } from './components/CodePane.js';
 import { FacetRail } from './components/FacetRail.js';
 import { Overview } from './components/Overview.js';
 import { SelectionBar } from './components/SelectionBar.js';
 import { TableView } from './components/TableView.js';
+import { ToastProvider } from './components/Toast.js';
 import { TopBar } from './components/TopBar.js';
 import { TreeView } from './components/TreeView.js';
 import { issuesForFacet, type Facet } from './lib/facets.js';
@@ -20,21 +22,32 @@ const queryClient = new QueryClient();
 function AppShell() {
   const [activeFacet, setActiveFacet] = useState<Facet>('overview');
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
+  const [modalMode, setModalMode] = useState<'fix' | 'ignore' | null>(null);
   const { data, isLoading, error } = useReport();
 
   const selected = useSelectionStore((s) => s.selected);
   const toggle = useSelectionStore((s) => s.toggle);
+  const pruneMissing = useSelectionStore((s) => s.pruneMissing);
 
   const report = data?.report;
   const issues = report?.issues ?? [];
   const workspaces = report?.workspaces ?? ['.'];
   const facetIssues = issuesForFacet(activeFacet, issues);
 
-  // ActionModal is Task 5 — until then, this proves onOpenModal is wired
-  // for real (SelectionBar's busy-disable logic already is) without
-  // pretending a modal exists.
+  // Task 5's apply-flow obligation: whenever a fresh report lands (the
+  // post-apply background rescan, a manual re-run, a sweep — any of them),
+  // drop any selected/mode-overridden ids the new report no longer contains,
+  // so the cart never shows a stale count for an issue that's already gone.
+  // Keyed on scannedAt (not the `report` object reference, which changes on
+  // every poll) so this only runs once per actual new scan.
+  useEffect(() => {
+    if (!report) return;
+    pruneMissing(report.issues.map((i) => i.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report?.scannedAt]);
+
   function onOpenModal(mode: 'fix' | 'ignore') {
-    console.info(`[knip-gui] ${mode} modal requested for ${selected.size} issue(s) — arrives in Task 5`);
+    setModalMode(mode);
   }
 
   return (
@@ -102,6 +115,8 @@ function AppShell() {
       </div>
 
       <SelectionBar issues={issues} onOpenModal={onOpenModal} />
+
+      {modalMode && <ActionModal mode={modalMode} issues={issues} onClose={() => setModalMode(null)} />}
     </div>
   );
 }
@@ -109,7 +124,9 @@ function AppShell() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AppShell />
+      <ToastProvider>
+        <AppShell />
+      </ToastProvider>
     </QueryClientProvider>
   );
 }

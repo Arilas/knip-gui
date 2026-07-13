@@ -30,6 +30,22 @@ export class ApiError extends Error {
   }
 }
 
+// Toast.tsx's error toasts (and CommitPanel's inline git-failure message) all
+// funnel through here: every failing route in this app replies with a JSON
+// body shaped `{ error, stderr? }` (routes-git.ts's gitErrorBody) or just
+// `{ error }` (routes-fix.ts) — `body.error` is preferred since it's always a
+// human-readable message, `stderr` is appended when present since it's the
+// actual git output the message text summarized.
+export function apiErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    const body = err.body as { error?: unknown; stderr?: unknown } | undefined;
+    const message = typeof body?.error === 'string' ? body.error : err.message;
+    const stderr = typeof body?.stderr === 'string' && body.stderr.trim() ? body.stderr.trim() : undefined;
+    return stderr ? `${message}: ${stderr}` : message;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 // The literal placeholder baked into the built index.html (see
 // client/index.html) — swapped for the real token at serve time by GET / in
 // src/server/index.ts. The Vite dev server never does that substitution, so

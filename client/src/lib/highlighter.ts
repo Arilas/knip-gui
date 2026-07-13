@@ -84,16 +84,7 @@ function getHighlighter(): Promise<Highlighter> {
   return highlighterPromise;
 }
 
-/**
- * Dual-theme highlighted HTML for `content` at `path`. Throws if `path` has
- * no known language — callers must check `langForPath` first and fall back
- * to a plain `<pre>` (CodePane does this for the non-highlightable-extension
- * state).
- */
-export async function highlightToHtml(content: string, path: string): Promise<string> {
-  const lang = langForPath(path);
-  if (!lang) throw new Error(`No shiki language mapped for ${path}`);
-
+async function highlightWithLang(content: string, lang: string): Promise<string> {
   const highlighter = await getHighlighter();
   if (!loadedLangs.has(lang)) {
     await highlighter.loadLanguage(lang as Parameters<Highlighter['loadLanguage']>[0]);
@@ -105,4 +96,25 @@ export async function highlightToHtml(content: string, path: string): Promise<st
     themes: SHIKI_THEMES,
     defaultColor: false,
   });
+}
+
+/**
+ * Dual-theme highlighted HTML for `content` at `path`. Throws if `path` has
+ * no known language — callers must check `langForPath` first and fall back
+ * to a plain `<pre>` (CodePane does this for the non-highlightable-extension
+ * state).
+ */
+export async function highlightToHtml(content: string, path: string): Promise<string> {
+  const lang = langForPath(path);
+  if (!lang) throw new Error(`No shiki language mapped for ${path}`);
+  return highlightWithLang(content, lang);
+}
+
+// DiffView's (Task 5) per-file unified diffs aren't path-derived — there's no
+// extension to infer a language from — so this bypasses langForPath entirely
+// and loads shiki's bundled 'diff' grammar directly (confirmed present in
+// shiki's bundledLanguages map), sharing the same lazily-loaded highlighter
+// singleton and loadLanguage-memoization as highlightToHtml above.
+export async function highlightDiff(diff: string): Promise<string> {
+  return highlightWithLang(diff, 'diff');
 }
