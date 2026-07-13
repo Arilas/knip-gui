@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Placeholder replaced with the real per-session token at serve time by
+      GET / in src/server/index.ts (string replace against the built output,
+      not the dev server — see client/vite.config.ts for the dev-time path).
+      Every fetch to /api/* must send this value as x-knip-gui-token.
+    -->
+    <meta name="knip-gui-token" content="__KNIP_GUI_TOKEN__" />
+    <title>knip-gui</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

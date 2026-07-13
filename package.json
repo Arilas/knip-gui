@@ -14,25 +14,44 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build:client": "NODE_ENV=production vite build --config client/vite.config.ts",
+    "dev:client": "vite --config client/vite.config.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "test:e2e": "tsx scripts/e2e-fixture.ts --reap-only && playwright test",
+    "e2e:fixture": "tsx scripts/e2e-fixture.ts",
+    "typecheck": "tsc --noEmit && tsc -p client/tsconfig.json"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.8",
+    "@tailwindcss/vite": "^4.3.2",
+    "@tanstack/react-query": "^5.101.2",
+    "@tanstack/react-virtual": "^3.14.6",
     "diff": "^9.0.0",
     "hono": "^4.12.30",
     "jsonc-parser": "^3.3.1",
     "magic-string": "^0.30.21",
     "open": "^11.0.0",
-    "oxc-parser": "^0.137.0"
+    "oxc-parser": "^0.137.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "shiki": "^4.3.1",
+    "tailwindcss": "^4.3.2",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "jsdom": "^29.1.1",
     "knip": "^6.26.0",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
+    "vite": "^8.1.4",
     "vitest": "^4.1.10"
   }
 }

@@ -1,7 +1,7 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createServer } from '../../src/server/index.js';
 
 const single = new URL('../fixtures/single/', import.meta.url).pathname;
@@ -36,6 +36,71 @@ describe('server security', () => {
     const res = await app.request('/');
     expect(res.status).toBe(200);
     expect(await res.text()).toContain(token);
+  });
+});
+
+describe('static client serving', () => {
+  const tmpDirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(tmpDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  async function makeClientDir(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'knip-gui-client-'));
+    tmpDirs.push(dir);
+    await mkdir(join(dir, 'assets'), { recursive: true });
+    await writeFile(
+      join(dir, 'index.html'),
+      '<!doctype html><html><head><meta name="knip-gui-token" content="__KNIP_GUI_TOKEN__">' +
+        '<title>knip-gui</title></head><body><div id="root"></div>' +
+        '<script type="module" src="/assets/app.js"></script></body></html>',
+    );
+    await writeFile(join(dir, 'assets', 'app.js'), 'console.log("hi");');
+    return dir;
+  }
+
+  it('falls back to the inline shell when dist/client is absent', async () => {
+    const missing = join(await mkdtemp(join(tmpdir(), 'knip-gui-missing-')), 'dist', 'client');
+    tmpDirs.push(missing);
+    const { app, token } = createServer({ projectDir: single, scan: async () => fakeRaw, clientDir: missing });
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain(token);
+    expect(body).toContain('UI ships in a later phase');
+  });
+
+  it('serves the built index.html with the real token substituted for the placeholder', async () => {
+    const clientDir = await makeClientDir();
+    const { app, token } = createServer({ projectDir: single, scan: async () => fakeRaw, clientDir });
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain(`content="${token}"`);
+    expect(body).not.toContain('__KNIP_GUI_TOKEN__');
+  });
+
+  it('serves /assets/* statically without requiring a token', async () => {
+    const clientDir = await makeClientDir();
+    const { app } = createServer({ projectDir: single, scan: async () => fakeRaw, clientDir });
+    const res = await app.request('/assets/app.js');
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('console.log("hi");');
+    expect(res.headers.get('content-type')).toContain('javascript');
+  });
+
+  it('404s an asset path that escapes the client dir', async () => {
+    const clientDir = await makeClientDir();
+    const { app } = createServer({ projectDir: single, scan: async () => fakeRaw, clientDir });
+    const res = await app.request('/assets/../../etc/passwd');
+    expect(res.status).toBe(404);
+  });
+
+  it('404s an asset that does not exist', async () => {
+    const clientDir = await makeClientDir();
+    const { app } = createServer({ projectDir: single, scan: async () => fakeRaw, clientDir });
+    const res = await app.request('/assets/nope.js');
+    expect(res.status).toBe(404);
   });
 });
 
