@@ -31,8 +31,14 @@ web pages you have open cannot drive the API.
 
 ## Status
 
-Under active development. Working: scan, normalized report API, file content API.
-Coming: fix/ignore engines with diff preview, git integration, and the web UI.
+v0.1 feature-complete: scan and browse (unified tree, per-type facets, dependency
+tables, shiki code pane with issue markers), bulk **Fix** (strip export / delete
+declaration / delete file / remove dependency / remove enum+namespace member) and
+**Ignore** (knip config entries, member-precise `@public` tags) with hash-guarded
+diff preview — apply writes exactly what you previewed; `knip --fix` sweep; git
+commit panel with optional branch creation. Monorepo workspaces supported.
+
+See [docs/backlog.md](docs/backlog.md) for known rough edges and v0.2 plans.
 
 ## Development
 
