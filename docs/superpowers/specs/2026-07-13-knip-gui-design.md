@@ -7,6 +7,11 @@
 
 - **No SSE for scan progress** (Plan 1): `POST /api/scan` is a single awaited request.
   Knip emits no incremental progress, so SSE bought nothing.
+- **Hybrid fix engine resolved in favor of preview==apply** (Plan 2): `knip --fix`
+  cannot be previewed (it writes directly), so the own fixer computes and applies
+  every previewed fix — cherry-picks and whole categories alike. Delegation
+  survives as an explicit `POST /api/sweep` ("fix everything with knip --fix",
+  no preview, awaited rescan) that the UI offers separately.
 - **`classMembers` does not exist in knip 6** (discovered against knip 6.26.0 ground
   truth): knip's real issue-type universe is files, dependencies, devDependencies,
   optionalPeerDependencies, unlisted, binaries, unresolved, exports, nsExports,

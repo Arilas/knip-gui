@@ -45,8 +45,13 @@ function flattenEntries(value: unknown): RawEntry[] {
  *  - everything else with position info (`exports`, `nsExports`, `types`, `nsTypes`): { name, line, col, pos }.
  *  - dependency-shaped entries (`dependencies`, `devDependencies`, `optionalPeerDependencies`,
  *    `unlisted`, `unresolved`, `binaries`, `catalog`): { name } with no position.
- *  - `duplicates` / `cycles`: shape not observed in captured fixtures (always empty there);
- *    parsed defensively via the generic { name, ... } fallback below.
+ *  - `duplicates`: shape observed via `export const b = a` / `export default a` aliasing
+ *    (NOT `export { a as b }`, which knip treats as a plain re-export, not a duplicate) —
+ *    `[[{name,line,col,pos}, {name,line,col,pos}, ...], ...]`, one sub-array ("group") per
+ *    duplicated value, first element = the original declaration site, rest = each alias.
+ *    Handled separately below since flattening would destroy the group structure.
+ *  - `cycles`: shape not observed in captured fixtures (always empty there); would fall
+ *    through the generic { name, ... } path below if ever populated.
  */
 function symbolsFor(type: IssueType, item: RawEntry): { symbol?: string; parentSymbol?: string } {
   if (type === 'files') return {};
@@ -56,10 +61,55 @@ function symbolsFor(type: IssueType, item: RawEntry): { symbol?: string; parentS
   return { symbol: item.name };
 }
 
+/**
+ * Extracts `duplicates` groups defensively: each file's `duplicates` array holds one
+ * sub-array per duplicate-export group. Anything that isn't an array of name-bearing
+ * objects is dropped rather than throwing, matching the malformed-entry tolerance
+ * elsewhere in this module.
+ */
+function duplicateGroups(value: unknown): RawEntry[][] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((group): RawEntry[] =>
+      Array.isArray(group) ? group.filter((v): v is RawEntry => !!v && typeof v === 'object') : [],
+    )
+    .filter((group) => group.length > 0);
+}
+
 export function normalize(raw: unknown, workspaceDirs: string[]): Issue[] {
   const issues: Issue[] = [];
   const fileEntries = (raw as { issues?: unknown[] })?.issues ?? [];
   const keyCounts = new Map<string, number>();
+
+  function pushIssue(
+    type: IssueType,
+    filePath: string,
+    workspace: string,
+    symbol: string | undefined,
+    parentSymbol: string | undefined,
+    position: { line?: number; col?: number; pos?: number },
+    duplicateMembers?: Issue['duplicateMembers'],
+  ): void {
+    const fixModes = FIX_MODES_BY_TYPE[type];
+    const keyParts = [workspace, filePath, type, parentSymbol, symbol];
+    const key = keyParts.map((p) => p ?? '').join('|');
+    const occurrence = keyCounts.get(key) ?? 0;
+    keyCounts.set(key, occurrence + 1);
+    issues.push({
+      id: issueId(keyParts, occurrence),
+      type,
+      workspace,
+      filePath,
+      symbol,
+      parentSymbol,
+      line: position.line,
+      col: position.col,
+      pos: position.pos,
+      fixable: fixModes.length > 0,
+      fixModes,
+      ...(duplicateMembers ? { duplicateMembers } : {}),
+    });
+  }
 
   for (const entry of fileEntries as Record<string, unknown>[]) {
     // Skip malformed entries (null, non-objects, non-string `file`) rather than throwing.
@@ -68,26 +118,24 @@ export function normalize(raw: unknown, workspaceDirs: string[]): Issue[] {
     const workspace = workspaceFor(filePath, workspaceDirs);
 
     for (const type of ISSUE_TYPES) {
+      if (type === 'duplicates') {
+        // One Issue per duplicate group (not per name): symbol is every duplicated
+        // name joined together, position is the original declaration's (the group's
+        // first element). duplicateMembers preserves every member's own position
+        // (knip's order: original first, aliases after) so fix engines can locate
+        // each alias to remove.
+        for (const group of duplicateGroups(entry[type])) {
+          const members = group
+            .filter((g): g is RawEntry & { name: string } => !!g.name)
+            .map((g) => ({ symbol: g.name, line: g.line, col: g.col, pos: g.pos }));
+          const symbol = members.map((m) => m.symbol).join(', ');
+          pushIssue(type, filePath, workspace, symbol, undefined, group[0]!, members);
+        }
+        continue;
+      }
       for (const item of flattenEntries(entry[type])) {
         const { symbol, parentSymbol } = symbolsFor(type, item);
-        const fixModes = FIX_MODES_BY_TYPE[type];
-        const keyParts = [workspace, filePath, type, parentSymbol, symbol];
-        const key = keyParts.map((p) => p ?? '').join('|');
-        const occurrence = keyCounts.get(key) ?? 0;
-        keyCounts.set(key, occurrence + 1);
-        issues.push({
-          id: issueId(keyParts, occurrence),
-          type,
-          workspace,
-          filePath,
-          symbol,
-          parentSymbol,
-          line: item.line,
-          col: item.col,
-          pos: item.pos,
-          fixable: fixModes.length > 0,
-          fixModes,
-        });
+        pushIssue(type, filePath, workspace, symbol, parentSymbol, item);
       }
     }
   }

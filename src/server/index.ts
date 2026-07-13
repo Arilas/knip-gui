@@ -5,6 +5,9 @@ import { Hono } from 'hono';
 import { KnipError, runScan } from '../core/knip-runner.js';
 import { normalize } from '../core/normalize.js';
 import { getWorkspaceDirs } from '../core/workspaces.js';
+import { PlanStore } from '../fix/plan-store.js';
+import { registerFixRoutes } from './routes-fix.js';
+import { registerGitRoutes } from './routes-git.js';
 import { ReportStore } from './store.js';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -13,6 +16,7 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan }
   const { projectDir, scan = runScan } = opts;
   const token = randomBytes(24).toString('hex');
   const store = new ReportStore();
+  const planStore = new PlanStore();
   const app = new Hono();
 
   app.use('/api/*', async (c, next) => {
@@ -92,6 +96,9 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan }
       return c.json({ error: 'not found' }, 404);
     }
   });
+
+  registerFixRoutes(app, { projectDir, scan, store, planStore });
+  registerGitRoutes(app, { projectDir });
 
   return { app, token, store };
 }
