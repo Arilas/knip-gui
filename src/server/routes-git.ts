@@ -41,6 +41,10 @@ export function registerGitRoutes(app: Hono, ctx: GitRoutesCtx): void {
       ? body.paths.filter((p: unknown): p is string => typeof p === 'string')
       : [];
     if (!message) return c.json({ error: 'message is required' }, 400);
+    // An empty pathspec would make `git add --` a no-op, and the commit would
+    // then sweep up whatever the caller happened to have staged already —
+    // reject rather than commit someone else's staged changes under our message.
+    if (paths.length === 0) return c.json({ error: 'paths is required' }, 400);
     try {
       // paths are validated as staying inside the project by gitCommitPaths
       // itself (assertContained) — no need to re-check here.

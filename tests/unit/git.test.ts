@@ -229,6 +229,27 @@ describe('gitCommitPaths', () => {
     expect(`${error.message}\n${error.stderr ?? ''}`).toContain('nothing to commit');
   });
 
+  it('throws GitError on an empty paths list instead of committing whatever is already staged', async () => {
+    const dir = await makeTmpDir('knip-gui-git-empty-paths-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'a.txt'), 'hello', 'utf8');
+    await commitAll(dir, 'initial');
+
+    // Pre-stage an unrelated file: `git add --` with NO pathspec is a no-op,
+    // so without a guard the subsequent commit would silently sweep this
+    // staged file into a commit it was never asked to make.
+    await writeFile(join(dir, 'stray.txt'), 'staged but not ours', 'utf8');
+    await git(dir, ['add', 'stray.txt']);
+    const { stdout: headBefore } = await git(dir, ['rev-parse', 'HEAD']);
+
+    await expect(gitCommitPaths(dir, [], 'sneaky commit')).rejects.toBeInstanceOf(GitError);
+
+    const { stdout: headAfter } = await git(dir, ['rev-parse', 'HEAD']);
+    expect(headAfter).toBe(headBefore);
+    const { stdout: staged } = await git(dir, ['diff', '--cached', '--name-only']);
+    expect(staged.split('\n').filter(Boolean)).toEqual(['stray.txt']);
+  });
+
   it('throws GitError (not a silent no-op) when a path escapes the project root', async () => {
     const dir = await makeTmpDir('knip-gui-git-escape-');
     await initRepo(dir);

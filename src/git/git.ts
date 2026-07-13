@@ -151,6 +151,12 @@ export async function gitCommitPaths(
   paths: string[],
   message: string,
 ): Promise<{ sha: string }> {
+  // Defense in depth (also guarded at the API layer): `git add --` with an
+  // empty pathspec is a no-op, so an empty list would silently commit whatever
+  // the caller already had staged in the index under this message.
+  if (paths.length === 0) {
+    throw new GitError('no paths given to commit', { code: 'empty-paths' });
+  }
   const root = await realpath(resolve(projectDir));
   for (const p of paths) {
     await assertContained(root, p);

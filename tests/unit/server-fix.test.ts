@@ -366,6 +366,33 @@ describe('git routes', () => {
     expect(res.status).toBe(400);
   });
 
+  it('400s commit with empty/missing/non-array paths and does NOT commit a stray pre-staged file', async () => {
+    const { app, h, dir } = await makeReadyServer();
+    // Stage an unrelated file directly in the repo — the failure mode this
+    // guards against: `git add --` with no pathspec is a no-op, so a pathless
+    // commit would silently sweep this already-staged file into a commit
+    // under our message.
+    await writeFile(join(dir, 'stray.txt'), 'staged but not ours', 'utf8');
+    await git(dir, ['add', 'stray.txt']);
+    const { stdout: headBefore } = await git(dir, ['rev-parse', 'HEAD']);
+
+    for (const paths of [[], undefined, 'not-an-array']) {
+      const res = await app.request('/api/git/commit', {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({ message: 'sneaky commit', paths }),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain('paths');
+    }
+
+    // No commit happened, and the stray file remains staged-but-uncommitted.
+    const { stdout: headAfter } = await git(dir, ['rev-parse', 'HEAD']);
+    expect(headAfter).toBe(headBefore);
+    const { stdout: staged } = await git(dir, ['diff', '--cached', '--name-only']);
+    expect(staged.split('\n').filter(Boolean)).toEqual(['stray.txt']);
+  });
+
   it('400s commit and surfaces GitError stderr when there is nothing to commit', async () => {
     const { app, h } = await makeReadyServer();
     const res = await app.request('/api/git/commit', {
