@@ -249,6 +249,113 @@ describe('applyPatches: containment', () => {
       });
     });
   });
+
+  it('rejects a create under a symlinked directory that points outside the project', async () => {
+    await withTmpDir(async (outside) => {
+      await withTmpDir(async (proj) => {
+        // proj/linkdir -> outside; a 'create' targeting linkdir/newfile.txt
+        // does not exist yet, so leaf-only realpath checks miss the escaping
+        // ancestor symlink and the write lands outside the project.
+        await symlink(outside, join(proj, 'linkdir'));
+
+        const patch: FilePatch = {
+          filePath: 'linkdir/newfile.txt',
+          kind: 'create',
+          hashBefore: null,
+          contentAfter: 'escaped payload',
+        };
+
+        const results = await applyPatches(proj, [patch]);
+        expect(results).toEqual([
+          expect.objectContaining({
+            filePath: 'linkdir/newfile.txt',
+            ok: false,
+            reason: 'io-error',
+          }),
+        ]);
+        expect(existsSync(join(outside, 'newfile.txt'))).toBe(false);
+      });
+    });
+  });
+
+  it('rejects a create under a nested non-existent path below an escaping symlinked directory', async () => {
+    await withTmpDir(async (outside) => {
+      await withTmpDir(async (proj) => {
+        await symlink(outside, join(proj, 'linkdir'));
+
+        const patch: FilePatch = {
+          filePath: 'linkdir/deep/nested/newfile.txt',
+          kind: 'create',
+          hashBefore: null,
+          contentAfter: 'escaped payload',
+        };
+
+        const results = await applyPatches(proj, [patch]);
+        expect(results).toEqual([
+          expect.objectContaining({ ok: false, reason: 'io-error' }),
+        ]);
+        expect(existsSync(join(outside, 'deep'))).toBe(false);
+      });
+    });
+  });
+
+  it('rejects an absolute filePath outside the project', async () => {
+    await withTmpDir(async (outside) => {
+      await withTmpDir(async (proj) => {
+        const target = join(outside, 'abs-target.txt');
+        const patch: FilePatch = {
+          filePath: target,
+          kind: 'create',
+          hashBefore: null,
+          contentAfter: 'absolute escape',
+        };
+
+        const results = await applyPatches(proj, [patch]);
+        expect(results).toEqual([
+          expect.objectContaining({ filePath: target, ok: false, reason: 'io-error' }),
+        ]);
+        expect(existsSync(target)).toBe(false);
+      });
+    });
+  });
+
+  it('still allows a create under a new nested directory inside the project', async () => {
+    await withTmpDir(async (dir) => {
+      const rel = 'brand/new/dirs/file.ts';
+      const patch: FilePatch = {
+        filePath: rel,
+        kind: 'create',
+        hashBefore: null,
+        contentAfter: 'nested create',
+      };
+
+      const results = await applyPatches(dir, [patch]);
+      expect(results).toEqual([{ filePath: rel, ok: true }]);
+      expect(await readFile(join(dir, rel), 'utf8')).toBe('nested create');
+    });
+  });
+
+  it('allows a create under a symlinked directory that points inside the project', async () => {
+    await withTmpDir(async (proj) => {
+      // proj/alias -> proj/real; the canonical target stays inside the
+      // project, so the write is allowed and lands in proj/real.
+      await mkdir(join(proj, 'real'));
+      await symlink(join(proj, 'real'), join(proj, 'alias'));
+
+      const patch: FilePatch = {
+        filePath: 'alias/inside.txt',
+        kind: 'create',
+        hashBefore: null,
+        contentAfter: 'contained via internal symlink',
+      };
+
+      const results = await applyPatches(proj, [patch]);
+      expect(results).toEqual([{ filePath: 'alias/inside.txt', ok: true }]);
+      expect(await readFile(join(proj, 'real', 'inside.txt'), 'utf8')).toBe(
+        'contained via internal symlink',
+      );
+    });
+  });
 });
 
 describe('applyPatches: partial failure and ordering', () => {

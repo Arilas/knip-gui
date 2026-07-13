@@ -32,21 +32,37 @@ export async function hashFile(absPath: string): Promise<string | null> {
 
 // Resolves `filePath` against the (realpathed) project root and confirms the
 // result stays inside it. Two checks are needed: a string-based check catches
-// `../` traversal before touching the filesystem, and — for paths that exist
-// on disk — a realpath-based check catches a symlink inside the project that
-// points outside it (the same pattern used by /api/file in src/server/index.ts).
+// `../` traversal before touching the filesystem, and a realpath-based check
+// catches a symlink that points outside the project (the same pattern used by
+// /api/file in src/server/index.ts). When the target doesn't exist yet (a
+// 'create' patch), realpathing the leaf alone is not enough: an ANCESTOR
+// directory can be an escaping symlink (proj/linkdir -> /outside, target
+// linkdir/newfile.txt), so walk up to the nearest existing ancestor and
+// require its canonical path to be inside the root. The string check already
+// covers the non-existent tail, and the subsequent recursive mkdir then only
+// creates real directories under that verified ancestor. A symlinked ancestor
+// whose canonical target stays INSIDE the project passes — containment is
+// judged on the real write location, not the spelling of the path.
 async function resolveContained(root: string, filePath: string): Promise<string> {
   const abs = resolve(root, filePath);
   if (abs !== root && !abs.startsWith(root + sep)) {
     throw new Error(`path escapes project root: ${filePath}`);
   }
+  // Walk up from the target to the nearest path segment that exists on disk.
+  // The loop terminates at `root`, which applyPatches has already realpathed
+  // (so it exists); if even the root fails to resolve, surface that as an error.
+  let existing = abs;
   let real: string;
-  try {
-    real = await realpath(abs);
-  } catch {
-    // Doesn't exist yet (e.g. a 'create' target) — the string check above is
-    // all we can do, and that's fine: there's no symlink to have escaped through.
-    return abs;
+  for (;;) {
+    try {
+      real = await realpath(existing);
+      break;
+    } catch {
+      if (existing === root) {
+        throw new Error(`project root not accessible: ${root}`);
+      }
+      existing = dirname(existing);
+    }
   }
   if (real !== root && !real.startsWith(root + sep)) {
     throw new Error(`path escapes project root via symlink: ${filePath}`);
