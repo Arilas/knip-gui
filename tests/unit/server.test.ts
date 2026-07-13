@@ -1,3 +1,6 @@
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createServer } from '../../src/server/index.js';
 
@@ -72,5 +75,52 @@ describe('scan + report + file', () => {
 
     expect((await app.request('/api/file?path=../../../etc/passwd', { headers: h })).status).toBe(400);
     expect((await app.request('/api/file?path=src/nope.ts', { headers: h })).status).toBe(404);
+  });
+
+  it('rejects a concurrent scan while one is in flight', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let calls = 0;
+    const { app, token } = makeServer(async () => {
+      calls++;
+      await gate;
+      return fakeRaw;
+    });
+    const h = { 'x-knip-gui-token': token };
+
+    const first = app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+    const second = app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+    release();
+
+    const statuses = (await Promise.all([first, second])).map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 409]);
+    expect(calls).toBe(1);
+  });
+
+  it('rejects symlinks that point outside the project', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'knip-gui-outside-'));
+    const proj = await mkdtemp(join(tmpdir(), 'knip-gui-proj-'));
+    try {
+      await writeFile(join(outside, 'secret.txt'), 'top secret');
+      await symlink(join(outside, 'secret.txt'), join(proj, 'link.txt'));
+      await writeFile(join(proj, 'inside.txt'), 'safe content');
+
+      const { app, token } = createServer({ projectDir: proj, scan: async () => fakeRaw });
+      const h = { 'x-knip-gui-token': token };
+
+      const escaped = await app.request('/api/file?path=link.txt', { headers: h });
+      expect(escaped.status).toBe(400);
+
+      // Sanity: a real file inside the project still works even when the
+      // project dir itself lives under a symlinked tmpdir (macOS /tmp).
+      const ok = await app.request('/api/file?path=inside.txt', { headers: h });
+      expect(ok.status).toBe(200);
+      expect((await ok.json()).content).toBe('safe content');
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+      await rm(proj, { recursive: true, force: true });
+    }
   });
 });

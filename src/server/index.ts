@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { Hono } from 'hono';
 import { KnipError, runScan } from '../core/knip-runner.js';
@@ -33,10 +33,14 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan }
   );
 
   app.post('/api/scan', async (c) => {
+    // Check-and-latch must be synchronous (no await between the status check
+    // and setScanning), otherwise two concurrent requests both pass the guard
+    // and both spawn a scan. Body parsing happens after latching, inside the
+    // try block, so no failure path can leave the store stuck in 'scanning'.
     if (store.status === 'scanning') return c.json({ error: 'scan in progress' }, 409);
-    const body = await c.req.json().catch(() => ({}));
     store.setScanning();
     try {
+      const body = await c.req.json().catch(() => ({}));
       const raw = await scan(projectDir, { workspace: body.workspace });
       const workspaces = await getWorkspaceDirs(projectDir);
       const issues = normalize(raw, workspaces);
@@ -57,15 +61,33 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan }
 
   app.get('/api/file', async (c) => {
     const rel = c.req.query('path') ?? '';
-    const abs = resolve(projectDir, rel);
-    if (abs !== resolve(projectDir) && !abs.startsWith(resolve(projectDir) + sep)) {
+    const root = resolve(projectDir);
+    const abs = resolve(root, rel);
+    if (abs !== root && !abs.startsWith(root + sep)) {
       return c.json({ error: 'path outside project' }, 400);
     }
+
+    // The string check above only catches `..` traversal. A symlink inside the
+    // project can still point outside it, so compare canonical paths too. The
+    // project root itself must also be canonicalized: on macOS /tmp is a
+    // symlink to /private/tmp, so a naive startsWith against the raw root
+    // would reject every legitimate file under a symlinked parent.
+    let real: string;
+    let realRoot: string;
     try {
-      const s = await stat(abs);
+      [real, realRoot] = await Promise.all([realpath(abs), realpath(root)]);
+    } catch {
+      return c.json({ error: 'not found' }, 404);
+    }
+    if (real !== realRoot && !real.startsWith(realRoot + sep)) {
+      return c.json({ error: 'path outside project' }, 400);
+    }
+
+    try {
+      const s = await stat(real);
       if (!s.isFile()) return c.json({ error: 'not a file' }, 404);
       if (s.size > MAX_FILE_BYTES) return c.json({ error: 'file too large' }, 413);
-      return c.json({ path: rel, content: await readFile(abs, 'utf8') });
+      return c.json({ path: rel, content: await readFile(real, 'utf8') });
     } catch {
       return c.json({ error: 'not found' }, 404);
     }
