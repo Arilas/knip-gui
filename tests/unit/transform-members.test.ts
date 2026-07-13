@@ -78,6 +78,49 @@ describe('removeMember: namespace members', () => {
   });
 });
 
+describe('removeMember: namespace members declared as multi-declarator `export const a = 1, b = 2;`', () => {
+  it('removes only the first declarator, keeping the live sibling', () => {
+    const content = 'export namespace NS {\n  export const a = 1, b = 2;\n}\n';
+    const result = removeMember({ filePath: 'a.ts', content, symbol: 'a', parentSymbol: 'NS' });
+    expect(expectOk(result)).toBe('export namespace NS {\n  export const b = 2;\n}\n');
+  });
+
+  it('removes only the last declarator, keeping the live sibling', () => {
+    const content = 'export namespace NS {\n  export const a = 1, b = 2;\n}\n';
+    const result = removeMember({ filePath: 'a.ts', content, symbol: 'b', parentSymbol: 'NS' });
+    expect(expectOk(result)).toBe('export namespace NS {\n  export const a = 1;\n}\n');
+  });
+
+  it('removes a middle declarator with comma hygiene', () => {
+    const content = 'export namespace NS {\n  export const a = 1, b = 2, c = 3;\n}\n';
+    const result = removeMember({ filePath: 'a.ts', content, symbol: 'b', parentSymbol: 'NS' });
+    expect(expectOk(result)).toBe('export namespace NS {\n  export const a = 1, c = 3;\n}\n');
+  });
+
+  it('removes the whole statement when the sole declarator is removed (sibling member keeps its indent)', () => {
+    const content = 'export namespace NS {\n  export const only = 1;\n  export const kept = 2;\n}\n';
+    const result = removeMember({ filePath: 'a.ts', content, symbol: 'only', parentSymbol: 'NS' });
+    expect(expectOk(result)).toBe('export namespace NS {\n  export const kept = 2;\n}\n');
+  });
+});
+
+describe("removeMember: non-last namespace member keeps the next sibling's indentation intact", () => {
+  it("removes the first of two members without doubling the survivor's indent", () => {
+    const content = 'export namespace NS {\n  export const gone = 1;\n  export const kept = 2;\n}\n';
+    const result = removeMember({ filePath: 'a.ts', content, symbol: 'gone', parentSymbol: 'NS' });
+    expect(expectOk(result)).toBe('export namespace NS {\n  export const kept = 2;\n}\n');
+  });
+
+  it('handles a member of a namespace nested inside another namespace (deeper indent)', () => {
+    const content =
+      'export namespace Outer {\n  export namespace Inner {\n    export const gone = 1;\n    export const kept = 2;\n  }\n}\n';
+    const result = removeMember({ filePath: 'a.ts', content, symbol: 'gone', parentSymbol: 'Inner' });
+    expect(expectOk(result)).toBe(
+      'export namespace Outer {\n  export namespace Inner {\n    export const kept = 2;\n  }\n}\n',
+    );
+  });
+});
+
 describe('removeMember: parent not found', () => {
   it('returns ok:false when the enum/namespace name does not exist', () => {
     const content = 'export enum Foo {\n  A,\n}\n';
@@ -176,6 +219,34 @@ describe('insertPublicTag: existing JSDoc', () => {
     expect(expectOk(result)).toBe(
       '/**\r\n * Doc.\r\n * @public\r\n */\r\nexport function foo() {\r\n  return 1;\r\n}\r\n',
     );
+  });
+});
+
+describe('insertPublicTag: single-line JSDoc merge (expands to canonical multi-line form)', () => {
+  it('merges @public into `/** Doc. */`', () => {
+    const content = '/** Doc. */\nexport const foo = 1;\n';
+    const result = insertPublicTag({ filePath: 'a.ts', content, symbol: 'foo' });
+    expect(expectOk(result)).toBe('/**\n * Doc.\n * @public\n */\nexport const foo = 1;\n');
+  });
+
+  it('merges @public into `/** @internal */` (non-@public tag, does not short-circuit)', () => {
+    const content = '/** @internal */\nexport const foo = 1;\n';
+    const result = insertPublicTag({ filePath: 'a.ts', content, symbol: 'foo' });
+    expect(expectOk(result)).toBe('/**\n * @internal\n * @public\n */\nexport const foo = 1;\n');
+  });
+
+  it('preserves indentation when expanding an indented single-line JSDoc', () => {
+    const content = '  /** Doc. */\n  export const foo = 1;\n';
+    const result = insertPublicTag({ filePath: 'a.ts', content, symbol: 'foo' });
+    expect(expectOk(result)).toBe(
+      '  /**\n   * Doc.\n   * @public\n   */\n  export const foo = 1;\n',
+    );
+  });
+
+  it('multi-line JSDoc whose `*/` shares a line with text -> inline @public before the close', () => {
+    const content = '/**\n * Doc. */\nexport const foo = 1;\n';
+    const result = insertPublicTag({ filePath: 'a.ts', content, symbol: 'foo' });
+    expect(expectOk(result)).toBe('/**\n * Doc. @public */\nexport const foo = 1;\n');
   });
 });
 

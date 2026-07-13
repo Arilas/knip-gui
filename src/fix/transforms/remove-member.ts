@@ -14,6 +14,7 @@ import {
   expandEndWithTrailingNewline,
   expandStartWithLeadingComments,
   parseSource,
+  removeListItem,
   type Span,
   type TransformInput,
   type TransformResult,
@@ -25,21 +26,26 @@ import {
 //   members commonly carry a same-line trailing `// comment` that
 //   removeListItem's generic algorithm would mis-attribute across the boundary
 //   — see `removeEnumMember` below).
-// - namespace member -> remove the whole member statement (with attached
-//   leading comments/JSDoc and its trailing newline), same rule deleteDeclaration
-//   uses for a top-level statement.
+// - namespace member -> remove the member declaration statement inside the
+//   namespace body (with attached leading comments/JSDoc). A member that is one
+//   declarator of a multi-declarator `export const a = 1, b = 2;` removes only
+//   its own declarator (comma hygiene via removeListItem), never live siblings
+//   — same rule Task 3's deleteDeclaration applies at top level. Removal of a
+//   non-last member statement is bounded at the NEXT statement's start (like
+//   the enum path) so the survivor keeps exactly its own indentation; the last
+//   member statement removes through its trailing newline.
 //
-// Parent (enum/namespace) is located by name only, at top level (bare or
-// exported). The member is then located by name within that parent; `pos`, if
-// given, only breaks ties between same-named members (this is deliberately
-// looser than locateExport's strict "pos, then validate name" contract — see
-// the brief: "Parent located by name, member by name within parent (pos as
-// tiebreak)").
+// Parent (enum/namespace) is located by name only — top level or nested inside
+// namespace bodies, bare or exported. The member is then located by name
+// within that parent; `pos`, if given, only breaks ties between same-named
+// members (this is deliberately looser than locateExport's strict "pos, then
+// validate name" contract — see the brief: "Parent located by name, member by
+// name within parent (pos as tiebreak)").
 export function removeMember(input: TransformInput & { parentSymbol: string }): TransformResult {
   const { filePath, content, symbol, parentSymbol, pos } = input;
   const { program, comments } = parseSource(filePath, content);
 
-  const parent = findParent(program, parentSymbol);
+  const parent = findParent(program.body, parentSymbol);
   if (!parent) return { ok: false, reason: `parent '${parentSymbol}' not found` };
 
   const s = new MagicString(content);
@@ -54,13 +60,28 @@ export function removeMember(input: TransformInput & { parentSymbol: string }): 
     return { ok: true, newContent: s.toString() };
   }
 
-  const stmtSpan = findNamespaceMemberStatement(parent.decl.body.body, symbol, pos);
-  if (!stmtSpan) {
+  const match = findNamespaceMember(parent.decl.body.body, symbol, pos);
+  if (!match) {
     return { ok: false, reason: `member '${symbol}' not found in namespace '${parentSymbol}'` };
   }
-  const from = expandStartWithLeadingComments(content, comments, stmtSpan.start);
-  const to = expandEndWithTrailingNewline(content, stmtSpan.end);
-  s.remove(from, to);
+  if (match.declarators && match.declarators.length > 1 && match.declaratorIndex !== undefined) {
+    // One declarator of `export const a = 1, b = 2;` — surgically remove just
+    // it (same comma-hygiene helper as export lists and top-level declarators).
+    removeListItem(s, match.declarators, match.declaratorIndex);
+    return { ok: true, newContent: s.toString() };
+  }
+  const from = expandStartWithLeadingComments(content, comments, match.stmt.start);
+  if (match.next) {
+    // Non-last member: bound the removal at the next statement's start — the
+    // removed member's own leading indentation is left in place and becomes
+    // the survivor's indentation (whose own indent is consumed with the rest
+    // of the removed range), exactly like the enum path's non-last rule.
+    // Removing "statement + its trailing newline" here instead would splice
+    // the leftover indent onto the survivor's line, doubling its indentation.
+    s.remove(from, match.next.start);
+  } else {
+    s.remove(from, expandEndWithTrailingNewline(content, match.stmt.end));
+  }
   return { ok: true, newContent: s.toString() };
 }
 
@@ -68,23 +89,24 @@ type Parent =
   | { kind: 'enum'; decl: TSEnumDeclaration }
   | { kind: 'namespace'; decl: TSModuleDeclaration & { body: TSModuleBlock } };
 
-// Matches the parent by name at top level, whether it's exported
-// (`export enum X` / `export namespace X`) or bare (`enum X` / `namespace X`).
-function findParent(program: Program, name: string): Parent | null {
-  for (const stmt of program.body) {
-    const decl: Statement | Declaration =
+// Matches the parent by name, whether it's exported (`export enum X` /
+// `export namespace X`) or bare (`enum X` / `namespace X`), searching top-level
+// statements first and then recursing into namespace bodies (depth-first,
+// source order) so members of a nested `namespace Outer { namespace Inner {} }`
+// are reachable by the inner parent's name.
+function findParent(body: (Directive | Statement)[], name: string): Parent | null {
+  for (const stmt of body) {
+    const decl: Directive | Statement | Declaration =
       stmt.type === 'ExportNamedDeclaration' && stmt.declaration ? stmt.declaration : stmt;
     if (decl.type === 'TSEnumDeclaration' && decl.id.name === name) {
       return { kind: 'enum', decl };
     }
-    if (
-      decl.type === 'TSModuleDeclaration' &&
-      decl.id.type === 'Identifier' &&
-      decl.id.name === name &&
-      decl.body &&
-      decl.body.type === 'TSModuleBlock'
-    ) {
-      return { kind: 'namespace', decl: decl as TSModuleDeclaration & { body: TSModuleBlock } };
+    if (decl.type === 'TSModuleDeclaration' && decl.body && decl.body.type === 'TSModuleBlock') {
+      if (decl.id.type === 'Identifier' && decl.id.name === name) {
+        return { kind: 'namespace', decl: decl as TSModuleDeclaration & { body: TSModuleBlock } };
+      }
+      const nested = findParent(decl.body.body, name);
+      if (nested) return nested;
     }
   }
   return null;
@@ -162,36 +184,63 @@ function removeEnumMember(
   }
 }
 
-// Mirrors source.ts's declarationNameCandidates, but returns plain names (not
-// spans) for matching a namespace member by name — the whole enclosing
-// statement is what gets deleted, not a sub-span within it.
-function namedDeclCandidates(decl: Declaration): string[] {
+interface NamespaceMemberMatch {
+  // Span of the whole member statement (`export const ... ;` inside the body).
+  stmt: Span;
+  // The statement FOLLOWING the member in the namespace body, if any — used to
+  // bound a non-last member's removal so the survivor's indentation survives.
+  next: Span | null;
+  // Present when the member's declaration is a VariableDeclaration and the
+  // matched symbol is one of its declarators (same contract as source.ts's
+  // 'declaration' ExportSite: spans of ALL declarators + which one matched).
+  declarators?: Span[];
+  declaratorIndex?: number;
+}
+
+// Mirrors source.ts's declarationNameCandidates: one candidate per simple
+// Identifier binding, with `declaratorIndex` set when the candidate is one
+// declarator of a (possibly multi-declarator) variable declaration.
+function namedDeclCandidates(decl: Declaration): { name: string; declaratorIndex?: number }[] {
   if (decl.type === 'VariableDeclaration') {
-    return decl.declarations
-      .filter((d) => d.id.type === 'Identifier')
-      .map((d) => (d.id as { name: string }).name);
+    const out: { name: string; declaratorIndex: number }[] = [];
+    for (let i = 0; i < decl.declarations.length; i++) {
+      const d = decl.declarations[i];
+      if (d && d.id.type === 'Identifier') out.push({ name: d.id.name, declaratorIndex: i });
+    }
+    return out;
   }
-  if ('id' in decl && decl.id && decl.id.type === 'Identifier') return [decl.id.name];
+  if ('id' in decl && decl.id && decl.id.type === 'Identifier') return [{ name: decl.id.name }];
   return [];
 }
 
-function findNamespaceMemberStatement(
+function findNamespaceMember(
   body: (Directive | Statement)[],
   symbol: string,
   pos?: number,
-): Span | null {
-  const matches: Span[] = [];
-  for (const stmt of body) {
-    if (stmt.type === 'ExportNamedDeclaration' && stmt.declaration) {
-      if (namedDeclCandidates(stmt.declaration).includes(symbol)) {
-        matches.push({ start: stmt.start, end: stmt.end });
+): NamespaceMemberMatch | null {
+  const matches: NamespaceMemberMatch[] = [];
+  for (let i = 0; i < body.length; i++) {
+    const stmt = body[i];
+    if (!stmt || stmt.type !== 'ExportNamedDeclaration' || !stmt.declaration) continue;
+    const decl = stmt.declaration;
+    for (const cand of namedDeclCandidates(decl)) {
+      if (cand.name !== symbol) continue;
+      const nextStmt = body[i + 1];
+      const match: NamespaceMemberMatch = {
+        stmt: { start: stmt.start, end: stmt.end },
+        next: nextStmt ? { start: nextStmt.start, end: nextStmt.end } : null,
+      };
+      if (decl.type === 'VariableDeclaration' && cand.declaratorIndex !== undefined) {
+        match.declarators = decl.declarations.map((d) => ({ start: d.start, end: d.end }));
+        match.declaratorIndex = cand.declaratorIndex;
       }
+      matches.push(match);
     }
   }
   if (matches.length === 0) return null;
   if (matches.length === 1) return matches[0]!;
   if (pos !== undefined) {
-    const byPos = matches.find((m) => pos >= m.start && pos < m.end);
+    const byPos = matches.find((m) => pos >= m.stmt.start && pos < m.stmt.end);
     if (byPos) return byPos;
   }
   return matches[0]!;

@@ -63,12 +63,42 @@ export function insertPublicTag(input: TransformInput): TransformResult {
     const s = new MagicString(content);
     // Comment span includes the delimiters (verified against oxc-parser
     // 0.137.0: `end` lands exactly after the closing `*/`), so `end - 2` is the
-    // start of the closing `*/` itself; `indent` is whatever horizontal
-    // whitespace already precedes it on its own line, reused so the new
-    // `* @public` line matches the JSDoc's existing indentation style.
-    const closingLineStart = lastLineStart(content, existing.end - 2);
-    const indent = content.slice(closingLineStart, existing.end - 2);
-    s.appendLeft(closingLineStart, `${indent}* @public${nl}`);
+    // start of the closing `*/` itself.
+    const closingStart = existing.end - 2;
+    const isSingleLine = !content.slice(existing.start, existing.end).includes('\n');
+    const commentLineStart = lastLineStart(content, existing.start);
+    const commentIndent = content.slice(commentLineStart, existing.start);
+    if (isSingleLine && /^[ \t]*$/.test(commentIndent)) {
+      // Single-line JSDoc (`/** Doc. */`) on its own line: expand to the
+      // canonical multi-line form with @public added, matching the comment's
+      // own indentation. (Chosen over an inline ` @public */` insertion: the
+      // multi-line form is the canonical JSDoc-tag shape, unambiguous to every
+      // downstream tag parser.)
+      const inner = existing.value.replace(/^\*/, '').trim();
+      const innerLine = inner === '' ? '' : `${commentIndent} * ${inner}${nl}`;
+      s.overwrite(
+        existing.start,
+        existing.end,
+        `/**${nl}${innerLine}${commentIndent} * @public${nl}${commentIndent} */`,
+      );
+      return { ok: true, newContent: s.toString() };
+    }
+    const closingLineStart = lastLineStart(content, closingStart);
+    const closingPrefix = content.slice(closingLineStart, closingStart);
+    if (/^[ \t]*$/.test(closingPrefix)) {
+      // Closing `*/` on its own line (the normal multi-line JSDoc shape):
+      // insert a `* @public` line just above it, reusing that line's existing
+      // indentation so the new line matches the JSDoc's style.
+      s.appendLeft(closingLineStart, `${closingPrefix}* @public${nl}`);
+    } else {
+      // Closing `*/` shares its line with comment text (e.g. `/**\n * Doc. */`,
+      // or a single-line JSDoc not starting its own line): inserting a whole
+      // line here would split the comment mid-text, so fall back to an inline
+      // `@public ` right before the `*/`.
+      const before = content[closingStart - 1] ?? '';
+      const pad = before === ' ' || before === '\t' ? '' : ' ';
+      s.appendLeft(closingStart, `${pad}@public `);
+    }
     return { ok: true, newContent: s.toString() };
   }
 
