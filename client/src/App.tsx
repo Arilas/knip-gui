@@ -1,40 +1,56 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { FacetRail } from './components/FacetRail.js';
+import { Overview } from './components/Overview.js';
+import { TopBar } from './components/TopBar.js';
+import type { Facet } from './lib/facets.js';
+import { useReport } from './state/queries.js';
 
-// Placeholder wiring check for Task 1: read the token the server injected
-// into the meta tag (see client/index.html + GET / in src/server/index.ts),
-// send it on a real API call, and surface success — proves the token makes
-// it end-to-end from build → serve → browser → API auth. Task 2 replaces
-// this with the full app shell / api.ts client.
-function getToken(): string {
-  return document.querySelector('meta[name="knip-gui-token"]')?.getAttribute('content') ?? '';
-}
+const queryClient = new QueryClient();
 
-type ConnectionState = 'connecting' | 'connected' | 'error';
+function AppShell() {
+  const [activeFacet, setActiveFacet] = useState<Facet>('overview');
+  const { data, isLoading, error } = useReport();
 
-export default function App() {
-  const [state, setState] = useState<ConnectionState>('connecting');
-
-  useEffect(() => {
-    const token = getToken();
-    let cancelled = false;
-    fetch('/api/report', { headers: { 'x-knip-gui-token': token } })
-      .then((res) => {
-        if (!cancelled) setState(res.ok ? 'connected' : 'error');
-      })
-      .catch(() => {
-        if (!cancelled) setState('error');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const report = data?.report;
+  const issues = report?.issues ?? [];
+  const workspaces = report?.workspaces ?? ['.'];
 
   return (
-    <main className="min-h-screen bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
-      <div className="mx-auto max-w-2xl px-6 py-16">
-        <h1 className="text-3xl font-semibold">knip-gui</h1>
-        <p className="mt-4 text-sm text-gray-600 dark:text-gray-400">{state}</p>
+    <div className="flex h-screen flex-col bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+      <TopBar />
+      <div className="flex flex-1 overflow-hidden">
+        <FacetRail issues={issues} activeFacet={activeFacet} onSelectFacet={setActiveFacet} />
+        <main className="flex flex-1 flex-col overflow-hidden">
+          {isLoading && <p className="p-4 text-sm text-gray-500 dark:text-gray-400">Loading report…</p>}
+          {error && (
+            <p className="p-4 text-sm text-red-600 dark:text-red-400">
+              Failed to load the report: {error instanceof Error ? error.message : String(error)}
+            </p>
+          )}
+          {!isLoading && !error && data?.status === 'error' && (
+            <p className="p-4 text-sm text-red-600 dark:text-red-400">
+              {data.error?.message ?? 'The last scan failed.'}
+            </p>
+          )}
+          {!isLoading && !error && data?.status !== 'error' && activeFacet === 'overview' && (
+            <Overview issues={issues} workspaces={workspaces} />
+          )}
+          {!isLoading && !error && data?.status !== 'error' && activeFacet !== 'overview' && (
+            <div className="p-4 text-sm text-gray-500 dark:text-gray-400">
+              The {activeFacet} view lands in a later task.
+            </div>
+          )}
+        </main>
       </div>
-    </main>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AppShell />
+    </QueryClientProvider>
   );
 }
