@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { CodePane } from './components/CodePane.js';
 import { FacetRail } from './components/FacetRail.js';
 import { Overview } from './components/Overview.js';
 import { SelectionBar } from './components/SelectionBar.js';
@@ -18,9 +19,6 @@ const queryClient = new QueryClient();
 
 function AppShell() {
   const [activeFacet, setActiveFacet] = useState<Facet>('overview');
-  // Task 4 (CodePane) drops in here — for now this just proves the wiring:
-  // clicking a file row in the tree stashes its path and a placeholder panel
-  // shows it.
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const { data, isLoading, error } = useReport();
 
@@ -77,8 +75,8 @@ function AppShell() {
               )}
           </div>
 
-          {openFilePath && (
-            <aside className="flex w-96 shrink-0 flex-col overflow-hidden border-l border-gray-200 dark:border-gray-800">
+          <aside className="flex w-96 shrink-0 flex-col overflow-hidden border-l border-gray-200 dark:border-gray-800">
+            {openFilePath && (
               <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2 dark:border-gray-800">
                 <span className="truncate font-mono text-xs" title={openFilePath}>
                   {openFilePath}
@@ -92,11 +90,14 @@ function AppShell() {
                   ✕
                 </button>
               </div>
-              <div className="flex flex-1 items-center justify-center p-4 text-center text-sm text-gray-500 dark:text-gray-400">
-                Code pane for <span className="mx-1 font-mono">{openFilePath}</span> lands in Task 4.
-              </div>
-            </aside>
-          )}
+            )}
+            <CodePane
+              filePath={openFilePath}
+              issues={openFilePath ? issues.filter((i) => i.filePath === openFilePath) : []}
+              selected={selected}
+              onToggleIds={toggle}
+            />
+          </aside>
         </main>
       </div>
 

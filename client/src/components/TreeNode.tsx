@@ -22,7 +22,9 @@ export interface TreeNodeRowProps {
 
 // Compact per-type pill labels — the badges are small, so these are
 // abbreviations of facets.ts's FACETS labels rather than the full text.
-const TYPE_BADGE_LABELS: Record<IssueType, string> = {
+// Exported for CodePane's gutter-marker badges (Task 4), which want the same
+// abbreviations rather than a second, possibly-drifting copy.
+export const TYPE_BADGE_LABELS: Record<IssueType, string> = {
   files: 'files',
   exports: 'export',
   nsExports: 'ns export',

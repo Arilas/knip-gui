@@ -7,6 +7,7 @@
 // button.
 import { useIsMutating, useMutation, useQuery, useQueryClient, type Mutation } from '@tanstack/react-query';
 import {
+  getFile,
   getGitStatus,
   getReport,
   postFixApply,
@@ -23,6 +24,7 @@ import {
 
 export const reportQueryKey = ['report'] as const;
 export const gitStatusQueryKey = ['git-status'] as const;
+export const fileQueryKey = (path: string) => ['file', path] as const;
 
 // Mutation keys that participate in the busy flag — every mutation that can
 // leave the server mid-scan or mid-write (scan itself, the unlatched sweep
@@ -41,6 +43,18 @@ export function useReport() {
 
 export function useGitStatus() {
   return useQuery({ queryKey: gitStatusQueryKey, queryFn: getGitStatus });
+}
+
+// CodePane's file fetch (Task 4). `enabled: path !== null` means the query
+// simply doesn't run for the "no file selected" empty state, rather than
+// CodePane having to special-case a null path in its own render logic.
+export function useFile(path: string | null) {
+  return useQuery({
+    queryKey: fileQueryKey(path ?? ''),
+    queryFn: () => getFile(path as string),
+    enabled: path !== null,
+    retry: false,
+  });
 }
 
 export function useScanMutation() {

@@ -1,1 +1,81 @@
 @import "tailwindcss";
+
+/*
+ * Shiki dual-theme + line-number styling for CodePane (Task 4).
+ *
+ * Dual theme: highlighter.ts calls codeToHtml with `defaultColor: false`,
+ * which — verified by actually running shiki 4.3.1's codeToHtml locally —
+ * emits NO inline `color`/`background-color` at all; it only sets
+ * `--shiki-light`/`--shiki-dark` custom properties per token span, plus
+ * `--shiki-light-bg`/`--shiki-dark-bg` once on the root `<pre class="shiki">`.
+ * Consuming those variables — and switching which pair wins under
+ * `prefers-color-scheme: dark` — is entirely left to us, exactly as shiki's
+ * dual-themes guide (https://shiki.style/guide/dual-themes) prescribes. This
+ * mirrors Tailwind's own `dark:` variant strategy (Global Constraint:
+ * "Dark/light via prefers-color-scheme"), so both switch in lockstep with
+ * the OS setting.
+ *
+ * Line numbers: shiki's own recipe is a CSS counter keyed off the `.line`
+ * span it already wraps each source line in — not a codeToHtml
+ * transformer, since a transformer would inject synthetic gutter elements
+ * that CodePane.tsx's gutter-marker overlay (which measures real `.line`
+ * elements via getBoundingClientRect/offsetTop to position issue badges)
+ * would then have to special-case around anyway.
+ *
+ * Scoped under `.code-pane-html` (rather than the bare `.shiki` shiki itself
+ * uses) so a later shiki-rendered diff view (Plan 3 Task 5) can carry its
+ * own, independently-tuned rules without colliding with these.
+ */
+.code-pane-html .shiki,
+.code-pane-html .shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .code-pane-html .shiki,
+  .code-pane-html .shiki span {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg, transparent);
+  }
+}
+
+.code-pane-html .shiki {
+  margin: 0;
+  padding: 0.5rem 0;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.code-pane-html .shiki code {
+  counter-reset: code-line;
+  display: block;
+  width: fit-content;
+  min-width: 100%;
+}
+
+.code-pane-html .shiki code .line {
+  display: inline-block;
+  width: 100%;
+  padding-left: 3.5em;
+  position: relative;
+}
+
+.code-pane-html .shiki code .line::before {
+  counter-increment: code-line;
+  content: counter(code-line);
+  position: absolute;
+  left: 0;
+  width: 2.5em;
+  text-align: right;
+  color: rgba(115, 138, 148, 0.5);
+  user-select: none;
+}
+
+/* Gutter marker: a subtle full-width highlight behind any line carrying an
+   issue, independent of the badge overlay CodePane.tsx renders on top. */
+.code-pane-html .shiki code .line.code-pane-flagged-line {
+  background-color: rgba(245, 158, 11, 0.14);
+}
