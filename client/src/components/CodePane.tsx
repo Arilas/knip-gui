@@ -109,11 +109,17 @@ function CodeBlock({
       <div className="pointer-events-none absolute inset-0 left-0 top-0">
         {markers.map(({ line, top, height }) => (
           <div key={line} className="pointer-events-none absolute right-1 flex items-center gap-1" style={{ top, height }}>
-            {lineIssues.get(line)!.map((issue) => {
+            {/* `markers` is layout-effect state, measured against a possibly-earlier
+                `lineIssues`; a rescan can prune an issue between that measurement and
+                this render, so `lineIssues` (the current prop) may no longer have this
+                line. Render nothing for it rather than crashing — the next
+                useLayoutEffect pass (keyed on `lineIssues`) will drop the stale marker. */}
+            {(lineIssues.get(line) ?? []).map((issue) => {
               const actionable = isFixable(issue).ok || isIgnorable(issue).ok;
               return (
                 <label
                   key={issue.id}
+                  data-testid={`code-pane-badge-${issue.type}-${issue.symbol ?? issue.id}`}
                   className="pointer-events-auto flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-amber-200/90 px-1.5 py-0.5 text-[10px] leading-none text-amber-900 shadow-sm dark:bg-amber-800/90 dark:text-amber-100"
                   title={actionable ? badgeLabel(issue) : `${badgeLabel(issue)} — ${unactionableReason(issue)}`}
                 >

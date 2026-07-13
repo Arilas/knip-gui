@@ -345,6 +345,7 @@ export function ActionModal({ mode, issues, onClose }: ActionModalProps) {
 
           {flow.status === 'applied' && (
             <ResultsStep
+              mode={mode}
               flow={flow}
               planIssues={planIssuesRef.current}
               summary={summaryRef.current}
@@ -360,6 +361,7 @@ export function ActionModal({ mode, issues, onClose }: ActionModalProps) {
 }
 
 function ResultsStep({
+  mode,
   flow,
   planIssues,
   summary,
@@ -367,6 +369,7 @@ function ResultsStep({
   isRepo,
   onDone,
 }: {
+  mode: 'fix' | 'ignore';
   flow: Extract<ReturnType<typeof applyFlowReducer>, { status: 'applied' }>;
   planIssues: Issue[];
   summary: string;
@@ -417,7 +420,7 @@ function ResultsStep({
       </div>
 
       {isRepo ? (
-        <CommitPanel paths={okPaths} defaultMessage={defaultCommitMessage(commitSummary)} onDone={onDone} />
+        <CommitPanel paths={okPaths} defaultMessage={defaultCommitMessage(commitSummary, mode)} onDone={onDone} />
       ) : (
         <div className="flex justify-end border-t border-gray-200 p-4 dark:border-gray-800">
           <button

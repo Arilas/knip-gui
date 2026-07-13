@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ActionModal } from './components/ActionModal.js';
 import { CodePane } from './components/CodePane.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { FacetRail } from './components/FacetRail.js';
 import { Overview } from './components/Overview.js';
 import { SelectionBar } from './components/SelectionBar.js';
@@ -123,10 +124,12 @@ function AppShell() {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <AppShell />
-      </ToastProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <AppShell />
+        </ToastProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

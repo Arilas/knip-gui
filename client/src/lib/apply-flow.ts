@@ -126,9 +126,21 @@ export function joinResults(
   return [...diffRows, ...compileFailedRows];
 }
 
-/** "chore(knip): remove 12 exports, 3 files" from selection.ts's summaryByType() output. */
-export function defaultCommitMessage(summary: string): string {
-  return `chore(knip): remove ${summary || 'unused code'}`;
+const COMMIT_VERB: Record<'fix' | 'ignore', string> = {
+  fix: 'remove',
+  ignore: 'ignore',
+};
+
+/**
+ * "chore(knip): remove 12 exports, 3 files" for a fix plan, or
+ * "chore(knip): ignore 12 exports, 3 files" for an ignore plan, from
+ * selection.ts's summaryByType() output. `kind` must match the plan that
+ * actually ran (ActionModal.tsx's `mode` prop) — an ignore plan doesn't
+ * remove anything, so a hardcoded "remove" verb there would misdescribe the
+ * commit it prefills.
+ */
+export function defaultCommitMessage(summary: string, kind: 'fix' | 'ignore'): string {
+  return `chore(knip): ${COMMIT_VERB[kind]} ${summary || 'unused code'}`;
 }
 
 /** The full changed-file list from a preview (before any apply-ok/failed distinction is known). */

@@ -159,12 +159,17 @@ describe('joinResults', () => {
 });
 
 describe('defaultCommitMessage', () => {
-  it('renders a conventional-commit style message from a selection summary', () => {
-    expect(defaultCommitMessage('12 exports, 3 files')).toBe('chore(knip): remove 12 exports, 3 files');
+  it('renders a conventional-commit style "remove" message for a fix plan', () => {
+    expect(defaultCommitMessage('12 exports, 3 files', 'fix')).toBe('chore(knip): remove 12 exports, 3 files');
   });
 
-  it('falls back to a generic message when the summary is empty', () => {
-    expect(defaultCommitMessage('')).toBe('chore(knip): remove unused code');
+  it('renders a conventional-commit style "ignore" message for an ignore plan', () => {
+    expect(defaultCommitMessage('12 exports, 3 files', 'ignore')).toBe('chore(knip): ignore 12 exports, 3 files');
+  });
+
+  it('falls back to a generic message when the summary is empty, per plan kind', () => {
+    expect(defaultCommitMessage('', 'fix')).toBe('chore(knip): remove unused code');
+    expect(defaultCommitMessage('', 'ignore')).toBe('chore(knip): ignore unused code');
   });
 });
 

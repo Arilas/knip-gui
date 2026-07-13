@@ -6,7 +6,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Issue } from '../../../src/core/types.js';
-import { buildTree, type DirNode, type FileNode } from '../lib/tree.js';
+import { buildTree, type DirNode } from '../lib/tree.js';
 import { TreeNodeRow, type FlatRow } from './TreeNode.js';
 
 export interface TreeViewProps {
@@ -14,11 +14,6 @@ export interface TreeViewProps {
   selected: ReadonlySet<string>;
   onToggleIds: (ids: string[]) => void;
   onOpenFile: (path: string) => void;
-}
-
-function matches(node: FileNode, needle: string): boolean {
-  if (node.path.toLowerCase().includes(needle)) return true;
-  return node.fileIssues.some((i) => i.symbol?.toLowerCase().includes(needle));
 }
 
 // Substring filter over path/symbol: keeps a directory if it (or any
