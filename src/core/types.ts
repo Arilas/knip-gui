@@ -53,6 +53,13 @@ export interface Report {
   issues: Issue[];
   scannedAt: string;
   workspaces: string[];
+  /**
+   * The workspace this scan was limited to (matches the `workspace` passed to
+   * `runScan`/`/api/scan`), or absent when the scan covered the full project.
+   * Rescans (post-apply background rescan, post-sweep awaited rescan) reuse
+   * this value rather than silently widening back to a full-project scan.
+   */
+  scope?: string;
 }
 
 export const FIX_MODES_BY_TYPE: Record<IssueType, FixMode[]> = {

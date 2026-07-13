@@ -28,10 +28,13 @@ async function performRescan(
   ctx: FixRoutesCtx,
 ): Promise<{ ok: true; issueCount: number } | { ok: false; error: StoreError }> {
   try {
-    const raw = await ctx.scan(ctx.projectDir, {});
+    // Reuse the last scan's workspace rather than silently widening back to a
+    // full-project scan (Plan 2 carried-over obligation).
+    const scope = ctx.store.lastScanScope;
+    const raw = await ctx.scan(ctx.projectDir, { workspace: scope });
     const workspaces = await getWorkspaceDirs(ctx.projectDir);
     const issues = normalize(raw, workspaces);
-    ctx.store.setReady({ issues, scannedAt: new Date().toISOString(), workspaces });
+    ctx.store.setReady({ issues, scannedAt: new Date().toISOString(), workspaces, scope });
     return { ok: true, issueCount: issues.length };
   } catch (e) {
     const err = toStoreError(e);
@@ -104,13 +107,17 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     // latched the way /api/scan's own single-flight guard is).
     if (store.status === 'scanning') return c.json({ error: 'scan in progress' }, 409);
     const body = await c.req.json().catch(() => ({}));
+    // No explicit workspace on the sweep request falls back to the last scan's
+    // scope rather than defaulting to a full-project sweep.
+    const workspace = typeof body.workspace === 'string' ? body.workspace : store.lastScanScope;
     const sweepResult = await runSweep(projectDir, {
-      workspace: typeof body.workspace === 'string' ? body.workspace : undefined,
+      workspace,
       fixTypes: Array.isArray(body.fixTypes) ? body.fixTypes : undefined,
       allowRemoveFiles: !!body.allowRemoveFiles,
     });
     if (!sweepResult.ok) return c.json({ error: 'sweep failed', stderr: sweepResult.stderr }, 500);
 
+    store.lastScanScope = workspace;
     store.setScanning();
     const result = await performRescan(ctx);
     if (!result.ok) return c.json({ error: result.error }, 500);
