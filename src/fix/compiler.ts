@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import type { FixMode, Issue } from '../core/types.js';
 import { addIgnores, findKnipConfig, type IgnoreEdit, type KnipConfigKind } from '../ignore/config-writer.js';
-import { insertPublicTag } from '../ignore/public-tag.js';
+import { insertMemberPublicTag, insertPublicTag } from '../ignore/public-tag.js';
 import { renderDiff } from './diff.js';
 import { hashContent, type FilePatch } from './patch.js';
 import { deleteDeclaration } from './transforms/delete-declaration.js';
@@ -298,6 +298,10 @@ export async function compileIgnorePlan(
     issueId: string;
     symbol: string;
     pos?: number;
+    // Set for enumMembers/namespaceMembers ops: tag the MEMBER named `symbol`
+    // inside this parent via insertMemberPublicTag (top-level ops leave it
+    // unset and go through insertPublicTag).
+    parentSymbol?: string;
   }
   const tagOpsByFile = new Map<string, TagOp[]>();
 
@@ -337,19 +341,14 @@ export async function compileIgnorePlan(
       }
       case 'enumMembers':
       case 'namespaceMembers': {
-        // insertPublicTag only knows how to tag a top-level exported
-        // declaration (via locateExport) — it has no notion of a nested
-        // enum/namespace member. Tagging the enclosing enum/namespace
-        // (`issue.parentSymbol`) as @public is the only way to silence
-        // member-level nagging for it in v1. `issue.pos` is the MEMBER's own
-        // position, not the parent declaration's name span (locateExport's
-        // `findByPos` only matches a position against the declared
-        // identifier's own span — see source.ts's `declarationNameCandidates`
-        // — so passing the member's pos here would look for the parent NAME
-        // at the member's location and fail with "no export found"). Locate
-        // the parent by name only.
+        // Tag the MEMBER's own line, never the parent declaration: knip reads
+        // jsDocTags at the member's own position, and a parent-level @public
+        // would over-suppress by silencing ALL of the enum's/namespace's
+        // members (verified live against knip's analyze pass). `issue.pos` is
+        // the member's own position and is exactly what
+        // insertMemberPublicTag's locator expects (a same-name tiebreak).
         const list = tagOpsByFile.get(issue.filePath) ?? [];
-        list.push({ issueId, symbol: issue.parentSymbol! });
+        list.push({ issueId, symbol: issue.symbol!, pos: issue.pos, parentSymbol: issue.parentSymbol! });
         tagOpsByFile.set(issue.filePath, list);
         break;
       }
@@ -412,7 +411,9 @@ export async function compileIgnorePlan(
         symbol: op.symbol,
         pos: idx === 0 ? op.pos : undefined,
       };
-      const result = insertPublicTag(input);
+      const result = op.parentSymbol !== undefined
+        ? insertMemberPublicTag({ ...input, parentSymbol: op.parentSymbol })
+        : insertPublicTag(input);
       if (result.ok) {
         if (result.newContent !== current) changed = true;
         current = result.newContent;

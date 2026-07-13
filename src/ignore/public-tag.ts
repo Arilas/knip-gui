@@ -1,5 +1,6 @@
 import MagicString from 'magic-string';
 import type { Comment } from 'oxc-parser';
+import { locateMemberAnchor } from '../fix/transforms/remove-member.js';
 import {
   findTopLevelDeclarationSpan,
   locateExport,
@@ -50,6 +51,39 @@ export function insertPublicTag(input: TransformInput): TransformResult {
     anchor = localSpan.start;
   }
 
+  return applyPublicTagAtAnchor(content, comments, anchor);
+}
+
+// Tags ONE member of an enum or namespace as @public — knip's per-member tag
+// detection reads the jsDocTags at the MEMBER's own position (verified live:
+// knip's analyze pass extracts getJSDocTags(member) per member, while a tag on
+// the parent enum/namespace declaration suppresses ALL of its members). So the
+// per-member ignore must insert `/** @public */` above the member's own line,
+// never above the parent. Member location reuses removeMember's machinery
+// (parent by name — top-level or nested, bare or exported — member by name
+// within it, `pos` only as a same-name tiebreak); JSDoc creation/merge and
+// idempotency follow exactly the same rules as insertPublicTag.
+export function insertMemberPublicTag(
+  input: TransformInput & { parentSymbol: string },
+): TransformResult {
+  const { filePath, content, symbol, parentSymbol, pos } = input;
+  const { program, comments } = parseSource(filePath, content);
+  const located = locateMemberAnchor(program, parentSymbol, symbol, pos);
+  if ('error' in located) return { ok: false, reason: located.error };
+  return applyPublicTagAtAnchor(content, comments, located.anchor);
+}
+
+// Inserts `@public` into the JSDoc attached directly above `anchor`, creating
+// a fresh `/** @public */` line (matching the anchor line's indentation) when
+// no JSDoc exists. Idempotent: an existing JSDoc already documenting @public
+// is returned untouched. Shared by insertPublicTag (top-level declarations)
+// and insertMemberPublicTag (enum/namespace members) — the two differ only in
+// how the anchor is located.
+function applyPublicTagAtAnchor(
+  content: string,
+  comments: Comment[],
+  anchor: number,
+): TransformResult {
   // Per-file newline convention, used both for a fresh `/** @public */` line
   // and for the new `* @public` line merged into an existing JSDoc.
   const nl = content.includes('\r\n') ? '\r\n' : '\n';

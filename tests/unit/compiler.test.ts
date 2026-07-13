@@ -427,7 +427,7 @@ describe('compileIgnorePlan', () => {
     });
   });
 
-  it('an enumMembers issue tags the enclosing enum, not the individual member', async () => {
+  it("an enumMembers issue tags the member's OWN line, not the parent enum", async () => {
     await withTmpDir(async (dir) => {
       const content = 'export enum Color {\n  Red,\n  Blue,\n}\n';
       await seedFile(dir, 'src/enum.ts', content);
@@ -441,7 +441,30 @@ describe('compileIgnorePlan', () => {
       const plan = await compileIgnorePlan(dir, issues, ['i1']);
 
       expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
-      expect(plan.patches[0]!.contentAfter).toBe('/** @public */\nexport enum Color {\n  Red,\n  Blue,\n}\n');
+      expect(plan.patches[0]!.contentAfter).toBe(
+        'export enum Color {\n  Red,\n  /** @public */\n  Blue,\n}\n',
+      );
+    });
+  });
+
+  it('a namespaceMembers issue tags the member statement inside the namespace, not the parent', async () => {
+    await withTmpDir(async (dir) => {
+      const content =
+        'export namespace Config {\n  export const usedFlag = true;\n  export const unusedFlag = false;\n}\n';
+      await seedFile(dir, 'src/ns.ts', content);
+      const issues: Issue[] = [
+        makeIssue('i1', 'namespaceMembers', 'src/ns.ts', {
+          symbol: 'unusedFlag',
+          parentSymbol: 'Config',
+          pos: content.indexOf('unusedFlag'),
+        }),
+      ];
+      const plan = await compileIgnorePlan(dir, issues, ['i1']);
+
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(plan.patches[0]!.contentAfter).toBe(
+        'export namespace Config {\n  export const usedFlag = true;\n  /** @public */\n  export const unusedFlag = false;\n}\n',
+      );
     });
   });
 

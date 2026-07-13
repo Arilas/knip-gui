@@ -85,6 +85,31 @@ export function removeMember(input: TransformInput & { parentSymbol: string }): 
   return { ok: true, newContent: s.toString() };
 }
 
+// Locates a member's anchor — the start offset of the enum member itself, or
+// of the whole member statement inside a namespace body — without removing
+// anything. Shares removeMember's parent/member matching rules exactly
+// (parent by name, member by name within parent, `pos` only as a tiebreak
+// between same-named members). Used by the ignore engine's
+// insertMemberPublicTag, which needs to point AT a member to tag it @public.
+export function locateMemberAnchor(
+  program: Program,
+  parentSymbol: string,
+  symbol: string,
+  pos?: number,
+): { anchor: number } | { error: string } {
+  const parent = findParent(program.body, parentSymbol);
+  if (!parent) return { error: `parent '${parentSymbol}' not found` };
+  if (parent.kind === 'enum') {
+    const members = parent.decl.body.members;
+    const index = findEnumMemberIndex(members, symbol, pos);
+    if (index === -1) return { error: `member '${symbol}' not found in enum '${parentSymbol}'` };
+    return { anchor: members[index]!.start };
+  }
+  const match = findNamespaceMember(parent.decl.body.body, symbol, pos);
+  if (!match) return { error: `member '${symbol}' not found in namespace '${parentSymbol}'` };
+  return { anchor: match.stmt.start };
+}
+
 type Parent =
   | { kind: 'enum'; decl: TSEnumDeclaration }
   | { kind: 'namespace'; decl: TSModuleDeclaration & { body: TSModuleBlock } };

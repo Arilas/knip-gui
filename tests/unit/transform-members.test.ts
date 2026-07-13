@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { removeMember } from '../../src/fix/transforms/remove-member.js';
 import { removeDuplicate } from '../../src/fix/transforms/remove-duplicate.js';
-import { insertPublicTag } from '../../src/ignore/public-tag.js';
+import { insertMemberPublicTag, insertPublicTag } from '../../src/ignore/public-tag.js';
 import type { TransformResult } from '../../src/fix/transforms/source.js';
 
 const FIXTURES_DIR = fileURLToPath(new URL('../fixtures/single/src/', import.meta.url));
@@ -278,5 +278,122 @@ describe('insertPublicTag: failures', () => {
     const content = 'export const foo = 1;\n';
     const result = insertPublicTag({ filePath: 'a.ts', content, symbol: 'nope' });
     expect(result).toEqual({ ok: false, reason: "symbol 'nope' not found" });
+  });
+});
+
+describe('insertMemberPublicTag: enum members', () => {
+  it('tags a middle enum member on its OWN line with the member indentation', () => {
+    const content = 'export enum Color {\n  Red,\n  Blue,\n  Green,\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'Blue',
+      parentSymbol: 'Color',
+    });
+    expect(expectOk(result)).toBe(
+      'export enum Color {\n  Red,\n  /** @public */\n  Blue,\n  Green,\n}\n',
+    );
+  });
+
+  it('tags the last enum member', () => {
+    const content = 'export enum Color {\n  Red,\n  Blue,\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'Blue',
+      parentSymbol: 'Color',
+    });
+    expect(expectOk(result)).toBe('export enum Color {\n  Red,\n  /** @public */\n  Blue,\n}\n');
+  });
+
+  it('does NOT tag the parent enum declaration itself', () => {
+    const content = 'export enum Color {\n  Red,\n  Blue,\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'Blue',
+      parentSymbol: 'Color',
+    });
+    const out = expectOk(result);
+    // The tag must appear AFTER the enum's opening line, not above `export enum`.
+    expect(out.startsWith('export enum Color {')).toBe(true);
+  });
+
+  it('merges @public into an existing member JSDoc', () => {
+    const content = 'export enum Color {\n  Red,\n  /**\n   * Doc.\n   */\n  Blue,\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'Blue',
+      parentSymbol: 'Color',
+    });
+    expect(expectOk(result)).toBe(
+      'export enum Color {\n  Red,\n  /**\n   * Doc.\n   * @public\n   */\n  Blue,\n}\n',
+    );
+  });
+
+  it('is idempotent when the member JSDoc already documents @public', () => {
+    const content = 'export enum Color {\n  Red,\n  /** @public */\n  Blue,\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'Blue',
+      parentSymbol: 'Color',
+    });
+    expect(expectOk(result)).toBe(content);
+  });
+});
+
+describe('insertMemberPublicTag: namespace members', () => {
+  it('tags a namespace member statement with the member indentation', () => {
+    const content =
+      'export namespace Config {\n  export const usedFlag = true;\n  export const unusedFlag = false;\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'unusedFlag',
+      parentSymbol: 'Config',
+    });
+    expect(expectOk(result)).toBe(
+      'export namespace Config {\n  export const usedFlag = true;\n  /** @public */\n  export const unusedFlag = false;\n}\n',
+    );
+  });
+
+  it('merges @public into an existing namespace-member JSDoc', () => {
+    const content =
+      'export namespace Config {\n  /**\n   * Doc.\n   */\n  export const unusedFlag = false;\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'unusedFlag',
+      parentSymbol: 'Config',
+    });
+    expect(expectOk(result)).toBe(
+      'export namespace Config {\n  /**\n   * Doc.\n   * @public\n   */\n  export const unusedFlag = false;\n}\n',
+    );
+  });
+});
+
+describe('insertMemberPublicTag: failures', () => {
+  it('parent not found -> ok:false', () => {
+    const content = 'export enum Color {\n  Red,\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'Red',
+      parentSymbol: 'Nope',
+    });
+    expect(result).toEqual({ ok: false, reason: "parent 'Nope' not found" });
+  });
+
+  it('member not found in parent -> ok:false', () => {
+    const content = 'export enum Color {\n  Red,\n}\n';
+    const result = insertMemberPublicTag({
+      filePath: 'a.ts',
+      content,
+      symbol: 'Blue',
+      parentSymbol: 'Color',
+    });
+    expect(result).toEqual({ ok: false, reason: "member 'Blue' not found in enum 'Color'" });
   });
 });
