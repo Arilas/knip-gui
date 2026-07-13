@@ -34,6 +34,88 @@ describe('normalize', () => {
     expect(em).toMatchObject({ symbol: 'Blue', parentSymbol: 'Color', fixModes: ['remove-member'] });
   });
 
+  it('flattens namespace members with parentSymbol from the namespace field', () => {
+    const nm = issues.find((i) => i.type === 'namespaceMembers');
+    expect(nm).toMatchObject({
+      filePath: 'src/forms.ts',
+      symbol: 'unusedFlag',
+      parentSymbol: 'Config',
+      fixModes: ['remove-member'],
+    });
+    expect(nm!.line).toBeGreaterThan(1);
+    expect(nm!.pos).toBeGreaterThan(0);
+  });
+
+  it('collapses a duplicates group into one issue with the joined names as symbol', () => {
+    const dup = issues.find((i) => i.type === 'duplicates');
+    expect(dup).toBeDefined();
+    expect(dup!.filePath).toBe('src/forms.ts');
+    // knip's duplicates group lists the original declaration first, then each alias;
+    // symbol is every name in the group joined together (ground truth per Task 1 capture).
+    expect(dup!.symbol).toBe('dupeSource, dupeAlias');
+    expect(dup!.parentSymbol).toBeUndefined();
+    expect(dup!.fixModes).toEqual(['remove-duplicate']);
+    // Position is the original declaration's, not the alias's.
+    expect(dup!.line).toBeGreaterThan(1);
+    expect(dup!.pos).toBeGreaterThan(0);
+    // Exactly one issue for the group — not one per name.
+    expect(issues.filter((i) => i.type === 'duplicates')).toHaveLength(1);
+  });
+
+  it('flattens the unused named export from an export { a, b } list', () => {
+    const e = issues.find((i) => i.type === 'exports' && i.symbol === 'listUnused');
+    expect(e).toMatchObject({ filePath: 'src/forms.ts', fixModes: ['strip-export', 'delete-declaration'] });
+  });
+
+  it("flattens an unused `export default` with knip's symbol name `default`", () => {
+    const e = issues.find((i) => i.type === 'exports' && i.symbol === 'default' && i.filePath === 'src/forms.ts');
+    expect(e).toBeDefined();
+    expect(e!.line).toBeGreaterThan(1);
+  });
+
+  it("flattens an unused re-export (`export { x } from './y.js'`) as an exports issue in the re-exporting file", () => {
+    const e = issues.find((i) => i.type === 'exports' && i.symbol === 'reexportSource');
+    expect(e).toBeDefined();
+    expect(e!.filePath).toBe('src/forms.ts');
+  });
+
+  it('groups duplicates by (workspace, file, symbol) for stable, non-colliding ids', () => {
+    const dupRaw = {
+      issues: [
+        {
+          file: 'src/x.ts',
+          duplicates: [
+            [
+              { name: 'a', line: 1, col: 1, pos: 0 },
+              { name: 'b', line: 2, col: 1, pos: 10 },
+            ],
+          ],
+        },
+      ],
+    };
+    const first = normalize(dupRaw, ['.']);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ type: 'duplicates', symbol: 'a, b', filePath: 'src/x.ts' });
+    const second = normalize(dupRaw, ['.']);
+    expect(second[0]!.id).toBe(first[0]!.id);
+  });
+
+  it('drops malformed duplicates groups instead of throwing', () => {
+    const result = normalize(
+      {
+        issues: [
+          {
+            file: 'src/x.ts',
+            duplicates: [null, 42, [], [null, undefined], [{ name: 'ok' }]],
+          },
+        ],
+      },
+      ['.'],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ type: 'duplicates', symbol: 'ok' });
+  });
+
   it('flattens the unused dependency as not-position-bearing', () => {
     const d = issues.find((i) => i.type === 'dependencies' && i.symbol === 'left-pad');
     expect(d).toMatchObject({ filePath: 'package.json', fixModes: ['remove-dependency'] });

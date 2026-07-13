@@ -19,3 +19,7 @@ export class Geo {
     return 1;
   }
 }
+
+export function reexportSource(): number {
+  return 9;
+}

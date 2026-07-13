@@ -1,5 +1,15 @@
-import { usedHelper, Color, Geo } from './used.js';
+import { usedHelper, Color, Geo, reexportSource } from './used.js';
+import { listUsed, Config, dupeSource, dupeAlias } from './forms.js';
 import type { Shape } from './shapes.js';
 
 const s: Shape = { kind: 'circle' };
-console.log(usedHelper(s.kind), Color.Red, new Geo().perimeter());
+console.log(
+  usedHelper(s.kind),
+  Color.Red,
+  new Geo().perimeter(),
+  listUsed(),
+  Config.usedFlag,
+  dupeSource,
+  dupeAlias,
+  reexportSource(),
+);
