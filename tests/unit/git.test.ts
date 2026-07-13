@@ -93,6 +93,65 @@ describe('gitStatus', () => {
     expect(status.dirtyFiles).toHaveLength(2);
   });
 
+  it('reports filenames with spaces verbatim (no C-quoting) and they round-trip into gitCommitPaths', async () => {
+    const dir = await makeTmpDir('knip-gui-git-spaces-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'base.txt'), 'base', 'utf8');
+    await commitAll(dir, 'initial');
+
+    await writeFile(join(dir, 'file with spaces.txt'), 'spaced out', 'utf8');
+
+    const status = await gitStatus(dir);
+    // Porcelain v1 without -z wraps this in literal quotes: "file with spaces.txt".
+    // That quoted string fed back into `git add --` fails with exit 128, so the
+    // status output must carry the raw path.
+    expect(status.dirtyFiles).toEqual(['file with spaces.txt']);
+
+    const result = await gitCommitPaths(dir, status.dirtyFiles!, 'commit spaced file');
+    expect(result.sha).toMatch(/^[0-9a-f]{40}$/);
+
+    const after = await gitStatus(dir);
+    expect(after.dirty).toBe(false);
+  });
+
+  it('reports non-ASCII filenames verbatim (no octal escaping) and they round-trip into gitCommitPaths', async () => {
+    const dir = await makeTmpDir('knip-gui-git-utf8-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'base.txt'), 'base', 'utf8');
+    await commitAll(dir, 'initial');
+
+    await writeFile(join(dir, 'café.txt'), 'accent', 'utf8');
+
+    const status = await gitStatus(dir);
+    // Without -z, git octal-escapes non-ASCII bytes: "caf\303\251.txt".
+    expect(status.dirtyFiles).toEqual(['café.txt']);
+
+    const result = await gitCommitPaths(dir, status.dirtyFiles!, 'commit café');
+    expect(result.sha).toMatch(/^[0-9a-f]{40}$/);
+
+    const after = await gitStatus(dir);
+    expect(after.dirty).toBe(false);
+  });
+
+  it('parses staged rename records (-z two-field format) without corrupting the list', async () => {
+    const dir = await makeTmpDir('knip-gui-git-rename-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'old-name.txt'), 'rename me', 'utf8');
+    await writeFile(join(dir, 'other.txt'), 'other', 'utf8');
+    await commitAll(dir, 'initial');
+
+    // A staged rename emits the two-field `-z` record: `R  new\0old\0`. The
+    // OLD path must be consumed with its record, not leak in as a phantom
+    // entry or shift parsing of subsequent records.
+    await git(dir, ['mv', 'old-name.txt', 'renamed.txt']);
+    await writeFile(join(dir, 'other.txt'), 'other changed', 'utf8');
+
+    const status = await gitStatus(dir);
+    expect(status.dirty).toBe(true);
+    expect(status.dirtyFiles).toEqual(expect.arrayContaining(['renamed.txt', 'other.txt']));
+    expect(status.dirtyFiles).toHaveLength(2);
+  });
+
   it('reflects a newly created branch', async () => {
     const dir = await makeTmpDir('knip-gui-git-branch-');
     await initRepo(dir);
@@ -151,13 +210,23 @@ describe('gitCommitPaths', () => {
     expect(after.dirtyFiles).toEqual(['untouched.txt']);
   });
 
-  it('throws GitError when there is nothing to commit', async () => {
+  it('throws GitError carrying the useful "nothing to commit" detail (git writes it to STDOUT)', async () => {
     const dir = await makeTmpDir('knip-gui-git-nothing-');
     await initRepo(dir);
     await writeFile(join(dir, 'a.txt'), 'hello', 'utf8');
     await commitAll(dir, 'initial');
 
-    await expect(gitCommitPaths(dir, ['a.txt'], 'no-op commit')).rejects.toBeInstanceOf(GitError);
+    const error = await gitCommitPaths(dir, ['a.txt'], 'no-op commit').then(
+      () => {
+        throw new Error('expected gitCommitPaths to reject');
+      },
+      (e: unknown) => e as GitError,
+    );
+    expect(error).toBeInstanceOf(GitError);
+    // git prints "nothing to commit, working tree clean" to stdout, not
+    // stderr — the wrapper must still surface it so the API layer can show
+    // the user a real reason instead of an empty string.
+    expect(`${error.message}\n${error.stderr ?? ''}`).toContain('nothing to commit');
   });
 
   it('throws GitError (not a silent no-op) when a path escapes the project root', async () => {

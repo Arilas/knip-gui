@@ -27,8 +27,16 @@ function execGit(cwd: string, args: string[]): Promise<{ stdout: string; stderr:
         return reject(new GitError(String(error.message), { stderr, code: 'spawn-failed' }));
       }
       if (error && typeof exitCode === 'number' && exitCode !== 0) {
+        // git writes some failure detail to STDOUT rather than stderr (e.g.
+        // `git commit` with nothing staged prints "nothing to commit, working
+        // tree clean" on stdout) — prefer stderr, fall back to stdout, so
+        // GitError always carries a useful message for the API layer.
+        const detail = (stderr.trim() ? stderr : stdout).trim();
         return reject(
-          new GitError(`git ${args.join(' ')} exited with ${exitCode}`, { stderr, code: `exit-${exitCode}` }),
+          new GitError(
+            `git ${args.join(' ')} exited with ${exitCode}${detail ? `: ${detail}` : ''}`,
+            { stderr: detail, code: `exit-${exitCode}` },
+          ),
         );
       }
       resolvePromise({ stdout, stderr });
@@ -47,12 +55,29 @@ async function tryGit(cwd: string, args: string[]): Promise<{ stdout: string; st
   }
 }
 
-// Parses one `git status --porcelain` line ("XY path" or, for renames,
-// "XY old -> new") down to the path git currently considers ended.
-function parsePorcelainPath(line: string): string {
-  const path = line.slice(3);
-  const arrowIdx = path.indexOf(' -> ');
-  return arrowIdx === -1 ? path : path.slice(arrowIdx + 4);
+// Parses NUL-delimited `git status --porcelain -z` output. Without -z, git
+// C-quotes any path containing spaces or special characters (literal
+// `"file with spaces.txt"`) and octal-escapes non-ASCII bytes
+// (`"caf\303\251.txt"`), so a naive line parser produces strings that fail
+// with exit 128 when fed back into `git add --` (the gitStatus →
+// gitCommitPaths round-trip). With -z, paths are always verbatim.
+//
+// Record shapes: `XY path\0`, except renames/copies (X of R or C) which emit
+// TWO NUL-terminated fields: `XY newpath\0oldpath\0`. The old path must be
+// consumed with its record so it neither appears as a phantom entry nor
+// shifts parsing of subsequent records. We keep the new path (the one that
+// exists in the working tree now).
+function parsePorcelainZ(stdout: string): string[] {
+  const fields = stdout.split('\0');
+  const paths: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const record = fields[i];
+    if (!record) continue; // trailing empty field after the final NUL
+    paths.push(record.slice(3));
+    const x = record[0];
+    if (x === 'R' || x === 'C') i++; // skip the rename/copy source field
+  }
+  return paths;
 }
 
 export async function gitStatus(projectDir: string): Promise<GitStatus> {
@@ -81,11 +106,8 @@ export async function gitStatus(projectDir: string): Promise<GitStatus> {
   const branchResult = await execGit(projectDir, ['branch', '--show-current']);
   const branch = branchResult.stdout.trim() || undefined;
 
-  const statusResult = await execGit(projectDir, ['status', '--porcelain', '--untracked-files=all']);
-  const dirtyFiles = statusResult.stdout
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map(parsePorcelainPath);
+  const statusResult = await execGit(projectDir, ['status', '--porcelain', '-z', '--untracked-files=all']);
+  const dirtyFiles = parsePorcelainZ(statusResult.stdout);
 
   return { isRepo: true, branch, dirty: dirtyFiles.length > 0, dirtyFiles };
 }
