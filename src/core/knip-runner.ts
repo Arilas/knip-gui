@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 export class KnipError extends Error {
+  override name = 'KnipError';
   exitCode?: number;
   stderr?: string;
   code?: 'knip-not-found' | 'knip-failed' | 'bad-json';
