@@ -5,7 +5,7 @@
 // out per the plan's Global Constraints).
 import { describe, expect, it } from 'vitest';
 import type { Issue } from '../../src/core/types.js';
-import { issueLines, langForPath } from '../../client/src/lib/highlighter.js';
+import { issueLines, langForPath, SHIKI_THEMES } from '../../client/src/lib/highlighter.js';
 
 let idSeq = 0;
 function issue(partial: Partial<Issue> & Pick<Issue, 'type' | 'filePath'>): Issue {
@@ -18,6 +18,14 @@ function issue(partial: Partial<Issue> & Pick<Issue, 'type' | 'filePath'>): Issu
     ...partial,
   };
 }
+
+describe('SHIKI_THEMES', () => {
+  // Pins the Task 1 (UX overhaul) theme swap: vitesse's warm palette over
+  // github-light/dark, to match the app's warm-stone/violet theme (index.css).
+  it('uses the warm-toned vitesse dual themes', () => {
+    expect(SHIKI_THEMES).toEqual({ light: 'vitesse-light', dark: 'vitesse-dark' });
+  });
+});
 
 describe('langForPath', () => {
   it('maps known extensions to shiki grammar names', () => {

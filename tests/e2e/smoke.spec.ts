@@ -19,8 +19,9 @@ test('select unused export + unused file, fix, rescan clears them, commit', asyn
   // report.scannedAt is set (i.e. the initial fire-and-forget scan finished).
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
 
-  // Switch to the tree facet and expand down to src/used.ts.
-  await page.getByTestId('facet-tree').click();
+  // Switch to the Code page (sidebar nav, not the old facet rail) and expand
+  // down to src/used.ts.
+  await page.getByTestId('nav-code').click();
   await page.getByRole('button', { name: 'Expand src' }).click();
   await page.getByRole('button', { name: 'Expand used.ts' }).click();
 

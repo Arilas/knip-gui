@@ -12,7 +12,9 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
   await page.goto('/');
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
 
-  await page.getByTestId('facet-dependencies').click();
+  // Packages nav (sidebar) — dependency-shaped issues, including left-pad,
+  // render in a table there (see App.tsx's PACKAGES_PREVIEW_TYPES shim).
+  await page.getByTestId('nav-packages').click();
 
   // The exact IssueType (dependencies/devDependencies/optionalPeerDependencies)
   // is an implementation detail of how knip classifies it — match on the

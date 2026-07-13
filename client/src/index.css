@@ -1,4 +1,148 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+ * Theme tokens (Task 1, UX overhaul): shadcn's CSS-variable convention, warm
+ * stone neutrals + a violet primary/accent — "warm purple" per
+ * docs/superpowers/specs/2026-07-14-ux-overhaul-design.md. No manual
+ * light/dark toggle exists anywhere in this app: both this block and every
+ * component's `dark:`-prefixed styling key off Tailwind v4's own default dark
+ * variant (`prefers-color-scheme: dark`) — mirrors the Global Constraint the
+ * shiki dual-theme rules below already follow, so there's exactly one
+ * light/dark switch mechanism in the whole app. (No `@custom-variant dark`
+ * class-toggle override, unlike shadcn's own next-themes-oriented starter.)
+ *
+ * `@theme inline` re-exposes each `--sidebar-*`/`--chart-*`/`--radius-*`
+ * variable as a `--color-*`/`--radius-*` Tailwind v4 theme value, which is
+ * what makes classes like `bg-sidebar-accent` or `rounded-4xl` (used by
+ * sidebar.tsx/badge.tsx below) resolve at all — Tailwind v4 has no default
+ * `sidebar`/`chart` color scale of its own.
+ */
+@theme inline {
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --background: oklch(0.985 0.004 85);
+  --foreground: oklch(0.216 0.006 56);
+  --card: oklch(0.995 0.002 85);
+  --card-foreground: oklch(0.216 0.006 56);
+  --popover: oklch(0.995 0.002 85);
+  --popover-foreground: oklch(0.216 0.006 56);
+  --primary: oklch(0.541 0.198 293);
+  --primary-foreground: oklch(0.985 0.004 85);
+  --secondary: oklch(0.955 0.008 85);
+  --secondary-foreground: oklch(0.271 0.007 56);
+  --muted: oklch(0.955 0.008 85);
+  --muted-foreground: oklch(0.5 0.01 60);
+  --accent: oklch(0.93 0.03 293);
+  --accent-foreground: oklch(0.32 0.09 293);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.9 0.006 70);
+  --input: oklch(0.9 0.006 70);
+  --ring: oklch(0.62 0.15 293);
+  --radius: 0.625rem;
+  --chart-1: oklch(0.541 0.198 293);
+  --chart-2: oklch(0.62 0.15 293);
+  --chart-3: oklch(0.7 0.12 293);
+  --chart-4: oklch(0.78 0.09 293);
+  --chart-5: oklch(0.86 0.05 293);
+  --sidebar: oklch(0.965 0.006 80);
+  --sidebar-foreground: oklch(0.271 0.007 56);
+  --sidebar-primary: oklch(0.541 0.198 293);
+  --sidebar-primary-foreground: oklch(0.985 0.004 85);
+  --sidebar-accent: oklch(0.91 0.025 293);
+  --sidebar-accent-foreground: oklch(0.32 0.09 293);
+  --sidebar-border: oklch(0.9 0.006 70);
+  --sidebar-ring: oklch(0.62 0.15 293);
+}
+
+/* Dark values apply directly under the OS/browser dark preference — no
+   `.dark` class toggle exists anywhere in this app (see the doc comment
+   above), so there is no separate `.dark { ... }` selector block; this is
+   the only dark-mode source of truth for these custom properties. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.147 0.007 60);
+    --foreground: oklch(0.94 0.006 85);
+    --card: oklch(0.19 0.008 60);
+    --card-foreground: oklch(0.94 0.006 85);
+    --popover: oklch(0.19 0.008 60);
+    --popover-foreground: oklch(0.94 0.006 85);
+    --primary: oklch(0.74 0.15 293);
+    --primary-foreground: oklch(0.147 0.007 60);
+    --secondary: oklch(0.26 0.01 60);
+    --secondary-foreground: oklch(0.94 0.006 85);
+    --muted: oklch(0.26 0.01 60);
+    --muted-foreground: oklch(0.66 0.012 70);
+    --accent: oklch(0.3 0.05 293);
+    --accent-foreground: oklch(0.9 0.03 293);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.74 0.15 293);
+    --chart-1: oklch(0.74 0.15 293);
+    --chart-2: oklch(0.66 0.13 293);
+    --chart-3: oklch(0.58 0.11 293);
+    --chart-4: oklch(0.5 0.09 293);
+    --chart-5: oklch(0.42 0.07 293);
+    --sidebar: oklch(0.18 0.009 60);
+    --sidebar-foreground: oklch(0.94 0.006 85);
+    --sidebar-primary: oklch(0.74 0.15 293);
+    --sidebar-primary-foreground: oklch(0.147 0.007 60);
+    --sidebar-accent: oklch(0.3 0.05 293);
+    --sidebar-accent-foreground: oklch(0.9 0.03 293);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.74 0.15 293);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
 
 /*
  * Shiki dual-theme + line-number styling for CodePane (Task 4).
