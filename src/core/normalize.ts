@@ -9,9 +9,16 @@ type RawEntry = {
   pos?: number;
 };
 
-function issueId(parts: (string | undefined)[]): string {
+function issueId(parts: (string | undefined)[], occurrence: number): string {
+  // The occurrence ordinal disambiguates repeats of the same
+  // (workspace, filePath, type, parentSymbol, symbol) key within one run —
+  // e.g. the same unresolved specifier at two different lines in one file.
+  // line/pos are deliberately NOT hashed so ids stay stable when unrelated
+  // edits shift lines. The first occurrence omits the ordinal, keeping ids
+  // identical to those produced before ordinals existed.
+  const key = parts.map((p) => p ?? '').join('|');
   return createHash('sha256')
-    .update(parts.map((p) => p ?? '').join('|'))
+    .update(occurrence === 0 ? key : `${key}|${occurrence}`)
     .digest('hex')
     .slice(0, 12);
 }
@@ -52,17 +59,24 @@ function symbolsFor(type: IssueType, item: RawEntry): { symbol?: string; parentS
 export function normalize(raw: unknown, workspaceDirs: string[]): Issue[] {
   const issues: Issue[] = [];
   const fileEntries = (raw as { issues?: unknown[] })?.issues ?? [];
+  const keyCounts = new Map<string, number>();
 
   for (const entry of fileEntries as Record<string, unknown>[]) {
-    const filePath = String(entry.file ?? '');
+    // Skip malformed entries (null, non-objects, non-string `file`) rather than throwing.
+    if (!entry || typeof entry !== 'object' || typeof entry.file !== 'string') continue;
+    const filePath = entry.file;
     const workspace = workspaceFor(filePath, workspaceDirs);
 
     for (const type of ISSUE_TYPES) {
       for (const item of flattenEntries(entry[type])) {
         const { symbol, parentSymbol } = symbolsFor(type, item);
         const fixModes = FIX_MODES_BY_TYPE[type];
+        const keyParts = [workspace, filePath, type, parentSymbol, symbol];
+        const key = keyParts.map((p) => p ?? '').join('|');
+        const occurrence = keyCounts.get(key) ?? 0;
+        keyCounts.set(key, occurrence + 1);
         issues.push({
-          id: issueId([workspace, filePath, type, parentSymbol, symbol]),
+          id: issueId(keyParts, occurrence),
           type,
           workspace,
           filePath,

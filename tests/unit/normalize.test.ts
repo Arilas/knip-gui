@@ -12,6 +12,7 @@ describe('normalize', () => {
   it('flattens the unused file', () => {
     const f = issues.find((i) => i.type === 'files');
     expect(f).toMatchObject({ filePath: 'src/orphan.ts', workspace: '.', fixable: true, fixModes: ['delete-file'] });
+    expect(f!.symbol).toBeUndefined();
   });
 
   it('flattens the unused export with position info', () => {
@@ -42,6 +43,49 @@ describe('normalize', () => {
     const again = normalize(raw, ['.']);
     expect(again.map((i) => i.id)).toEqual(issues.map((i) => i.id));
     expect(new Set(issues.map((i) => i.id)).size).toBe(issues.length);
+  });
+
+  it('marks unresolved issues as not fixable with empty fixModes', () => {
+    const [u] = normalize(
+      { issues: [{ file: 'src/used.ts', unresolved: [{ name: './missing.js', line: 2, col: 1, pos: 10 }] }] },
+      ['.'],
+    );
+    expect(u).toMatchObject({ type: 'unresolved', symbol: './missing.js', fixable: false, fixModes: [] });
+  });
+
+  it('gives duplicate (workspace,file,type,symbol) occurrences distinct, stable ids', () => {
+    const dupRaw = {
+      issues: [
+        {
+          file: 'src/used.ts',
+          unresolved: [
+            { name: './missing.js', line: 2, col: 1, pos: 10 },
+            { name: './missing.js', line: 9, col: 1, pos: 140 },
+          ],
+        },
+      ],
+    };
+    const first = normalize(dupRaw, ['.']);
+    expect(first).toHaveLength(2);
+    expect(first[0]!.id).not.toBe(first[1]!.id);
+    const second = normalize(dupRaw, ['.']);
+    expect(second.map((i) => i.id)).toEqual(first.map((i) => i.id));
+  });
+
+  it('skips malformed entries instead of throwing', () => {
+    const result = normalize(
+      {
+        issues: [
+          null,
+          42,
+          { file: 7, files: [{ name: 'x.ts' }] },
+          { file: 'src/orphan.ts', files: [{ name: 'src/orphan.ts' }] },
+        ],
+      },
+      ['.'],
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]!.filePath).toBe('src/orphan.ts');
   });
 
   it('maps files to workspaces by longest prefix', () => {
