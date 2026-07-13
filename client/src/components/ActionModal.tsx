@@ -397,6 +397,7 @@ function ResultsStep({
           {rows.map((row, idx) => (
             <li
               key={`${row.filePath}-${idx}`}
+              data-testid={`result-row-${row.filePath}`}
               className={`flex items-center gap-2 rounded px-2 py-1 ${
                 row.status === 'ok'
                   ? 'bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-100'
@@ -404,7 +405,9 @@ function ResultsStep({
               }`}
             >
               <span className="font-mono text-xs">{row.filePath}</span>
-              <span className="ml-auto shrink-0 text-xs font-medium">{row.status}</span>
+              <span data-testid={`result-status-${row.filePath}`} className="ml-auto shrink-0 text-xs font-medium">
+                {row.status}
+              </span>
               {row.reason && <span className="shrink-0 text-xs opacity-80">({row.reason})</span>}
             </li>
           ))}

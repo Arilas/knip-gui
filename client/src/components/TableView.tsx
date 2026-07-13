@@ -98,7 +98,11 @@ export function TableView({ issues, selected, onToggleIds }: TableViewProps) {
           {sorted.map((issue) => {
             const actionable = isActionable(issue);
             return (
-              <tr key={issue.id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+              <tr
+                key={issue.id}
+                data-testid={`table-row-${issue.type}-${issue.symbol ?? issue.id}`}
+                className="hover:bg-gray-50 dark:hover:bg-gray-900"
+              >
                 <td className="border-b border-gray-100 px-2 py-1 dark:border-gray-900">
                   <input
                     type="checkbox"

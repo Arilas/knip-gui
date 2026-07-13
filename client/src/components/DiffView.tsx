@@ -24,7 +24,10 @@ export function DiffView({ diff, defaultOpen = true }: DiffViewProps) {
   });
 
   return (
-    <div className="overflow-hidden rounded border border-gray-200 dark:border-gray-800">
+    <div
+      className="overflow-hidden rounded border border-gray-200 dark:border-gray-800"
+      data-testid={`diff-view-${diff.filePath}`}
+    >
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

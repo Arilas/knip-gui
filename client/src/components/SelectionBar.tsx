@@ -23,8 +23,13 @@ export function SelectionBar({ issues, onOpenModal }: SelectionBarProps) {
   const summary = summaryByType({ selected }, issues);
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-10 flex items-center gap-3 border-t border-gray-200 bg-white px-4 py-2 shadow-[0_-1px_8px_rgba(0,0,0,0.08)] dark:border-gray-800 dark:bg-gray-950">
-      <span className="text-sm font-semibold">{selected.size} selected</span>
+    <div
+      data-testid="selection-bar"
+      className="fixed inset-x-0 bottom-0 z-10 flex items-center gap-3 border-t border-gray-200 bg-white px-4 py-2 shadow-[0_-1px_8px_rgba(0,0,0,0.08)] dark:border-gray-800 dark:bg-gray-950"
+    >
+      <span data-testid="selection-count" className="text-sm font-semibold">
+        {selected.size} selected
+      </span>
       {summary && <span className="text-xs text-gray-600 dark:text-gray-400">{summary}</span>}
 
       <div className="ml-auto flex items-center gap-2">

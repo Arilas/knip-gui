@@ -16,10 +16,12 @@
   "scripts": {
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
-    "build:client": "vite build --config client/vite.config.ts",
+    "build:client": "NODE_ENV=production vite build --config client/vite.config.ts",
     "dev:client": "vite --config client/vite.config.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "e2e:fixture": "tsx scripts/e2e-fixture.ts",
     "typecheck": "tsc --noEmit && tsc -p client/tsconfig.json"
   },
   "dependencies": {
@@ -40,6 +42,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

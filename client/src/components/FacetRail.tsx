@@ -24,6 +24,7 @@ export function FacetRail({ issues, activeFacet, onSelectFacet }: FacetRailProps
             <li key={facet.id}>
               <button
                 type="button"
+                data-testid={`facet-${facet.id}`}
                 aria-current={isActive ? 'page' : undefined}
                 onClick={() => onSelectFacet(facet.id)}
                 className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm ${

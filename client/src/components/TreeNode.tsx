@@ -130,7 +130,7 @@ export function TreeNodeRow({ row, selected, onToggleExpand, onToggleIds, onOpen
     const state = nodeSelectionState(node, selected);
     const disabled = node.actionableIds.length === 0;
     return (
-      <div className={ROW_BASE} style={{ paddingLeft: indent }}>
+      <div className={ROW_BASE} style={{ paddingLeft: indent }} data-testid={`tree-dir-${node.path}`}>
         <button
           type="button"
           aria-label={row.expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
@@ -162,7 +162,7 @@ export function TreeNodeRow({ row, selected, onToggleExpand, onToggleIds, onOpen
     const state = nodeSelectionState(node, selected);
     const disabled = node.actionableIds.length === 0;
     return (
-      <div className={ROW_BASE} style={{ paddingLeft: indent }}>
+      <div className={ROW_BASE} style={{ paddingLeft: indent }} data-testid={`tree-file-${node.path}`}>
         {row.expandable ? (
           <button
             type="button"
@@ -201,7 +201,11 @@ export function TreeNodeRow({ row, selected, onToggleExpand, onToggleIds, onOpen
   const ignore = isIgnorable(issue);
   const actionable = fix.ok || ignore.ok;
   return (
-    <div className={ROW_BASE} style={{ paddingLeft: indent }}>
+    <div
+      className={ROW_BASE}
+      style={{ paddingLeft: indent }}
+      data-testid={`tree-issue-${issue.type}-${issue.symbol ?? issue.id}`}
+    >
       <span className="w-4 shrink-0" />
       <input
         type="checkbox"

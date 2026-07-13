@@ -67,7 +67,10 @@ export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps)
       )}
 
       {sha ? (
-        <div className="rounded border border-green-300 bg-green-50 px-2 py-2 text-sm text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100">
+        <div
+          data-testid="commit-sha"
+          className="rounded border border-green-300 bg-green-50 px-2 py-2 text-sm text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+        >
           Committed <code className="font-mono">{sha}</code>
           {createBranch && (
             <>
