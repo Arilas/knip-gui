@@ -139,6 +139,91 @@ describe('deleteDeclaration: plain declaration', () => {
   });
 });
 
+describe('multi-declarator `export const a = 1, b = 2`', () => {
+  it.each([
+    ['first', 'a', 'export const b = 2;\n'],
+    ['last', 'b', 'export const a = 1;\n'],
+  ])(
+    'deleteDeclaration removes only the %s declarator, keeping the live sibling',
+    (_label, symbol, expected) => {
+      const content = 'export const a = 1, b = 2;\n';
+      const result = deleteDeclaration({ filePath: 'a.ts', content, symbol });
+      expect(expectOk(result)).toBe(expected);
+    },
+  );
+
+  it('deleteDeclaration removes a middle declarator with comma hygiene', () => {
+    const content = 'export const a = 1, b = 2, c = 3;\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'b' });
+    expect(expectOk(result)).toBe('export const a = 1, c = 3;\n');
+  });
+
+  it('deleteDeclaration of the sole declarator removes the whole statement', () => {
+    const content = 'export const only = 1;\nexport const keep = 2;\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'only' });
+    expect(expectOk(result)).toBe('export const keep = 2;\n');
+  });
+
+  it('stripExport removes the `export ` keyword for the WHOLE statement (mirrors knip --fix; intentional, do not "fix")', () => {
+    // knip --fix unexports the entire `export const a = 1, b = 2;` statement even
+    // when only one declarator is unused — stripExport deliberately mirrors that.
+    // Per-declarator surgery is a deleteDeclaration behavior only.
+    const content = 'export const a = 1, b = 2;\n';
+    const result = stripExport({ filePath: 'a.ts', content, symbol: 'b' });
+    expect(expectOk(result)).toBe('const a = 1, b = 2;\n');
+  });
+});
+
+describe('deleteDeclaration: decorated class', () => {
+  it('sweeps a single decorator above `export class` into the deletion', () => {
+    const content = '@Component()\nexport class Foo {}\nexport const keep = 1;\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'Foo' });
+    expect(expectOk(result)).toBe('export const keep = 1;\n');
+  });
+
+  it('sweeps multiple decorators above `export class` into the deletion', () => {
+    const content = '@Component()\n@Injectable()\nexport class Foo {}\nexport const keep = 1;\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'Foo' });
+    expect(expectOk(result)).toBe('export const keep = 1;\n');
+  });
+
+  it('removes a JSDoc sitting above the decorators too (comment -> decorator -> export class)', () => {
+    const content =
+      '/**\n * Doc.\n */\n@Component()\nexport class Foo {}\nexport const keep = 1;\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'Foo' });
+    expect(expectOk(result)).toBe('export const keep = 1;\n');
+  });
+});
+
+describe('deleteDeclaration: list-exported local TS type declarations', () => {
+  it('deletes a local `type` alias together with its `export type { T }` binding', () => {
+    const content = 'type T = string;\nexport type { T };\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'T' });
+    expect(expectOk(result)).toBe('');
+  });
+
+  it('deletes a local `interface` together with its list binding', () => {
+    const content = 'interface I {\n  x: number;\n}\nexport type { I };\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'I' });
+    expect(expectOk(result)).toBe('');
+  });
+
+  it('deletes a local `enum` together with its list binding', () => {
+    const content = 'enum E {\n  A,\n}\nexport { E };\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'E' });
+    expect(expectOk(result)).toBe('');
+  });
+});
+
+describe('deleteDeclaration: CRLF line endings', () => {
+  it('removes an attached JSDoc when lines end with \\r\\n', () => {
+    const content =
+      '/**\r\n * Doc.\r\n */\r\nexport function foo() {\r\n  return 1;\r\n}\r\nexport const bar = 2;\r\n';
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'foo' });
+    expect(expectOk(result)).toBe('export const bar = 2;\r\n');
+  });
+});
+
 describe('locate failures', () => {
   it('symbol-name mismatch at a given pos -> ok:false', () => {
     const content = 'export const foo = 1;\n';

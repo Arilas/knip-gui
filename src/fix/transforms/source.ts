@@ -44,10 +44,18 @@ export function parseSource(filePath: string, content: string): ParsedSource {
 // comment-attachment helpers below for non-export nodes (enum/namespace members,
 // duplicate bindings).
 
+export interface Span {
+  start: number;
+  end: number;
+}
+
 interface NamedSpan {
   name: string;
   start: number;
   end: number;
+  // Index into VariableDeclaration.declarations when the candidate is one
+  // declarator of a (possibly multi-declarator) variable declaration.
+  declaratorIndex?: number;
 }
 
 export type ExportSite =
@@ -57,6 +65,19 @@ export type ExportSite =
       exportStart: number;
       declStart: number;
       statementEnd: number;
+      // Earliest point of the full construct: min of `exportStart` and any class
+      // decorator that sits ABOVE the `export` keyword (`@dec\nexport class Foo`).
+      // oxc puts such decorators on the class node but OUTSIDE the
+      // ExportNamedDeclaration span, so a whole-statement deletion that starts at
+      // `exportStart` would leave dangling decorators behind (a syntax error).
+      // Equal to `exportStart` when there are no decorators before it.
+      deleteStart: number;
+      // Present only when the matched symbol is one declarator of an
+      // `export const a = 1, b = 2;` statement: spans of ALL declarators plus
+      // which one matched, so deleteDeclaration can surgically remove just the
+      // flagged declarator instead of deleting live siblings.
+      declarators?: Span[];
+      declaratorIndex?: number;
     }
   | {
       kind: 'specifier';
@@ -90,8 +111,11 @@ function moduleExportName(node: ModuleExportName): string {
 function declarationNameCandidates(decl: Declaration): NamedSpan[] {
   if (decl.type === 'VariableDeclaration') {
     const out: NamedSpan[] = [];
-    for (const d of decl.declarations) {
-      if (d.id.type === 'Identifier') out.push({ name: d.id.name, start: d.id.start, end: d.id.end });
+    for (let i = 0; i < decl.declarations.length; i++) {
+      const d = decl.declarations[i];
+      if (d && d.id.type === 'Identifier') {
+        out.push({ name: d.id.name, start: d.id.start, end: d.id.end, declaratorIndex: i });
+      }
     }
     return out;
   }
@@ -100,6 +124,37 @@ function declarationNameCandidates(decl: Declaration): NamedSpan[] {
     return [{ name: id.name, start: id.start, end: id.end }];
   }
   return [];
+}
+
+// Builds the 'declaration' ExportSite for a matched name candidate of an
+// `export <declaration>` statement, folding in decorator and declarator info.
+function declarationSite(
+  stmt: { start: number; end: number; declaration: Declaration },
+  cand: NamedSpan,
+): ExportSite {
+  const decl = stmt.declaration;
+  // Decorators above the `export` keyword live on the class node but outside the
+  // ExportNamedDeclaration span (verified against oxc-parser 0.137.0; decorators
+  // AFTER `export`, as in `export @dec class`, are inside it and need no widening).
+  let deleteStart = stmt.start;
+  if (decl.type === 'ClassDeclaration') {
+    for (const dec of decl.decorators) {
+      if (dec.start < deleteStart) deleteStart = dec.start;
+    }
+  }
+  const site: ExportSite = {
+    kind: 'declaration',
+    name: cand.name,
+    exportStart: stmt.start,
+    declStart: decl.start,
+    statementEnd: stmt.end,
+    deleteStart,
+  };
+  if (decl.type === 'VariableDeclaration' && cand.declaratorIndex !== undefined) {
+    site.declarators = decl.declarations.map((d) => ({ start: d.start, end: d.end }));
+    site.declaratorIndex = cand.declaratorIndex;
+  }
+  return site;
 }
 
 // A default export is "named" (has a local identifier) only for
@@ -113,15 +168,10 @@ function findByPos(program: Program, pos: number): ExportSite | null {
   for (const stmt of program.body) {
     if (stmt.type === 'ExportNamedDeclaration') {
       if (stmt.declaration) {
-        for (const cand of declarationNameCandidates(stmt.declaration)) {
+        const declaration = stmt.declaration;
+        for (const cand of declarationNameCandidates(declaration)) {
           if (pos >= cand.start && pos < cand.end) {
-            return {
-              kind: 'declaration',
-              name: cand.name,
-              exportStart: stmt.start,
-              declStart: stmt.declaration.start,
-              statementEnd: stmt.end,
-            };
+            return declarationSite({ start: stmt.start, end: stmt.end, declaration }, cand);
           }
         }
       } else {
@@ -162,15 +212,10 @@ function findByName(program: Program, symbol: string): ExportSite | null {
   for (const stmt of program.body) {
     if (stmt.type === 'ExportNamedDeclaration') {
       if (stmt.declaration) {
-        for (const cand of declarationNameCandidates(stmt.declaration)) {
+        const declaration = stmt.declaration;
+        for (const cand of declarationNameCandidates(declaration)) {
           if (cand.name === symbol) {
-            return {
-              kind: 'declaration',
-              name: cand.name,
-              exportStart: stmt.start,
-              declStart: stmt.declaration.start,
-              statementEnd: stmt.end,
-            };
+            return declarationSite({ start: stmt.start, end: stmt.end, declaration }, cand);
           }
         }
       } else {
@@ -232,9 +277,18 @@ export function locateExport(
 // Finds a plain (non-exported) top-level declaration statement by its local name —
 // used by deleteDeclaration for the `export { a, b }` case, where the exported
 // binding and its declaration are two separate top-level statements.
-export function findTopLevelDeclarationSpan(program: Program, name: string): { start: number; end: number } | null {
+export function findTopLevelDeclarationSpan(program: Program, name: string): Span | null {
   for (const stmt of program.body) {
-    if (stmt.type === 'FunctionDeclaration' || stmt.type === 'ClassDeclaration') {
+    if (
+      stmt.type === 'FunctionDeclaration' ||
+      stmt.type === 'ClassDeclaration' ||
+      stmt.type === 'TSTypeAliasDeclaration' ||
+      stmt.type === 'TSInterfaceDeclaration' ||
+      stmt.type === 'TSEnumDeclaration'
+    ) {
+      // A bare (non-exported) decorated class's statement span already includes
+      // its decorators (verified against oxc-parser 0.137.0), so no widening is
+      // needed here — only `@dec\nexport class` puts decorators outside the span.
       if (stmt.id && stmt.id.type === 'Identifier' && stmt.id.name === name) {
         return { start: stmt.start, end: stmt.end };
       }
@@ -249,24 +303,25 @@ export function findTopLevelDeclarationSpan(program: Program, name: string): { s
   return null;
 }
 
-// Removes specifier `index` from an `export { a, b, c }` (or `export { a } from '...'`)
-// list, handling comma hygiene: when removing anything but the last specifier, the
-// range extends through the start of the next specifier (eating its own text plus the
-// following ", "); when removing the last specifier, the range starts at the end of
-// the previous one (eating the preceding ", " plus its own text). Callers must check
-// `specifiers.length > 1` first — a single-specifier list becoming empty means the
-// whole statement should be removed instead (both stripExport and deleteDeclaration
-// need this, hence it lives here).
-export function removeListSpecifier(s: MagicString, specifiers: ExportSpecifier[], index: number): void {
-  const isLast = index === specifiers.length - 1;
+// Removes item `index` from a comma-separated list of spans — export-list
+// specifiers (`export { a, b, c }`, `export { a } from '...'`) and variable
+// declarators (`export const a = 1, b = 2`) share the same comma hygiene: when
+// removing anything but the last item, the range extends through the start of the
+// next item (eating its own text plus the following ", "); when removing the last
+// item, the range starts at the end of the previous one (eating the preceding ", "
+// plus its own text). Callers must check `items.length > 1` first — a list becoming
+// empty means the whole statement should be removed instead (both stripExport and
+// deleteDeclaration need this, hence it lives here).
+export function removeListItem(s: MagicString, items: readonly Span[], index: number): void {
+  const isLast = index === items.length - 1;
   if (isLast) {
-    const prev = specifiers[index - 1];
-    const cur = specifiers[index];
+    const prev = items[index - 1];
+    const cur = items[index];
     if (!prev || !cur) return;
     s.remove(prev.end, cur.end);
   } else {
-    const cur = specifiers[index];
-    const next = specifiers[index + 1];
+    const cur = items[index];
+    const next = items[index + 1];
     if (!cur || !next) return;
     s.remove(cur.start, next.start);
   }
@@ -274,9 +329,10 @@ export function removeListSpecifier(s: MagicString, specifiers: ExportSpecifier[
 
 // Attached-comment detection for deleteDeclaration: a comment is "attached" to a node
 // if it sits immediately above it — nothing but horizontal whitespace and exactly one
-// newline between the comment's end and the (possibly already-expanded) start. Chains
-// backward so a run of stacked comments (e.g. a `//` line comment directly above a
-// JSDoc block, with no blank line between either) is all included.
+// newline (LF or CRLF, matching the trailing-side handling below) between the
+// comment's end and the (possibly already-expanded) start. Chains backward so a run
+// of stacked comments (e.g. a `//` line comment directly above a JSDoc block, with
+// no blank line between either) is all included.
 export function expandStartWithLeadingComments(content: string, comments: Comment[], start: number): number {
   let cursor = start;
   let changed = true;
@@ -285,7 +341,7 @@ export function expandStartWithLeadingComments(content: string, comments: Commen
     for (const comment of comments) {
       if (comment.end > cursor) continue;
       const between = content.slice(comment.end, cursor);
-      if (/^[ \t]*\n[ \t]*$/.test(between)) {
+      if (/^[ \t]*\r?\n[ \t]*$/.test(between)) {
         cursor = comment.start;
         changed = true;
         break;

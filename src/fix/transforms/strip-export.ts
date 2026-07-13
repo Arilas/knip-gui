@@ -1,5 +1,5 @@
 import MagicString from 'magic-string';
-import { locateExport, parseSource, removeListSpecifier, type TransformInput, type TransformResult } from './source.js';
+import { locateExport, parseSource, removeListItem, type TransformInput, type TransformResult } from './source.js';
 
 // Mirrors `knip --fix`'s strip-export behavior:
 // - `export const/function/class/type/interface/enum X` -> remove the `export ` keyword.
@@ -17,12 +17,16 @@ export function stripExport(input: TransformInput): TransformResult {
 
   const s = new MagicString(content);
   if (site.kind === 'declaration') {
+    // Note: for a multi-declarator `export const a = 1, b = 2;` this unexports the
+    // WHOLE statement even when only one declarator is unused — that mirrors
+    // knip --fix exactly and is intentional (pinned by a test); per-declarator
+    // surgery is a deleteDeclaration behavior only.
     s.remove(site.exportStart, site.declStart);
   } else if (site.kind === 'specifier') {
     if (site.specifiers.length === 1) {
       s.remove(site.statementStart, site.statementEnd);
     } else {
-      removeListSpecifier(s, site.specifiers, site.index);
+      removeListItem(s, site.specifiers, site.index);
     }
   } else {
     if (site.isNamed) {
