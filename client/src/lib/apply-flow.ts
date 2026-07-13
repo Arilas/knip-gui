@@ -164,3 +164,72 @@ export function filesToDelete(
 export function defaultBranchName(date: Date = new Date()): string {
   return `chore/knip-cleanup-${date.toISOString().slice(0, 10)}`;
 }
+
+/**
+ * Whether the options step's Next button must stay disabled pending the
+ * file-deletion confirmation. Only fix mode can delete files (ignore mode
+ * writes config entries / @public tags, never deletes), and the confirm
+ * checkbox only RENDERS in fix mode — so gating on deletePaths alone would
+ * leave Next permanently disabled, with no visible checkbox to satisfy it,
+ * whenever an ignore selection happens to contain a files-type issue.
+ */
+export function optionsNextBlocked(
+  mode: 'fix' | 'ignore',
+  deletePaths: string[],
+  confirmedDelete: boolean,
+): boolean {
+  return mode === 'fix' && deletePaths.length > 0 && !confirmedDelete;
+}
+
+const DEP_TYPES = new Set<Issue['type']>(['dependencies', 'devDependencies', 'optionalPeerDependencies']);
+
+// The file a fixed issue's patch actually lands in. Dependency-shaped issues
+// are patched into the owning workspace's package.json (mirrors
+// compileFixPlan's own pkgPath computation in src/fix/compiler.ts), not
+// `issue.filePath`; everything else is patched in place. Ignore-mode config
+// edits (files/deps/binaries -> the knip config file) land somewhere this
+// can't derive from the issue alone — appliedOkIssueIds handles that case
+// via its all-patches-ok fallback.
+function patchFileForIssue(issue: Issue): string {
+  if (DEP_TYPES.has(issue.type)) {
+    return issue.workspace === '.' ? 'package.json' : `${issue.workspace}/package.json`;
+  }
+  return issue.filePath;
+}
+
+/**
+ * The issue ids that were ACTUALLY applied: compiled ok (their PlanItem is
+ * ok) AND their patch file applied ok. The commit-message summary must be
+ * computed from these, not the frozen selection summary — the frozen summary
+ * overclaims whenever a file goes stale/missing between preview and apply
+ * (the commit paths already correctly exclude such files; the message must
+ * agree with them).
+ *
+ * An issue whose patch file isn't among the diffed files at all (an
+ * ignore-mode config edit, whose patch lands in the knip config rather than
+ * any file derivable from the issue) counts as applied only when every patch
+ * row succeeded — when something failed we can't attribute it, so we
+ * undercount rather than overclaim.
+ */
+export function appliedOkIssueIds(
+  planItems: PlanItem[],
+  rows: FileResultRow[],
+  issues: Issue[],
+): string[] {
+  const issueById = new Map(issues.map((i) => [i.id, i]));
+  const patchRows = rows.filter((r) => r.status !== 'compile-failed');
+  const patchFiles = new Set(patchRows.map((r) => r.filePath));
+  const okFiles = new Set(patchRows.filter((r) => r.status === 'ok').map((r) => r.filePath));
+  const allPatchesOk = patchRows.every((r) => r.status === 'ok');
+
+  const ids: string[] = [];
+  for (const item of planItems) {
+    if (!item.ok) continue;
+    const issue = issueById.get(item.issueId);
+    if (!issue) continue;
+    const file = patchFileForIssue(issue);
+    const applied = patchFiles.has(file) ? okFiles.has(file) : allPatchesOk;
+    if (applied) ids.push(item.issueId);
+  }
+  return ids;
+}

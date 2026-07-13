@@ -10,11 +10,13 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { FixMode, Issue } from '../../../src/core/types.js';
 import { apiErrorMessage } from '../api.js';
 import {
+  appliedOkIssueIds,
   applyFlowReducer,
   defaultCommitMessage,
   filesToDelete,
   initialApplyFlowState,
   joinResults,
+  optionsNextBlocked,
 } from '../lib/apply-flow.js';
 import {
   useFixApplyMutation,
@@ -262,7 +264,7 @@ export function ActionModal({ mode, issues, onClose }: ActionModalProps) {
                 </button>
                 <button
                   type="button"
-                  disabled={deletePaths.length > 0 && !confirmDelete}
+                  disabled={optionsNextBlocked(mode, deletePaths, confirmDelete)}
                   onClick={handleNext}
                   className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-100 dark:text-gray-900"
                 >
@@ -377,6 +379,16 @@ function ResultsStep({
     [flow.diffs, flow.results, flow.items, planIssues],
   );
   const okPaths = useMemo(() => rows.filter((r) => r.status === 'ok').map((r) => r.filePath), [rows]);
+  // The commit message must claim only what actually landed: the frozen
+  // selection summary overclaims when a file went stale/missing between
+  // preview and apply (okPaths already excludes it — the message must
+  // agree). Recomputed from the issues whose patches applied ok; falls back
+  // to the frozen summary only if that reconciliation comes up empty (in
+  // which case Commit is effectively moot anyway — okPaths is empty too).
+  const commitSummary = useMemo(() => {
+    const okIds = appliedOkIssueIds(flow.items, rows, planIssues);
+    return summaryByType({ selected: new Set(okIds) }, planIssues) || summary;
+  }, [flow.items, rows, planIssues, summary]);
 
   return (
     <div className="flex flex-col">
@@ -402,7 +414,7 @@ function ResultsStep({
       </div>
 
       {isRepo ? (
-        <CommitPanel paths={okPaths} defaultMessage={defaultCommitMessage(summary)} onDone={onDone} />
+        <CommitPanel paths={okPaths} defaultMessage={defaultCommitMessage(commitSummary)} onDone={onDone} />
       ) : (
         <div className="flex justify-end border-t border-gray-200 p-4 dark:border-gray-800">
           <button

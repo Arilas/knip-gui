@@ -8,14 +8,17 @@ import type { Issue } from '../../src/core/types.js';
 import type { PlanItem } from '../../src/fix/compiler.js';
 import type { PatchResult } from '../../src/fix/patch.js';
 import {
+  appliedOkIssueIds,
   applyFlowReducer,
   commitPaths,
   defaultBranchName,
   defaultCommitMessage,
   filesToDelete,
   joinResults,
+  optionsNextBlocked,
   type ApplyFlowState,
   type DiffEntry,
+  type FileResultRow,
 } from '../../client/src/lib/apply-flow.js';
 
 let idSeq = 0;
@@ -216,5 +219,101 @@ describe('filesToDelete', () => {
 describe('defaultBranchName', () => {
   it('formats chore/knip-cleanup-<ISO date> from the given date', () => {
     expect(defaultBranchName(new Date('2026-07-13T15:30:00Z'))).toBe('chore/knip-cleanup-2026-07-13');
+  });
+});
+
+describe('optionsNextBlocked', () => {
+  const deletePaths = ['src/orphan.ts'];
+
+  it('blocks Next in fix mode while a pending file deletion is unconfirmed', () => {
+    expect(optionsNextBlocked('fix', deletePaths, false)).toBe(true);
+  });
+
+  it('unblocks Next in fix mode once the deletion is confirmed', () => {
+    expect(optionsNextBlocked('fix', deletePaths, true)).toBe(false);
+  });
+
+  it('never blocks Next in ignore mode, even with files-type issues selected (ignore never deletes)', () => {
+    // Regression: the confirm checkbox only renders in fix mode, so a
+    // mode-agnostic gate left Ignore permanently stuck on the options step
+    // for any selection containing a files-type issue.
+    expect(optionsNextBlocked('ignore', deletePaths, false)).toBe(false);
+  });
+
+  it('does not block fix mode when nothing is being deleted', () => {
+    expect(optionsNextBlocked('fix', [], false)).toBe(false);
+  });
+});
+
+describe('appliedOkIssueIds', () => {
+  const exportIssue = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'unusedHelper' });
+  const fileIssue = issue({ type: 'files', filePath: 'src/orphan.ts' });
+  const depIssue = issue({ type: 'dependencies', filePath: 'package.json', symbol: 'left-pad' });
+  const wsDepIssue = issue({
+    type: 'devDependencies',
+    workspace: 'packages/app',
+    filePath: 'irrelevant.txt',
+    symbol: 'lodash',
+  });
+  const issues = [exportIssue, fileIssue, depIssue, wsDepIssue];
+  const okItems: PlanItem[] = issues.map((i) => ({ issueId: i.id, ok: true }));
+
+  it('returns every plan-ok issue when all patches applied ok', () => {
+    const rows: FileResultRow[] = [
+      { filePath: 'src/used.ts', status: 'ok' },
+      { filePath: 'src/orphan.ts', status: 'ok' },
+      { filePath: 'package.json', status: 'ok' },
+      { filePath: 'packages/app/package.json', status: 'ok' },
+    ];
+    expect(appliedOkIssueIds(okItems, rows, issues)).toEqual(issues.map((i) => i.id));
+  });
+
+  it('excludes issues whose file went stale between preview and apply', () => {
+    const rows: FileResultRow[] = [
+      { filePath: 'src/used.ts', status: 'stale' },
+      { filePath: 'src/orphan.ts', status: 'ok' },
+    ];
+    const items: PlanItem[] = [
+      { issueId: exportIssue.id, ok: true },
+      { issueId: fileIssue.id, ok: true },
+    ];
+    expect(appliedOkIssueIds(items, rows, issues)).toEqual([fileIssue.id]);
+  });
+
+  it('maps dependency issues to their workspace package.json, not issue.filePath', () => {
+    const rows: FileResultRow[] = [{ filePath: 'packages/app/package.json', status: 'missing' }];
+    const items: PlanItem[] = [{ issueId: wsDepIssue.id, ok: true }];
+    expect(appliedOkIssueIds(items, rows, issues)).toEqual([]);
+  });
+
+  it('excludes compile-failed plan items regardless of file outcomes', () => {
+    const rows: FileResultRow[] = [
+      { filePath: 'src/orphan.ts', status: 'ok' },
+      { filePath: 'src/used.ts', status: 'compile-failed', reason: 'parse-error' },
+    ];
+    const items: PlanItem[] = [
+      { issueId: fileIssue.id, ok: true },
+      { issueId: exportIssue.id, ok: false, reason: 'parse-error' },
+    ];
+    expect(appliedOkIssueIds(items, rows, issues)).toEqual([fileIssue.id]);
+  });
+
+  it('counts config-patched issues (patch file not derivable from the issue) when every patch row succeeded', () => {
+    // An ignore-mode files issue: the patch lands in knip.json, which no
+    // issue field points at.
+    const rows: FileResultRow[] = [{ filePath: 'knip.json', status: 'ok' }];
+    const items: PlanItem[] = [{ issueId: fileIssue.id, ok: true }];
+    expect(appliedOkIssueIds(items, rows, issues)).toEqual([fileIssue.id]);
+  });
+
+  it('drops config-patched issues when any patch row failed (undercount rather than overclaim)', () => {
+    const rows: FileResultRow[] = [{ filePath: 'knip.json', status: 'stale' }];
+    const items: PlanItem[] = [{ issueId: fileIssue.id, ok: true }];
+    expect(appliedOkIssueIds(items, rows, issues)).toEqual([]);
+  });
+
+  it('ignores plan items whose issue id is unknown', () => {
+    const rows: FileResultRow[] = [{ filePath: 'src/used.ts', status: 'ok' }];
+    expect(appliedOkIssueIds([{ issueId: 'ghost', ok: true }], rows, issues)).toEqual([]);
   });
 });
