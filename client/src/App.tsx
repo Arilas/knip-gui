@@ -83,8 +83,8 @@ function AppShell() {
         return <Dashboard />;
       case 'code':
         return (
-          <div className="flex flex-1 overflow-hidden">
-            <div className="flex flex-1 flex-col overflow-hidden">
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <TreeView
                 issues={issuesForFacet('tree', issues)}
                 selected={selected}
@@ -143,14 +143,22 @@ function AppShell() {
   }
 
   return (
-    <SidebarProvider>
+    // h-svh + overflow-hidden cap the shell at the viewport. sidebar.tsx's own
+    // wrapper class is only min-h-svh — a floor, not a cap — so without this
+    // the wrapper grows to fit content, the PAGE becomes the scroller, and
+    // every inner overflow-auto / sticky-header / virtualized container
+    // silently stops working because its clientHeight === scrollHeight. With
+    // the cap, each page's content area is the real scroll container; the
+    // min-h-0s keep the flex chain shrinkable below content height so that
+    // actually happens (flex children default to min-height:auto).
+    <SidebarProvider className="h-svh overflow-hidden">
       <AppSidebar issues={issues} workspaces={workspaces} />
-      <SidebarInset className="overflow-hidden">
+      <SidebarInset className="min-h-0 overflow-hidden">
         <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
           <SidebarTrigger data-testid="sidebar-trigger" />
           <h1 className="text-sm font-semibold capitalize">{page}</h1>
         </header>
-        <div className="flex flex-1 flex-col overflow-hidden pb-12">{renderPage()}</div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-12">{renderPage()}</div>
       </SidebarInset>
 
       <SelectionBar issues={issues} onOpenModal={onOpenModal} />

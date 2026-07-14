@@ -144,13 +144,22 @@ export function Dashboard() {
     count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
-    overscan: 12,
+    overscan: 6,
   });
-  const virtualRows = shouldVirtualize ? virtualizer.getVirtualItems() : rows.map((_, index) => ({ index }));
-  const totalSize = shouldVirtualize ? virtualizer.getTotalSize() : rows.length * ROW_HEIGHT;
+  // Virtualization uses spacer <tr>s above/below the rendered window rather
+  // than absolutely-positioned rows: position:absolute pulls a <tr> out of
+  // table layout entirely (its cells stop aligning with the header's
+  // columns), while spacer rows keep real table semantics and alignment.
+  const virtualItems = virtualizer.getVirtualItems();
+  const renderedIndices = shouldVirtualize ? virtualItems.map((v) => v.index) : rows.map((_, index) => index);
+  const padTop = shouldVirtualize && virtualItems.length > 0 ? virtualItems[0]!.start : 0;
+  const padBottom =
+    shouldVirtualize && virtualItems.length > 0
+      ? virtualizer.getTotalSize() - virtualItems[virtualItems.length - 1]!.end
+      : 0;
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden p-4">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-sm font-semibold">Dashboard</h2>
         <DropdownMenu>
@@ -212,7 +221,23 @@ export function Dashboard() {
             />
           </div>
 
-          <div ref={parentRef} className="flex-1 overflow-auto rounded-md border border-border">
+          {/*
+            This div is the ONLY scroll container for the table (both axes) —
+            required for the sticky header and the virtualizer, which both
+            need a single bounded scrollport. shadcn's Table wraps the <table>
+            in its own overflow-x-auto div (data-slot="table-container"); left
+            alone, that wrapper becomes the sticky header's nearest scrollport
+            (a scroll container on either axis captures sticky on both), and
+            since the wrapper grows with the table the header would never pin.
+            The arbitrary variant neutralizes it to overflow-visible so
+            stickiness resolves against this div instead — done from out here
+            via a variant, not by editing the ui/table.tsx registry file.
+          */}
+          <div
+            ref={parentRef}
+            data-testid="workspace-table-scroll"
+            className="min-h-0 flex-1 overflow-auto rounded-md border border-border [&_[data-slot=table-container]]:overflow-visible"
+          >
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
@@ -251,7 +276,7 @@ export function Dashboard() {
                   </TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody style={{ position: 'relative', height: shouldVirtualize ? totalSize : undefined }}>
+              <TableBody>
                 {rows.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={columns.length + 2} className="text-center text-sm text-muted-foreground">
@@ -259,59 +284,60 @@ export function Dashboard() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  virtualRows.map((virtualRow) => {
-                    const row = rows[virtualRow.index]!;
-                    return (
-                      <TableRow
-                        key={row.workspace}
-                        data-testid={`workspace-row-${row.workspace}`}
-                        style={
-                          shouldVirtualize
-                            ? {
-                                position: 'absolute',
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                height: ROW_HEIGHT,
-                                transform: `translateY(${(virtualRow as { start?: number }).start ?? 0}px)`,
-                              }
-                            : undefined
-                        }
-                      >
-                        <TableCell className="font-medium">
-                          <button
-                            type="button"
-                            className="hover:underline"
-                            onClick={() => onRowOpen(row.workspace)}
-                            data-testid={`workspace-open-${row.workspace}`}
-                          >
-                            {row.workspace === '.' ? '(root)' : row.workspace}
-                          </button>
-                        </TableCell>
-                        {columns.map((type) => (
-                          <TableCell
-                            key={type}
-                            className="text-right tabular-nums"
-                            data-testid={`cell-${row.workspace}-${type}`}
-                          >
-                            {row.counts[type] ? (
-                              <button
-                                type="button"
-                                className="hover:underline disabled:no-underline"
-                                disabled={pageForType(type) === undefined}
-                                onClick={() => onCellClick(type, row.workspace)}
-                              >
-                                {row.counts[type]}
-                              </button>
-                            ) : (
-                              <span className="text-muted-foreground">–</span>
-                            )}
+                  <>
+                    {padTop > 0 && (
+                      <tr aria-hidden style={{ height: padTop }}>
+                        <td colSpan={columns.length + 2} />
+                      </tr>
+                    )}
+                    {renderedIndices.map((index) => {
+                      const row = rows[index]!;
+                      return (
+                        <TableRow
+                          key={row.workspace}
+                          data-testid={`workspace-row-${row.workspace}`}
+                          style={shouldVirtualize ? { height: ROW_HEIGHT } : undefined}
+                        >
+                          <TableCell className="font-medium">
+                            <button
+                              type="button"
+                              className="hover:underline"
+                              onClick={() => onRowOpen(row.workspace)}
+                              data-testid={`workspace-open-${row.workspace}`}
+                            >
+                              {row.workspace === '.' ? '(root)' : row.workspace}
+                            </button>
                           </TableCell>
-                        ))}
-                        <TableCell className="text-right font-medium tabular-nums">{row.total}</TableCell>
-                      </TableRow>
-                    );
-                  })
+                          {columns.map((type) => (
+                            <TableCell
+                              key={type}
+                              className="text-right tabular-nums"
+                              data-testid={`cell-${row.workspace}-${type}`}
+                            >
+                              {row.counts[type] ? (
+                                <button
+                                  type="button"
+                                  className="hover:underline disabled:no-underline"
+                                  disabled={pageForType(type) === undefined}
+                                  onClick={() => onCellClick(type, row.workspace)}
+                                >
+                                  {row.counts[type]}
+                                </button>
+                              ) : (
+                                <span className="text-muted-foreground">–</span>
+                              )}
+                            </TableCell>
+                          ))}
+                          <TableCell className="text-right font-medium tabular-nums">{row.total}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    {padBottom > 0 && (
+                      <tr aria-hidden style={{ height: padBottom }}>
+                        <td colSpan={columns.length + 2} />
+                      </tr>
+                    )}
+                  </>
                 )}
               </TableBody>
             </Table>
