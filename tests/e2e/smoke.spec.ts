@@ -36,7 +36,7 @@ test('select unused export + unused file, fix, rescan clears them, commit', asyn
 
   await page.getByTestId('tree-file-src/orphan.ts').getByRole('checkbox').check();
 
-  await expect(page.getByTestId('selection-count')).toHaveText('2 selected');
+  await expect(page.getByTestId('selbar-count')).toHaveText('2 selected');
 
   await page.getByRole('button', { name: 'Fix…' }).click();
 

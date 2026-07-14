@@ -11,7 +11,6 @@ import { Dashboard } from './components/pages/Dashboard.js';
 import { IgnoredPage } from './components/pages/IgnoredPage.js';
 import { PackagesPage } from './components/pages/PackagesPage.js';
 import { SetupScreen } from './components/pages/SetupScreen.js';
-import { SelectionBar } from './components/SelectionBar.js';
 import { Button } from './components/ui/button.js';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar.js';
 import { Toaster } from './components/ui/sonner.js';
@@ -139,9 +138,9 @@ function AppShell() {
       case 'dashboard':
         return <Dashboard />;
       case 'code':
-        return <CodePage issues={issues} />;
+        return <CodePage issues={issues} onOpenModal={onOpenModal} />;
       case 'packages':
-        return <PackagesPage issues={issues} />;
+        return <PackagesPage issues={issues} onOpenModal={onOpenModal} />;
       default:
         return null;
     }
@@ -163,10 +162,8 @@ function AppShell() {
           <SidebarTrigger data-testid="sidebar-trigger" />
           <h1 className="text-sm font-semibold capitalize">{page}</h1>
         </header>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-12">{renderPage()}</div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{renderPage()}</div>
       </SidebarInset>
-
-      <SelectionBar issues={issues} onOpenModal={onOpenModal} />
 
       {modalMode && <ActionModal mode={modalMode} issues={issues} onClose={() => setModalMode(null)} />}
     </SidebarProvider>

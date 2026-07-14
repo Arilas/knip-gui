@@ -8,6 +8,9 @@ function resetStore() {
     packagesFilters: new Set(PACKAGE_TYPES),
     codeSearch: '',
     openFile: undefined,
+    review: undefined,
+    expandedDirs: new Set<string>(),
+    expandedDirsInitialized: false,
   });
 }
 
@@ -136,5 +139,101 @@ describe('toggleCodeFilter / togglePackagesFilter', () => {
     expect(useUiStore.getState().packagesFilters.has('dependencies')).toBe(false);
     useUiStore.getState().togglePackagesFilter('dependencies');
     expect(useUiStore.getState().packagesFilters.has('dependencies')).toBe(true);
+  });
+});
+
+describe('startReview / clearReview', () => {
+  it('startReview navigates to the review page and freezes the request', () => {
+    useUiStore.getState().navigate('code');
+    useUiStore.getState().startReview({
+      kind: 'fix',
+      planId: 'plan-1',
+      summary: '2 exports, 1 file',
+      frozenCount: 3,
+      returnTo: 'code',
+    });
+    expect(useUiStore.getState().page).toBe('review');
+    expect(useUiStore.getState().review).toEqual({
+      kind: 'fix',
+      planId: 'plan-1',
+      summary: '2 exports, 1 file',
+      frozenCount: 3,
+      returnTo: 'code',
+    });
+  });
+
+  it('clearReview drops the pending review without touching page', () => {
+    useUiStore.getState().startReview({ kind: 'ignore', summary: '1 file', frozenCount: 1, returnTo: 'packages' });
+    useUiStore.getState().clearReview();
+    expect(useUiStore.getState().review).toBeUndefined();
+    // clearReview is a pure state drop (Cancel/Apply-done navigates
+    // explicitly elsewhere) — it must not implicitly bounce the page back.
+    expect(useUiStore.getState().page).toBe('review');
+  });
+
+  it("a later startReview's frozen fields don't leak from an earlier one", () => {
+    useUiStore.getState().startReview({ kind: 'fix', summary: '1 export', frozenCount: 1, returnTo: 'code' });
+    useUiStore.getState().clearReview();
+    useUiStore.getState().startReview({ kind: 'ignore', summary: '2 files', frozenCount: 2, returnTo: 'packages' });
+    expect(useUiStore.getState().review).toEqual({
+      kind: 'ignore',
+      summary: '2 files',
+      frozenCount: 2,
+      returnTo: 'packages',
+    });
+  });
+});
+
+describe('tree expansion lift (expandedDirs/toggleDir/expandAll/collapseAll/initExpandedDirs)', () => {
+  it('starts uninitialized with an empty set', () => {
+    expect(useUiStore.getState().expandedDirsInitialized).toBe(false);
+    expect(useUiStore.getState().expandedDirs.size).toBe(0);
+  });
+
+  it('initExpandedDirs seeds the set once and flips the initialized flag', () => {
+    useUiStore.getState().initExpandedDirs(['src', 'src/lib']);
+    expect(useUiStore.getState().expandedDirsInitialized).toBe(true);
+    expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['src', 'src/lib']);
+  });
+
+  it('initExpandedDirs is a no-op once already initialized (never re-seeds over a later choice)', () => {
+    useUiStore.getState().initExpandedDirs(['src']);
+    useUiStore.getState().collapseAll();
+    // Simulates TreeView's seeding effect re-running with a fresh policy
+    // default after the tree changed (e.g. a filter chip toggle) — must NOT
+    // undo the explicit collapseAll below it.
+    useUiStore.getState().initExpandedDirs(['src', 'src/lib', 'src/new-dir']);
+    expect(useUiStore.getState().expandedDirs.size).toBe(0);
+  });
+
+  it('toggleDir adds an unexpanded dir and removes an expanded one', () => {
+    useUiStore.getState().toggleDir('src');
+    expect(useUiStore.getState().expandedDirs.has('src')).toBe(true);
+    expect(useUiStore.getState().expandedDirsInitialized).toBe(true);
+    useUiStore.getState().toggleDir('src');
+    expect(useUiStore.getState().expandedDirs.has('src')).toBe(false);
+  });
+
+  it('expandAll replaces the set with exactly the given paths', () => {
+    useUiStore.getState().toggleDir('stale-dir');
+    useUiStore.getState().expandAll(['a', 'b', 'c']);
+    expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['a', 'b', 'c']);
+    expect(useUiStore.getState().expandedDirsInitialized).toBe(true);
+  });
+
+  it('collapseAll empties the set — and, once called, a later seed attempt still cannot re-populate it', () => {
+    useUiStore.getState().expandAll(['a', 'b']);
+    useUiStore.getState().collapseAll();
+    expect(useUiStore.getState().expandedDirs.size).toBe(0);
+    useUiStore.getState().initExpandedDirs(['a', 'b']);
+    expect(useUiStore.getState().expandedDirs.size).toBe(0);
+  });
+
+  it('expandedDirs persists across a navigate call (survives a Code -> Packages -> Code round trip)', () => {
+    useUiStore.getState().navigate('code');
+    useUiStore.getState().expandAll(['src', 'src/lib']);
+    useUiStore.getState().navigate('packages');
+    useUiStore.getState().navigate('code');
+    expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['src', 'src/lib']);
   });
 });

@@ -35,7 +35,7 @@ test('code pane open on a file survives a rescan that prunes one of its issues',
   await expect(badge).toBeVisible();
   await badge.getByRole('checkbox').check();
 
-  await expect(page.getByTestId('selection-count')).toHaveText('1 selected');
+  await expect(page.getByTestId('selbar-count')).toHaveText('1 selected');
 
   await page.getByRole('button', { name: 'Ignore', exact: true }).click();
 

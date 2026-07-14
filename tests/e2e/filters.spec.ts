@@ -34,24 +34,29 @@ test('disabling a filter chip gates what a file checkbox adds; the cart survives
   // reexportSource) must NOT be added.
   await page.getByTestId('tree-file-src/forms.ts').getByRole('checkbox').check();
 
-  await expect(page.getByTestId('selection-count')).toHaveText('2 selected');
-  const selectionBar = page.getByTestId('selection-bar');
-  await expect(selectionBar).toContainText('1 duplicates');
-  await expect(selectionBar).toContainText('1 namespaceMembers');
-  await expect(selectionBar).not.toContainText('exports');
+  await expect(page.getByTestId('selbar-count')).toHaveText('2 selected');
+  // Pluralized per-type text (Task 2, v0.3 — lib/pluralize.ts's
+  // pluralizeType, not the old raw-IssueType "1 duplicates"/
+  // "1 namespaceMembers" summary): singular counts read as "1 duplicate
+  // export"/"1 namespace member". Neither contains the substring "exports"
+  // (no trailing 's'), so the not.toContainText assertion below still holds.
+  const selectionDock = page.getByTestId('selection-dock');
+  await expect(selectionDock).toContainText('1 duplicate export');
+  await expect(selectionDock).toContainText('1 namespace member');
+  await expect(selectionDock).not.toContainText('exports');
 
   // Re-enable "Unused exports" — a pure filter-state change must never
   // retroactively add or remove anything from the cart.
   await exportsChip.click();
   await expect(exportsChip).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('selection-count')).toHaveText('2 selected');
-  await expect(selectionBar).toContainText('1 duplicates');
-  await expect(selectionBar).toContainText('1 namespaceMembers');
-  await expect(selectionBar).not.toContainText('exports');
+  await expect(page.getByTestId('selbar-count')).toHaveText('2 selected');
+  await expect(selectionDock).toContainText('1 duplicate export');
+  await expect(selectionDock).toContainText('1 namespace member');
+  await expect(selectionDock).not.toContainText('exports');
 
   // The apply flow still works end-to-end on the rebuilt tree/filters: fix
   // the 2 selected (filter-gated) issues.
-  await page.getByRole('button', { name: 'Fix…' }).click();
+  await page.getByTestId('selbar-fix').click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await page.getByRole('button', { name: 'Next' }).click();

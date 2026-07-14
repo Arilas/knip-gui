@@ -39,7 +39,7 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
 
   await row.getByRole('checkbox').check();
 
-  await expect(page.getByTestId('selection-count')).toHaveText('1 selected');
+  await expect(page.getByTestId('selbar-count')).toHaveText('1 selected');
 
   await page.getByRole('button', { name: 'Ignore', exact: true }).click();
 
