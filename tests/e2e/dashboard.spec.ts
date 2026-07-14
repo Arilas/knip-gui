@@ -44,6 +44,18 @@ function syntheticReport(workspaceCount: number) {
         fixable: true,
         fixModes: ['delete-file'],
       },
+      // A package-shaped (Packages-routed) issue too, so cell-click tests can
+      // exercise the packages side of Dashboard.tsx's onCellClick alongside
+      // the code side above.
+      {
+        id: `dep-${i}`,
+        type: 'dependencies',
+        workspace: ws,
+        filePath: `${ws}/package.json`,
+        symbol: `left-pad-${i}`,
+        fixable: true,
+        fixModes: ['remove-dependency'],
+      },
     );
   }
   return {
@@ -106,4 +118,46 @@ test('60-workspace table virtualizes: bounded row count, pinned header, no page 
   // The container really did scroll (guards against a false pass where
   // scrollTop silently stayed 0 because the div wasn't a scroll container).
   expect(await scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+});
+
+// Cell-scoping pin (review finding): Dashboard.tsx's onCellClick used to pass
+// `search: '<ws>/'` to navigate() for EVERY cell type, including
+// packages-routed ones — but PackagesPage keeps its own local search state
+// and never reads the ui store's codeSearch, so a packages-cell click both
+// opened Packages unscoped AND silently pre-filled the Code page's tree
+// search for whenever it was next visited. Fixed by only forwarding `search`
+// when routing to 'code' (Dashboard.tsx) and by guarding navigate() itself to
+// only apply opts.search when page === 'code' (state/ui.ts), so this stays
+// pinned even if a future caller repeats the mistake.
+test('workspace cell click scopes Code to that workspace; a packages cell click never touches Code search', async ({
+  page,
+}) => {
+  await page.route('**/api/report', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify(syntheticReport(3)) }),
+  );
+
+  await page.goto('/');
+  await expect(page.getByTestId('workspace-row-packages/ws-01')).toBeVisible();
+
+  // Packages cell first, on a clean codeSearch (the '' default) — clicking
+  // it must land on Packages and must NOT populate codeSearch for later.
+  await page.getByTestId('cell-packages/ws-01-dependencies').locator('button').click();
+  await expect(page.getByTestId('packages-search')).toBeVisible();
+  await expect(page.getByTestId('workspace-group-packages/ws-01')).toBeVisible();
+
+  // Hop to Code via the sidebar (a plain nav click — opts.search omitted —
+  // so this alone wouldn't prove anything either way); the tree search must
+  // still be empty, proving the packages-cell click never wrote codeSearch.
+  await page.getByTestId('nav-code').click();
+  await expect(page.getByTestId('tree-search')).toHaveValue('');
+
+  // Back to the dashboard for the file-type (Code-routed) cell click.
+  await page.getByTestId('nav-dashboard').click();
+  await page.getByTestId('cell-packages/ws-01-exports').locator('button').click();
+
+  // Landed on Code, scoped to just the 'exports' type...
+  await expect(page.getByTestId('filter-chip-exports')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('filter-chip-files')).toHaveAttribute('aria-pressed', 'false');
+  // ...and the tree search holds the workspace path-prefix scope.
+  await expect(page.getByTestId('tree-search')).toHaveValue('packages/ws-01/');
 });

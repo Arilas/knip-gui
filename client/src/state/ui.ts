@@ -22,7 +22,11 @@
 // which explicitly clears it) is only applied when the key is present in
 // `opts` at all — omitting it (e.g. a plain sidebar nav click) leaves
 // whatever search the Code page already had untouched, same rationale as
-// filters above.
+// filters above. It's also only ever applied when navigating TO the Code
+// page: PackagesPage keeps its own local search state and never reads
+// codeSearch, so a Dashboard packages-cell click passing `search` alongside
+// a non-'code' page would otherwise silently pollute codeSearch for a later,
+// unrelated Code visit.
 import { create } from 'zustand';
 import type { IssueType } from '../../../src/core/types.js';
 import { CODE_TYPES, PACKAGE_TYPES } from '../lib/filters.js';
@@ -66,7 +70,10 @@ export const useUiStore = create<UiState>((set) => ({
         if (page === 'code') next.codeFilters = new Set(opts.filters);
         else if (page === 'packages') next.packagesFilters = new Set(opts.filters);
       }
-      if (opts?.search !== undefined) next.codeSearch = opts.search;
+      // codeSearch is Code-page-only state (PackagesPage keeps its own local
+      // search) — guard here too, defense-in-depth against any future caller
+      // that navigates elsewhere while still passing `search`.
+      if (opts?.search !== undefined && page === 'code') next.codeSearch = opts.search;
       return next;
     }),
 

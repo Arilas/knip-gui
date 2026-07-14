@@ -94,6 +94,18 @@ describe('navigate', () => {
     useUiStore.getState().navigate('code', { filters: ['exports'] });
     expect(useUiStore.getState().codeSearch).toBe('packages/app/');
   });
+
+  it('ignores opts.search when navigating to a page other than code (packages has its own local search)', () => {
+    useUiStore.getState().navigate('packages', { filters: ['dependencies'], search: 'packages/app/' });
+    expect(useUiStore.getState().page).toBe('packages');
+    expect(useUiStore.getState().codeSearch).toBe('');
+  });
+
+  it('does not clobber an existing codeSearch when a later non-code navigation also passes opts.search', () => {
+    useUiStore.getState().navigate('code', { search: 'packages/app/' });
+    useUiStore.getState().navigate('packages', { filters: ['dependencies'], search: 'packages/other/' });
+    expect(useUiStore.getState().codeSearch).toBe('packages/app/');
+  });
 });
 
 describe('setCodeSearch', () => {

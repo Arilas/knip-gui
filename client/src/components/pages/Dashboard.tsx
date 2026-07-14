@@ -136,7 +136,10 @@ export function Dashboard() {
   function onCellClick(type: IssueType, workspace: string) {
     const page = pageForType(type);
     if (!page) return;
-    navigate(page, { filters: [type], search: searchPrefixFor(workspace) });
+    // Only the Code page reads codeSearch (PackagesPage has its own local
+    // search state) — passing `search` for a packages-page cell would just
+    // silently pollute the Code tree's scope for a later, unrelated visit.
+    navigate(page, { filters: [type], ...(page === 'code' ? { search: searchPrefixFor(workspace) } : {}) });
   }
 
   function onRowOpen(workspace: string) {
