@@ -2,7 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 import type { FixMode, Issue } from '../core/types.js';
-import { addIgnores, findKnipConfig, type IgnoreEdit, type KnipConfigKind } from '../ignore/config-writer.js';
+import {
+  addIgnores,
+  findKnipConfig,
+  removeIgnores,
+  type IgnoreEdit,
+  type IgnoreEntry,
+  type KnipConfigKind,
+} from '../ignore/config-writer.js';
 import { insertMemberPublicTag, insertPublicTag } from '../ignore/public-tag.js';
 import { renderDiff } from './diff.js';
 import { hashContent, type FilePatch } from './patch.js';
@@ -26,7 +33,7 @@ export interface PlanItem {
 
 export interface FixPlan {
   planId: string; // random hex
-  kind: 'fix' | 'ignore';
+  kind: 'fix' | 'ignore' | 'ignore-remove';
   patches: FilePatch[];
   diffs: { filePath: string; diff: string }[];
   items: PlanItem[]; // per-issue compile outcome (transform failures land here)
@@ -431,4 +438,63 @@ export async function compileIgnorePlan(
   }
 
   return { planId: newPlanId(), kind: 'ignore', patches, diffs, items, createdAt: new Date().toISOString() };
+}
+
+// --- remove-ignores plan (Task 5, Ignored page) ---
+
+// A synthetic per-entry id — these entries come from listIgnores' parse of
+// the config file, not from a scanned Issue, so there's no existing issueId
+// to reuse. Stable across preview/apply for the SAME entry (kind+workspace+
+// value uniquely identifies one array slot), which is all PlanItem needs it
+// for: matching a compile outcome back to the entry that produced it.
+function ignoreEntryId(entry: IgnoreEntry): string {
+  return `${entry.kind}:${entry.workspace ?? '.'}:${entry.value}`;
+}
+
+// Compiles a plan that removes the given (already-present) ignore entries
+// from the project's knip config — the inverse of compileIgnorePlan's
+// config-edit half, for the Ignored page's per-entry Remove action. Unlike
+// compileIgnorePlan/compileFixPlan (which apply one compile-time op per issue
+// and can partially succeed across issues), removeIgnores itself is an atomic
+// batch call (see its own doc comment): either every listed entry is found
+// and removed, or the whole call fails and every entry's PlanItem reports the
+// same failure reason — there's no per-entry partial-success story to report
+// here because there's no way to know WHICH entry failed once removeIgnores
+// itself only exposes "not-found" for the whole call.
+export async function compileRemoveIgnoresPlan(projectDir: string, entries: IgnoreEntry[]): Promise<FixPlan> {
+  const items: PlanItem[] = [];
+  const patches: FilePatch[] = [];
+  const diffs: { filePath: string; diff: string }[] = [];
+
+  if (entries.length > 0) {
+    const config = findKnipConfig(projectDir);
+    if (config.kind === 'code' || config.kind === 'none') {
+      const reason = config.kind === 'code' ? 'code-config' : 'no-config';
+      for (const entry of entries) items.push({ issueId: ignoreEntryId(entry), ok: false, reason });
+    } else {
+      const configKind = config.kind as Exclude<KnipConfigKind, 'code' | 'none'>;
+      const abs = config.path!;
+      const contentBefore = await readFile(abs, 'utf8');
+      const result = removeIgnores(contentBefore, configKind, entries);
+
+      if (!result.ok) {
+        for (const entry of entries) items.push({ issueId: ignoreEntryId(entry), ok: false, reason: result.reason });
+      } else {
+        for (const entry of entries) items.push({ issueId: ignoreEntryId(entry), ok: true });
+        if (result.newContent !== contentBefore) {
+          const relPath = relative(projectDir, abs);
+          const patch: FilePatch = {
+            filePath: relPath,
+            kind: 'modify',
+            hashBefore: hashContent(contentBefore),
+            contentAfter: result.newContent,
+          };
+          patches.push(patch);
+          diffs.push({ filePath: relPath, diff: renderDiff(patch, contentBefore) });
+        }
+      }
+    }
+  }
+
+  return { planId: newPlanId(), kind: 'ignore-remove', patches, diffs, items, createdAt: new Date().toISOString() };
 }

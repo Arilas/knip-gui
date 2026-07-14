@@ -17,7 +17,7 @@ export interface FixRoutesCtx {
 
 function toStoreError(e: unknown): StoreError {
   return e instanceof KnipError
-    ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr }
+    ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr, exitCode: e.exitCode }
     : { code: 'internal', message: String(e) };
 }
 
@@ -47,7 +47,10 @@ async function performRescan(
 // fire-and-forget initial scan (src/cli.ts) and respecting /api/scan's latch:
 // if a scan is already in flight, this is a no-op (the in-flight scan's own
 // result will stand) and the route reports rescanning:false.
-function triggerBackgroundRescan(ctx: FixRoutesCtx): boolean {
+// Exported for routes-ignores.ts's remove/apply route, which needs the exact
+// same latch behavior after applying a remove-ignores patch — reused rather
+// than duplicated.
+export function triggerBackgroundRescan(ctx: FixRoutesCtx): boolean {
   if (ctx.store.status === 'scanning') return false;
   ctx.store.setScanning();
   void performRescan(ctx);

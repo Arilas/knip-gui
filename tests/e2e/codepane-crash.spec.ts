@@ -22,12 +22,14 @@ test('code pane open on a file survives a rescan that prunes one of its issues',
   await page.goto('/');
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
 
-  await page.getByTestId('facet-tree').click();
-  await page.getByRole('button', { name: 'Expand src' }).click();
+  // The rebuilt tree auto-expands every directory for a project this small
+  // (see lib/tree.ts's autoExpandDepth), so src/ is already open on load.
+  await page.getByTestId('nav-code').click();
 
-  // Open src/used.ts in the code pane (the file row's name button, not the
-  // "Expand used.ts" toggle — see TreeNode.tsx's onOpenFile wiring).
-  await page.getByTestId('tree-file-src/used.ts').getByRole('button', { name: 'used.ts', exact: true }).click();
+  // Open src/used.ts in the code pane — a file row's whole click opens it
+  // (no separate expand toggle on file rows in the rebuilt tree; see
+  // components/code/TreeNode.tsx's doc comment).
+  await page.getByTestId('tree-file-src/used.ts').click();
 
   const badge = page.getByTestId('code-pane-badge-enumMembers-Blue');
   await expect(badge).toBeVisible();
@@ -56,10 +58,11 @@ test('code pane open on a file survives a rescan that prunes one of its issues',
   // the now-ignored issue's badge — this is the moment the old code crashed.
   await expect(badge).toHaveCount(0, { timeout: 30_000 });
 
-  // App did NOT blank: the persistent chrome (topbar stamp, facet rail) and
-  // the code pane's own content are all still there and functioning.
+  // App did NOT blank: the persistent chrome (sidebar footer's scan stamp,
+  // sidebar nav) and the code pane's own content are all still there and
+  // functioning.
   await expect(page.getByText(/^Scanned /)).toBeVisible();
-  await expect(page.getByTestId('facet-tree')).toBeVisible();
+  await expect(page.getByTestId('nav-code')).toBeVisible();
   await expect(page.locator('.code-pane-html')).toContainText('usedHelper');
   // The still-open unusedHelper export issue on the same file is unaffected
   // and its badge is still rendered — confirms the overlay re-synced with

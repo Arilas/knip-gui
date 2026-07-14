@@ -1,10 +1,10 @@
 // Pure tree-building logic for the Tree view (Task 3): turns a flat list of
-// file-bearing issues (facets.ts's issuesForFacet('tree', ...), or a
-// per-type facet's — this module doesn't care which) into a nested dir/file
-// tree, with rollup counts and tri-state selection helpers. No React, no
-// store — unit-tested directly in tests/client/tree.test.ts.
+// file-bearing issues (lib/filters.ts's filterIssues output, typically) into
+// a nested dir/file tree, with rollup counts and tri-state selection
+// helpers. No React, no store — unit-tested directly in
+// tests/client/tree.test.ts.
 import type { Issue, IssueType } from '../../../src/core/types.js';
-import { isFixable, isIgnorable } from './facets.js';
+import { isActionable } from './filters.js';
 
 export interface FileNode {
   kind: 'file';
@@ -28,6 +28,13 @@ export interface FileNode {
    * checkbox must render disabled with a reason tooltip.
    */
   actionableIds: string[];
+  /**
+   * `actionableIds` grouped by IssueType — lets nodeSelectionState/
+   * idsToToggleForNode restrict tri-state/toggle behavior to a caller-given
+   * set of enabled types (the Code page's filter chips) without needing the
+   * full Issue objects at click time.
+   */
+  actionableIdsByType: Partial<Record<IssueType, string[]>>;
   counts: Partial<Record<IssueType, number>>;
 }
 
@@ -47,14 +54,14 @@ export interface DirNode {
   issueIds: string[];
   /** Rollup of every descendant actionable (fixable or ignorable) issue id. */
   actionableIds: string[];
+  /** Rollup of every descendant FileNode's actionableIdsByType (see FileNode). */
+  actionableIdsByType: Partial<Record<IssueType, string[]>>;
   counts: Partial<Record<IssueType, number>>;
+  /** Sum of every value in `counts` — the single muted count a dir row shows (tooltip has the per-type breakdown). */
+  totalCount: number;
 }
 
 export type TreeNode = DirNode | FileNode;
-
-function isActionable(issue: Issue): boolean {
-  return isFixable(issue).ok || isIgnorable(issue).ok;
-}
 
 interface MutableDir {
   name: string;
@@ -112,6 +119,20 @@ function rollupCounts(children: TreeNode[]): Partial<Record<IssueType, number>> 
   return counts;
 }
 
+function rollupActionableIdsByType(children: TreeNode[]): Partial<Record<IssueType, string[]>> {
+  const byType: Partial<Record<IssueType, string[]>> = {};
+  for (const child of children) {
+    for (const [type, ids] of Object.entries(child.actionableIdsByType) as [IssueType, string[]][]) {
+      byType[type] = [...(byType[type] ?? []), ...ids];
+    }
+  }
+  return byType;
+}
+
+function totalOf(counts: Partial<Record<IssueType, number>>): number {
+  return Object.values(counts).reduce((sum: number, n) => sum + (n ?? 0), 0);
+}
+
 // Directories first, then files; alphabetical within each group.
 function sortNodes(nodes: TreeNode[]): TreeNode[] {
   return [...nodes].sort((a, b) => {
@@ -123,10 +144,24 @@ function sortNodes(nodes: TreeNode[]): TreeNode[] {
 function finalizeFile(mfile: MutableFile): FileNode {
   const fileIssues = [...mfile.issues].sort((a, b) => (a.line ?? -1) - (b.line ?? -1));
   const issueIds = fileIssues.map((i) => i.id);
-  const actionableIds = fileIssues.filter(isActionable).map((i) => i.id);
+  const actionableIssues = fileIssues.filter(isActionable);
+  const actionableIds = actionableIssues.map((i) => i.id);
+  const actionableIdsByType: Partial<Record<IssueType, string[]>> = {};
+  for (const issue of actionableIssues) {
+    (actionableIdsByType[issue.type] ??= []).push(issue.id);
+  }
   const counts: Partial<Record<IssueType, number>> = {};
   for (const issue of fileIssues) counts[issue.type] = (counts[issue.type] ?? 0) + 1;
-  return { kind: 'file', name: mfile.name, path: mfile.path, fileIssues, issueIds, actionableIds, counts };
+  return {
+    kind: 'file',
+    name: mfile.name,
+    path: mfile.path,
+    fileIssues,
+    issueIds,
+    actionableIds,
+    actionableIdsByType,
+    counts,
+  };
 }
 
 function finalizeChildren(mdir: MutableDir): TreeNode[] {
@@ -153,6 +188,7 @@ function finalizeDir(mdir: MutableDir): DirNode {
     children = only.children;
   }
 
+  const counts = rollupCounts(children);
   return {
     kind: 'dir',
     name,
@@ -160,7 +196,9 @@ function finalizeDir(mdir: MutableDir): DirNode {
     children,
     issueIds: children.flatMap((c) => c.issueIds),
     actionableIds: children.flatMap((c) => c.actionableIds),
-    counts: rollupCounts(children),
+    actionableIdsByType: rollupActionableIdsByType(children),
+    counts,
+    totalCount: totalOf(counts),
   };
 }
 
@@ -174,6 +212,7 @@ function finalizeDir(mdir: MutableDir): DirNode {
 export function buildTree(issues: Issue[]): DirNode {
   const mutableRoot = buildMutableRoot(issues);
   const children = finalizeChildren(mutableRoot);
+  const counts = rollupCounts(children);
   return {
     kind: 'dir',
     name: '',
@@ -181,16 +220,63 @@ export function buildTree(issues: Issue[]): DirNode {
     children,
     issueIds: children.flatMap((c) => c.issueIds),
     actionableIds: children.flatMap((c) => c.actionableIds),
-    counts: rollupCounts(children),
+    actionableIdsByType: rollupActionableIdsByType(children),
+    counts,
+    totalCount: totalOf(counts),
   };
 }
 
-// Duck-typed rather than TreeNode-specific: TableView's "select all" header
-// checkbox has no real dir/file node, just a flat list of visible rows — it
-// builds an ad-hoc { actionableIds } to reuse this same tri-state/toggle
-// logic instead of re-deriving it.
+/** Every FileNode's `fileIssues` under a node (itself, for a file; its full subtree, for a dir) — used to drive `selection.ts`'s `addFileFiltered` for a dir/file checkbox click, which needs the real Issue objects (not just ids) to apply the enabled-type filter. */
+export function collectFileIssues(node: TreeNode): Issue[] {
+  if (node.kind === 'file') return node.fileIssues;
+  return node.children.flatMap(collectFileIssues);
+}
+
+/** Count of FileNodes under a node (itself if a file; its full subtree if a dir) — used to feed `autoExpandDepth`'s visibleFileCount. */
+export function countFiles(node: TreeNode): number {
+  if (node.kind === 'file') return 1;
+  return node.children.reduce((sum, child) => sum + countFiles(child), 0);
+}
+
+const AUTO_EXPAND_FILE_THRESHOLD = 200;
+
+/**
+ * Initial expand policy for the tree, based on how many files are currently
+ * visible (post search/filter): 'all' expands every directory (fine up to a
+ * couple hundred files), 'top' expands only the tree's top-level directories
+ * so a huge project doesn't dump thousands of rows into the DOM/virtualizer
+ * on first paint.
+ */
+export function autoExpandDepth(tree: DirNode, visibleFileCount: number): 'all' | 'top' {
+  if (tree.children.length === 0) return 'all';
+  return visibleFileCount <= AUTO_EXPAND_FILE_THRESHOLD ? 'all' : 'top';
+}
+
+// Duck-typed rather than TreeNode-specific: the Packages page's (Task 4)
+// per-workspace-group "select all" header checkbox has no real dir/file
+// node, just a flat list of that group's issues — it builds an ad-hoc
+// { actionableIds } to reuse this same tri-state/toggle logic instead of
+// re-deriving it. `actionableIdsByType` is optional so that
+// ad-hoc holder keeps working unchanged; it's only consulted when a caller
+// passes `enabledTypes` to nodeSelectionState/idsToToggleForNode.
 export interface ActionableIdsHolder {
   actionableIds: string[];
+  actionableIdsByType?: Partial<Record<IssueType, string[]>>;
+}
+
+// Restricts a node's actionableIds to only the ids belonging to
+// `enabledTypes` (the Code page's filter chips) — when `enabledTypes` is
+// omitted, every actionable id counts, preserving the pre-Task-3 2-arg
+// behavior exactly. Exported so TreeNode.tsx can compute "is this row's
+// checkbox disabled" without duplicating the enabledTypes-scoping logic.
+export function scopedActionableIds(node: ActionableIdsHolder, enabledTypes?: ReadonlySet<IssueType>): string[] {
+  if (!enabledTypes) return node.actionableIds;
+  const byType = node.actionableIdsByType ?? {};
+  const out: string[] = [];
+  for (const [type, ids] of Object.entries(byType) as [IssueType, string[]][]) {
+    if (enabledTypes.has(type)) out.push(...ids);
+  }
+  return out;
 }
 
 /**
@@ -200,13 +286,20 @@ export interface ActionableIdsHolder {
  * "some" on its own). A node with zero actionable ids always reads 'none' —
  * the UI disables its checkbox in that case (check `actionableIds.length
  * === 0`).
+ *
+ * When `enabledTypes` is given (the Code page's currently-enabled filter
+ * chips), only actionable ids of an enabled type count toward the tri-state
+ * — an issue of a disabled type never makes a row read "some"/"all", even if
+ * it happens to be selected (the cart is never pruned by filter changes; see
+ * selection.ts's addFileFiltered doc comment).
  */
 export function nodeSelectionState(
   node: ActionableIdsHolder,
   selectedIds: ReadonlySet<string> | Iterable<string>,
+  enabledTypes?: ReadonlySet<IssueType>,
 ): 'none' | 'some' | 'all' {
   const selected = selectedIds instanceof Set ? selectedIds : new Set(selectedIds);
-  const { actionableIds } = node;
+  const actionableIds = scopedActionableIds(node, enabledTypes);
   if (actionableIds.length === 0) return 'none';
   const selectedCount = actionableIds.filter((id) => selected.has(id)).length;
   if (selectedCount === 0) return 'none';
@@ -239,9 +332,11 @@ export function collectActionableIds(node: TreeNode): string[] {
 export function idsToToggleForNode(
   node: ActionableIdsHolder,
   selectedIds: ReadonlySet<string> | Iterable<string>,
+  enabledTypes?: ReadonlySet<IssueType>,
 ): string[] {
   const selected = selectedIds instanceof Set ? selectedIds : new Set(selectedIds);
-  const state = nodeSelectionState(node, selected);
-  if (state === 'all') return node.actionableIds;
-  return node.actionableIds.filter((id) => !selected.has(id));
+  const actionableIds = scopedActionableIds(node, enabledTypes);
+  const state = nodeSelectionState(node, selected, enabledTypes);
+  if (state === 'all') return actionableIds;
+  return actionableIds.filter((id) => !selected.has(id));
 }

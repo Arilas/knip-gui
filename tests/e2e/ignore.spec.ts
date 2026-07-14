@@ -12,13 +12,31 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
   await page.goto('/');
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
 
-  await page.getByTestId('facet-dependencies').click();
+  // Packages nav (sidebar) — dependency-shaped issues, including left-pad,
+  // render in a per-workspace grouped table there (see PackagesPage.tsx).
+  await page.getByTestId('nav-packages').click();
 
   // The exact IssueType (dependencies/devDependencies/optionalPeerDependencies)
   // is an implementation detail of how knip classifies it — match on the
   // symbol suffix rather than assuming which one.
-  const row = page.locator('[data-testid^="table-row-"][data-testid$="-left-pad"]');
+  const row = page.locator('[data-testid^="packages-row-"][data-testid$="-left-pad"]');
   await expect(row).toBeVisible();
+
+  // Keyboard accessibility pin (Task 4 review finding): the row must be
+  // reachable and operable without a mouse — focusable (tabindex=0, exposed
+  // as a button) and Enter must open the detail Sheet. Playwright key events
+  // are trusted, unlike the Browser pane's synthetic dispatch. Runs BEFORE
+  // the ignore flow below, since that flow removes this row entirely (and
+  // this spec runs before any later packages spec would — file order).
+  await expect(row).toHaveAttribute('role', 'button');
+  await expect(row).toHaveAttribute('tabindex', '0');
+  await row.press('Enter');
+  const sheet = page.getByTestId('package-detail-sheet');
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText('left-pad');
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+
   await row.getByRole('checkbox').check();
 
   await expect(page.getByTestId('selection-count')).toHaveText('1 selected');

@@ -2,7 +2,8 @@
 // routes-fix.ts, routes-git.ts). Every call sends the session token as
 // `x-knip-gui-token` (Global Constraint: token only via the meta tag, never
 // in the URL). Non-2xx responses throw ApiError so react-query's mutation
-// error state / Toast (Task 5) can surface `body.error`/`body.stderr`.
+// error state / sonner's toast (Task 5, swapped from a hand-rolled Toast.tsx
+// to sonner in Task 6) can surface `body.error`/`body.stderr`.
 //
 // Cross-root type-only imports: verified `tsc -p client/tsconfig.json`
 // resolves `../../src/**/*.ts` fine for `import type` (no rootDir/emit
@@ -17,6 +18,7 @@ import type { FixPlan, PlanItem } from '../../src/fix/compiler.js';
 import type { PatchResult } from '../../src/fix/patch.js';
 import type { SweepCapabilities } from '../../src/fix/sweep.js';
 import type { GitStatus } from '../../src/git/git.js';
+import type { IgnoreEntry, ListIgnoresResult } from '../../src/ignore/config-writer.js';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -30,8 +32,8 @@ export class ApiError extends Error {
   }
 }
 
-// Toast.tsx's error toasts (and CommitPanel's inline git-failure message) all
-// funnel through here: every failing route in this app replies with a JSON
+// sonner's toast.error(...) call sites (and CommitPanel's inline git-failure
+// message) all funnel through here: every failing route in this app replies with a JSON
 // body shaped `{ error, stderr? }` (routes-git.ts's gitErrorBody) or just
 // `{ error }` (routes-fix.ts) — `body.error` is preferred since it's always a
 // human-readable message, `stderr` is appended when present since it's the
@@ -62,12 +64,34 @@ function getToken(): string {
   return import.meta.env.VITE_KNIP_TOKEN ?? '';
 }
 
+// --- session-expiry notification (Task 6 review fix) ---
+// The session token is baked into the served page at load time; when the CLI
+// restarts, a still-open tab holds a token the new server has never seen, so
+// EVERY api call from it 401s forever — only a reload (which re-serves the
+// shell with the fresh token) can recover. A 401 therefore means "this
+// session is dead", not "this request failed": App.tsx registers a handler
+// here and swaps the whole UI for a session-expired notice the moment any
+// response comes back 401, instead of letting each caller trip over the
+// error individually (the observed failure mode was worse than a bad
+// message: Re-run's mutation got stuck isPending forever — see App.tsx's
+// QueryClient retry comment for that chain).
+type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | undefined;
+
+/** Register (or clear, with undefined) the single app-level 401 handler. */
+export function setOnUnauthorized(handler: UnauthorizedHandler | undefined): void {
+  unauthorizedHandler = handler;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'x-knip-gui-token': getToken() };
   if (init?.body !== undefined) headers['content-type'] = 'application/json';
   const res = await fetch(path, { ...init, headers: { ...headers, ...(init?.headers as Record<string, string>) } });
   const body = await res.json().catch(() => undefined);
-  if (!res.ok) throw new ApiError(res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) unauthorizedHandler?.();
+    throw new ApiError(res.status, body);
+  }
   return body as T;
 }
 
@@ -166,4 +190,22 @@ export function postGitCommit(message: string, paths: string[]): Promise<{ sha: 
   return postJson<{ sha: string }>('/api/git/commit', { message, paths });
 }
 
-export type { Issue, Report, FixMode, StoreError, PlanItem, PatchResult, SweepCapabilities, GitStatus };
+// --- Ignored page (Task 5) ---
+
+export function getIgnores(): Promise<ListIgnoresResult> {
+  return apiFetch<ListIgnoresResult>('/api/ignores');
+}
+
+// The preview/apply response shapes are identical to fix/ignore's — reusing
+// PreviewResponse/ApplyResponse (rather than bespoke duplicate interfaces)
+// keeps ActionModal-adjacent client code (DiffView, apply-flow's join
+// helpers) directly reusable for the remove-ignore dialog too.
+export function postIgnoreRemovePreview(entries: IgnoreEntry[]): Promise<PreviewResponse> {
+  return postJson<PreviewResponse>('/api/ignores/remove/preview', { entries });
+}
+
+export function postIgnoreRemoveApply(planId: string): Promise<ApplyResponse> {
+  return postJson<ApplyResponse>('/api/ignores/remove/apply', { planId });
+}
+
+export type { Issue, Report, FixMode, StoreError, PlanItem, PatchResult, SweepCapabilities, GitStatus, IgnoreEntry };

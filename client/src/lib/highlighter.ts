@@ -30,7 +30,11 @@ import type { Issue } from '../../../src/core/types.js';
 
 // The only two themes the highlighter instance ever loads — see App-wide
 // Global Constraint "Dark/light via prefers-color-scheme (shiki dual themes)".
-export const SHIKI_THEMES = { light: 'github-light', dark: 'github-dark' } as const;
+// Swapped from github-light/github-dark to vitesse-light/vitesse-dark (Task 1,
+// UX overhaul): vitesse's warm, slightly desaturated palette reads better
+// against this app's warm-stone/violet theme (see index.css) than github's
+// cool blue-grays did.
+export const SHIKI_THEMES = { light: 'vitesse-light', dark: 'vitesse-dark' } as const;
 
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'typescript',

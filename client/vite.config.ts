@@ -11,6 +11,14 @@ const clientRoot = fileURLToPath(new URL('.', import.meta.url));
 export default defineConfig({
   root: clientRoot,
   plugins: [react(), tailwindcss()],
+  resolve: {
+    // shadcn's `@/` import alias (client/components.json's aliases.* all
+    // start with `@/`) — mirrored in client/tsconfig.json's `paths` for
+    // tsc, and here for Vite's own resolution at build/dev time.
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   build: {
     // Resolved relative to `root` above → <repo root>/dist/client, a sibling
     // of the server's own dist/ output (see src/server/index.ts's

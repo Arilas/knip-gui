@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, relative } from 'node:path';
 import { applyEdits, modify, parse } from 'jsonc-parser';
 import { detectFormatting } from '../core/jsonc-format.js';
 import type { TransformResult } from '../fix/transforms/source.js';
@@ -9,6 +10,15 @@ export interface IgnoreEdit {
   value: string;
   workspace?: string;
 }
+
+// Same shape as IgnoreEdit — a distinct name for the Task 5 (Ignored page)
+// read/remove path, since callers there are describing an EXISTING config
+// entry (listIgnores' output, removeIgnores' input) rather than a new one
+// being added (addIgnores' input). `workspace` is always populated by
+// listIgnores ('.' for root-level entries, mirroring how every other page
+// labels the root workspace), so it reads as required in practice even though
+// it stays optional here to match addIgnores/IgnoreEdit's shape exactly.
+export type IgnoreEntry = IgnoreEdit;
 
 export type KnipConfigKind = 'knip.json' | 'knip.jsonc' | 'package.json' | 'code' | 'none';
 
@@ -106,4 +116,97 @@ export function addIgnores(
   }
 
   return { ok: true, newContent };
+}
+
+// Removes each entry's `value` from the array at its target path — the
+// inverse of addIgnores. Processes entries in order, threading content from
+// one removal to the next (same atomic-batch behavior as addIgnores: a
+// failure on any entry returns ok:false immediately, discarding edits already
+// applied earlier in THIS call — the caller never sees a partially-applied
+// content string). Removing the last remaining value from an array removes
+// the key entirely (jsonc-parser's `modify` with a `value` of `undefined`
+// deletes the property/array-element at that path) rather than leaving an
+// empty `[]` behind.
+export function removeIgnores(
+  content: string,
+  configKind: 'knip.json' | 'knip.jsonc' | 'package.json',
+  entries: IgnoreEntry[],
+): TransformResult {
+  const formattingOptions = detectFormatting(content);
+  let newContent = content;
+
+  for (const entry of entries) {
+    const path = ignorePath(configKind, entry);
+    const root = parse(newContent);
+    if (root === undefined) return { ok: false, reason: 'invalid-json' };
+    const existing = getAtPath(root, path);
+    if (!Array.isArray(existing) || !existing.includes(entry.value)) {
+      return { ok: false, reason: 'not-found' };
+    }
+    const nextValues = existing.filter((v) => v !== entry.value);
+    const nextValue = nextValues.length === 0 ? undefined : nextValues;
+    newContent = applyEdits(newContent, modify(newContent, path, nextValue, { formattingOptions }));
+  }
+
+  return { ok: true, newContent };
+}
+
+const IGNORE_ENTRY_KINDS = ['ignore', 'ignoreDependencies', 'ignoreBinaries'] as const;
+
+// Collects every ignore*-array entry directly on `node` (a config root or a
+// single `workspaces[<ws>]` object) into `out`, tagged with `workspace`.
+// Non-string array members are skipped rather than throwing — a malformed
+// config (e.g. a stray number in `ignore`) shouldn't crash the listing; knip
+// itself would presumably also choke on it at scan time, which is a more
+// appropriate place for that to surface.
+function collectIgnoreEntries(node: unknown, workspace: string, out: IgnoreEntry[]): void {
+  if (node == null || typeof node !== 'object') return;
+  const record = node as Record<string, unknown>;
+  for (const kind of IGNORE_ENTRY_KINDS) {
+    const arr = record[kind];
+    if (!Array.isArray(arr)) continue;
+    for (const value of arr) {
+      if (typeof value === 'string') out.push({ kind, value, workspace });
+    }
+  }
+}
+
+export interface ListIgnoresResult {
+  entries: IgnoreEntry[];
+  configKind: KnipConfigKind;
+  configPath?: string;
+}
+
+// Parses the same config discovery as findKnipConfig and flattens every
+// ignore/ignoreDependencies/ignoreBinaries entry — root-level (workspace:
+// '.') and per-workspace (workspaces[<ws>], workspace: <ws>) — into one list
+// for the Ignored page. A 'code' config is present-but-unreadable-as-data (no
+// safe way to statically enumerate a knip.ts/knip.js's exported object), and
+// 'none' means there's nothing to list — both report their kind with empty
+// entries so the page can render the right empty state instead of guessing
+// from an empty array alone. `configPath` is project-relative, matching
+// `Issue.filePath`'s convention elsewhere in this codebase.
+export async function listIgnores(projectDir: string): Promise<ListIgnoresResult> {
+  const config = findKnipConfig(projectDir);
+  if (config.kind === 'code' || config.kind === 'none') {
+    return { entries: [], configKind: config.kind, configPath: config.path && relative(projectDir, config.path) };
+  }
+
+  const content = await readFile(config.path!, 'utf8');
+  const root = parse(content);
+  const base = (config.kind === 'package.json' ? (root as Record<string, unknown> | undefined)?.knip : root) as
+    | Record<string, unknown>
+    | undefined;
+
+  const entries: IgnoreEntry[] = [];
+  collectIgnoreEntries(base, '.', entries);
+
+  const workspaces = base?.workspaces;
+  if (workspaces != null && typeof workspaces === 'object') {
+    for (const [ws, wsConfig] of Object.entries(workspaces as Record<string, unknown>)) {
+      collectIgnoreEntries(wsConfig, ws, entries);
+    }
+  }
+
+  return { entries, configKind: config.kind, configPath: relative(projectDir, config.path!) };
 }

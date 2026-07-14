@@ -9,6 +9,7 @@ import { getWorkspaceDirs } from '../core/workspaces.js';
 import { PlanStore } from '../fix/plan-store.js';
 import { registerFixRoutes } from './routes-fix.js';
 import { registerGitRoutes } from './routes-git.js';
+import { registerIgnoresRoutes } from './routes-ignores.js';
 import { ReportStore } from './store.js';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -111,7 +112,7 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan; 
       return c.json({ status: 'ready', issueCount: issues.length });
     } catch (e) {
       const err = e instanceof KnipError
-        ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr }
+        ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr, exitCode: e.exitCode }
         : { code: 'internal', message: String(e) };
       store.setError(err);
       return c.json({ status: 'error', error: err }, 500);
@@ -156,8 +157,10 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan; 
     }
   });
 
-  registerFixRoutes(app, { projectDir, scan, store, planStore });
+  const fixCtx = { projectDir, scan, store, planStore };
+  registerFixRoutes(app, fixCtx);
   registerGitRoutes(app, { projectDir });
+  registerIgnoresRoutes(app, fixCtx);
 
   return { app, token, store };
 }
