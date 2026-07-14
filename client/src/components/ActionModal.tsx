@@ -18,6 +18,7 @@ import {
   joinResults,
   optionsNextBlocked,
 } from '../lib/apply-flow.js';
+import { useActivityStore } from '../state/activity.js';
 import {
   useFixApplyMutation,
   useFixPreviewMutation,
@@ -392,6 +393,24 @@ function ResultsStep({
     const okIds = appliedOkIssueIds(flow.items, rows, planIssues);
     return summaryByType({ selected: new Set(okIds) }, planIssues) || summary;
   }, [flow.items, rows, planIssues, summary]);
+
+  // Activity logging (Task 5): once per successful ResultsStep mount — this
+  // component only mounts when flow.status turns 'applied', so a ref-guarded
+  // effect (rather than logging inline in handleApply, before rows/
+  // commitSummary are reconciled) fires exactly once per apply with the same
+  // "what actually landed" summary CommitPanel's prefilled message uses.
+  // Nothing is logged when every row failed (okPaths empty) — there's
+  // nothing to report happening.
+  const log = useActivityStore((s) => s.log);
+  const loggedRef = useRef(false);
+  useEffect(() => {
+    if (loggedRef.current || okPaths.length === 0) return;
+    loggedRef.current = true;
+    log({ kind: mode, summary: commitSummary, at: new Date().toISOString() });
+    // Runs once per mount; commitSummary/okPaths/log/mode are read at that
+    // moment, not re-triggered on their own later changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex flex-col">

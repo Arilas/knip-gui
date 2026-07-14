@@ -6,9 +6,11 @@
 // consumed by TopBar's Re-run/workspace-switch controls and Overview's sweep
 // button.
 import { useIsMutating, useMutation, useQuery, useQueryClient, type Mutation } from '@tanstack/react-query';
+import type { IgnoreEntry } from '../../../src/ignore/config-writer.js';
 import {
   getFile,
   getGitStatus,
+  getIgnores,
   getReport,
   postFixApply,
   postFixPreview,
@@ -16,6 +18,8 @@ import {
   postGitCommit,
   postIgnoreApply,
   postIgnorePreview,
+  postIgnoreRemoveApply,
+  postIgnoreRemovePreview,
   postScan,
   postSweep,
   type FixSelection,
@@ -25,11 +29,12 @@ import {
 export const reportQueryKey = ['report'] as const;
 export const gitStatusQueryKey = ['git-status'] as const;
 export const fileQueryKey = (path: string) => ['file', path] as const;
+export const ignoresQueryKey = ['ignores'] as const;
 
 // Mutation keys that participate in the busy flag — every mutation that can
 // leave the server mid-scan or mid-write (scan itself, the unlatched sweep
 // run, and fix/ignore apply, which trigger a background rescan).
-const BUSY_MUTATION_KEYS = ['scan', 'sweep', 'fixApply', 'ignoreApply'];
+const BUSY_MUTATION_KEYS = ['scan', 'sweep', 'fixApply', 'ignoreApply', 'ignoreRemoveApply'];
 
 export function useReport() {
   return useQuery({
@@ -104,6 +109,35 @@ export function useIgnoreApplyMutation() {
     mutationKey: ['ignoreApply'],
     mutationFn: (planId: string) => postIgnoreApply(planId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
+  });
+}
+
+// Ignored page (Task 5). `useIgnores` invalidates alongside the report query
+// (see useFixApplyMutation/useIgnoreApplyMutation/useIgnoreRemoveApplyMutation
+// below and the rescan the background apply triggers) — but a rescan doesn't
+// itself touch the config file the Ignored page reads, so IgnoredPage also
+// refetches this query directly after a successful remove (see its
+// onSuccess), same as it would after any other config-file-mutating action.
+export function useIgnores() {
+  return useQuery({ queryKey: ignoresQueryKey, queryFn: getIgnores });
+}
+
+export function useIgnoreRemovePreviewMutation() {
+  return useMutation({
+    mutationKey: ['ignoreRemovePreview'],
+    mutationFn: (entries: IgnoreEntry[]) => postIgnoreRemovePreview(entries),
+  });
+}
+
+export function useIgnoreRemoveApplyMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ['ignoreRemoveApply'],
+    mutationFn: (planId: string) => postIgnoreRemoveApply(planId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: reportQueryKey });
+      queryClient.invalidateQueries({ queryKey: ignoresQueryKey });
+    },
   });
 }
 

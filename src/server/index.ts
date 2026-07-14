@@ -9,6 +9,7 @@ import { getWorkspaceDirs } from '../core/workspaces.js';
 import { PlanStore } from '../fix/plan-store.js';
 import { registerFixRoutes } from './routes-fix.js';
 import { registerGitRoutes } from './routes-git.js';
+import { registerIgnoresRoutes } from './routes-ignores.js';
 import { ReportStore } from './store.js';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -156,8 +157,10 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan; 
     }
   });
 
-  registerFixRoutes(app, { projectDir, scan, store, planStore });
+  const fixCtx = { projectDir, scan, store, planStore };
+  registerFixRoutes(app, fixCtx);
   registerGitRoutes(app, { projectDir });
+  registerIgnoresRoutes(app, fixCtx);
 
   return { app, token, store };
 }

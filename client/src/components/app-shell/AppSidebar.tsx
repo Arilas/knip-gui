@@ -1,12 +1,16 @@
 // Primary nav (Task 1, UX overhaul): Dashboard/Code/Packages/Ignored/Activity,
-// lucide icons + count badges (Ignored/Activity are badge-less — nothing to
-// count yet, they land in Task 5), active state from the ui store. Icon-
+// lucide icons + count badges, active state from the ui store. Icon-
 // collapsible inset sidebar per the design spec; header hosts
 // WorkspaceSwitcher, footer hosts GitFooter. Replaces TopBar + FacetRail
-// (both deleted this task).
+// (both deleted this task). Ignored/Activity's counts (Task 5) come from
+// their own server query / session store rather than `issues`, since neither
+// is scan-report-derived: Ignored counts the project's current knip-config
+// ignore entries, Activity counts this session's logged actions.
 import type { ComponentType } from 'react';
 import { EyeOff, FileCode2, History, LayoutDashboard, Package } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
+import { useActivityStore } from '../../state/activity.js';
+import { useIgnores } from '../../state/queries.js';
 import { CODE_TYPES, PACKAGE_TYPES, useUiStore, type Page } from '../../state/ui.js';
 import {
   Sidebar,
@@ -39,6 +43,8 @@ interface NavItem {
 export function AppSidebar({ issues, workspaces }: AppSidebarProps) {
   const page = useUiStore((s) => s.page);
   const navigate = useUiStore((s) => s.navigate);
+  const { data: ignoresData } = useIgnores();
+  const activityCount = useActivityStore((s) => s.entries.length);
 
   const codeCount = issues.filter((i) => CODE_TYPE_SET.has(i.type)).length;
   const packagesCount = issues.filter((i) => PACKAGE_TYPE_SET.has(i.type)).length;
@@ -47,8 +53,8 @@ export function AppSidebar({ issues, workspaces }: AppSidebarProps) {
     { page: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, count: issues.length },
     { page: 'code', label: 'Code', icon: FileCode2, count: codeCount },
     { page: 'packages', label: 'Packages', icon: Package, count: packagesCount },
-    { page: 'ignored', label: 'Ignored', icon: EyeOff },
-    { page: 'activity', label: 'Activity', icon: History },
+    { page: 'ignored', label: 'Ignored', icon: EyeOff, count: ignoresData?.entries.length },
+    { page: 'activity', label: 'Activity', icon: History, count: activityCount },
   ];
 
   return (

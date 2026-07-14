@@ -17,6 +17,7 @@ import type { FixPlan, PlanItem } from '../../src/fix/compiler.js';
 import type { PatchResult } from '../../src/fix/patch.js';
 import type { SweepCapabilities } from '../../src/fix/sweep.js';
 import type { GitStatus } from '../../src/git/git.js';
+import type { IgnoreEntry, ListIgnoresResult } from '../../src/ignore/config-writer.js';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -166,4 +167,22 @@ export function postGitCommit(message: string, paths: string[]): Promise<{ sha: 
   return postJson<{ sha: string }>('/api/git/commit', { message, paths });
 }
 
-export type { Issue, Report, FixMode, StoreError, PlanItem, PatchResult, SweepCapabilities, GitStatus };
+// --- Ignored page (Task 5) ---
+
+export function getIgnores(): Promise<ListIgnoresResult> {
+  return apiFetch<ListIgnoresResult>('/api/ignores');
+}
+
+// The preview/apply response shapes are identical to fix/ignore's — reusing
+// PreviewResponse/ApplyResponse (rather than bespoke duplicate interfaces)
+// keeps ActionModal-adjacent client code (DiffView, apply-flow's join
+// helpers) directly reusable for the remove-ignore dialog too.
+export function postIgnoreRemovePreview(entries: IgnoreEntry[]): Promise<PreviewResponse> {
+  return postJson<PreviewResponse>('/api/ignores/remove/preview', { entries });
+}
+
+export function postIgnoreRemoveApply(planId: string): Promise<ApplyResponse> {
+  return postJson<ApplyResponse>('/api/ignores/remove/apply', { planId });
+}
+
+export type { Issue, Report, FixMode, StoreError, PlanItem, PatchResult, SweepCapabilities, GitStatus, IgnoreEntry };

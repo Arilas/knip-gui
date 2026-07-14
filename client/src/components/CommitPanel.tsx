@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { apiErrorMessage } from '../api.js';
 import { defaultBranchName } from '../lib/apply-flow.js';
+import { useActivityStore } from '../state/activity.js';
 import { useGitBranchMutation, useGitCommitMutation, useGitStatus } from '../state/queries.js';
 import { useToast } from './Toast.js';
 
@@ -21,6 +22,7 @@ export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps)
   const branchMutation = useGitBranchMutation();
   const commitMutation = useGitCommitMutation();
   const { push } = useToast();
+  const log = useActivityStore((s) => s.log);
 
   const [createBranch, setCreateBranch] = useState(false);
   const [branchName, setBranchName] = useState(() => defaultBranchName());
@@ -46,6 +48,7 @@ export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps)
       const result = await commitMutation.mutateAsync({ message: message.trim(), paths });
       setSha(result.sha);
       push('success', `Committed ${result.sha.slice(0, 7)}`);
+      log({ kind: 'commit', summary: message.trim(), sha: result.sha, at: new Date().toISOString() });
     } catch (e) {
       const msg = apiErrorMessage(e);
       setCommitError(msg);

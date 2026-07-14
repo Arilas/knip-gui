@@ -29,6 +29,7 @@ import type { IssueType } from '../../../../src/core/types.js';
 import { getSweepCapabilities } from '../../api.js';
 import { filterRows, sortRows, typeTotals, visibleColumns, workspaceRows, type SortKey } from '../../lib/dashboard.js';
 import { CODE_TYPES, PACKAGE_TYPES, typeLabel } from '../../lib/filters.js';
+import { useActivityStore } from '../../state/activity.js';
 import { useBusy, useReport, useSweepMutation } from '../../state/queries.js';
 import { useUiStore, type Page } from '../../state/ui.js';
 import { SweepDialog } from '../flows/SweepDialog.js';
@@ -83,6 +84,7 @@ export function Dashboard() {
   const navigate = useUiStore((s) => s.navigate);
   const busy = useBusy();
   const sweepMutation = useSweepMutation();
+  const log = useActivityStore((s) => s.log);
   const { data: capabilities } = useQuery({
     queryKey: ['sweep-capabilities'],
     queryFn: getSweepCapabilities,
@@ -353,7 +355,16 @@ export function Dashboard() {
         capabilities={capabilities}
         busy={busy || sweepMutation.isPending}
         onConfirm={(opts) => {
-          sweepMutation.mutate(opts, { onSuccess: () => setSweepOpen(false) });
+          sweepMutation.mutate(opts, {
+            onSuccess: (result) => {
+              setSweepOpen(false);
+              log({
+                kind: 'sweep',
+                summary: `knip --fix — ${result.issueCount} issue${result.issueCount === 1 ? '' : 's'} remaining`,
+                at: new Date().toISOString(),
+              });
+            },
+          });
         }}
       />
     </div>

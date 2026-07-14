@@ -1,9 +1,17 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { removeDependency } from '../../src/fix/transforms/package-json.js';
-import { addIgnores, findKnipConfig, type IgnoreEdit } from '../../src/ignore/config-writer.js';
+import {
+  addIgnores,
+  findKnipConfig,
+  listIgnores,
+  removeIgnores,
+  type IgnoreEdit,
+  type IgnoreEntry,
+} from '../../src/ignore/config-writer.js';
 import type { TransformResult } from '../../src/fix/transforms/source.js';
 
 function expectOk(result: TransformResult): string {
@@ -243,5 +251,196 @@ describe('findKnipConfig', () => {
     writeFileSync(jsonPath, '{}\n');
     writeFileSync(join(dir, 'knip.jsonc'), '{}\n');
     expect(findKnipConfig(dir)).toEqual({ kind: 'knip.json', path: jsonPath });
+  });
+});
+
+describe('removeIgnores', () => {
+  it('removes the only value, dropping the key entirely (not an empty array)', () => {
+    const content = '{\n  "ignoreDependencies": [\n    "left-pad"\n  ]\n}\n';
+    const entries: IgnoreEntry[] = [{ kind: 'ignoreDependencies', value: 'left-pad' }];
+    const result = removeIgnores(content, 'knip.json', entries);
+    expect(expectOk(result)).toBe('{\n}\n');
+  });
+
+  it('removes one of several values, leaving the rest', () => {
+    const content = '{\n  "ignoreDependencies": [\n    "left-pad",\n    "chalk"\n  ]\n}\n';
+    const entries: IgnoreEntry[] = [{ kind: 'ignoreDependencies', value: 'left-pad' }];
+    const result = removeIgnores(content, 'knip.json', entries);
+    expect(expectOk(result)).toBe('{\n  "ignoreDependencies": [\n    "chalk"\n  ]\n}\n');
+  });
+
+  it('removes a workspace-scoped value, dropping only that array', () => {
+    const content =
+      '{\n  "workspaces": {\n    "packages/app": {\n      "ignore": [\n        "src/orphan.ts"\n      ]\n    }\n  }\n}\n';
+    const entries: IgnoreEntry[] = [{ kind: 'ignore', value: 'src/orphan.ts', workspace: 'packages/app' }];
+    const result = removeIgnores(content, 'knip.json', entries);
+    expect(expectOk(result)).toBe('{\n  "workspaces": {\n    "packages/app": {\n    }\n  }\n}\n');
+  });
+
+  it('treats workspace "." as root when removing', () => {
+    const content = '{\n  "ignoreDependencies": [\n    "left-pad"\n  ]\n}\n';
+    const entries: IgnoreEntry[] = [{ kind: 'ignoreDependencies', value: 'left-pad', workspace: '.' }];
+    const result = removeIgnores(content, 'knip.json', entries);
+    expect(expectOk(result)).toBe('{\n}\n');
+  });
+
+  it('returns {ok:false, reason:"not-found"} when the value is absent from the array', () => {
+    const content = '{\n  "ignoreDependencies": [\n    "left-pad"\n  ]\n}\n';
+    const entries: IgnoreEntry[] = [{ kind: 'ignoreDependencies', value: 'does-not-exist' }];
+    expect(removeIgnores(content, 'knip.json', entries)).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  it('returns {ok:false, reason:"not-found"} when the array itself is absent', () => {
+    const content = '{\n  "entry": [\n    "src/index.ts"\n  ]\n}\n';
+    const entries: IgnoreEntry[] = [{ kind: 'ignore', value: 'src/orphan.ts' }];
+    expect(removeIgnores(content, 'knip.json', entries)).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  it('preserves comments in a knip.jsonc file untouched by the edit', () => {
+    const content =
+      '{\n  // entry files\n  "entry": ["src/index.ts"],\n  "ignoreDependencies": ["left-pad", "chalk"] // keep\n}\n';
+    const entries: IgnoreEntry[] = [{ kind: 'ignoreDependencies', value: 'chalk' }];
+    const result = removeIgnores(content, 'knip.jsonc', entries);
+    expect(expectOk(result)).toBe(
+      '{\n  // entry files\n  "entry": ["src/index.ts"],\n  "ignoreDependencies": [\n    "left-pad"\n  ] // keep\n}\n',
+    );
+  });
+
+  it('package.json variant removes from under the "knip" property', () => {
+    const content =
+      '{\n  "name": "pkg",\n  "knip": {\n    "ignoreDependencies": [\n      "left-pad"\n    ]\n  }\n}\n';
+    const entries: IgnoreEntry[] = [{ kind: 'ignoreDependencies', value: 'left-pad' }];
+    const result = removeIgnores(content, 'package.json', entries);
+    expect(expectOk(result)).toBe('{\n  "name": "pkg",\n  "knip": {\n  }\n}\n');
+  });
+
+  it('processes entries in order, threading content — removing two values from the same array', () => {
+    const content = '{\n  "ignore": [\n    "a",\n    "b",\n    "c"\n  ]\n}\n';
+    const entries: IgnoreEntry[] = [
+      { kind: 'ignore', value: 'a' },
+      { kind: 'ignore', value: 'c' },
+    ];
+    const result = removeIgnores(content, 'knip.json', entries);
+    expect(expectOk(result)).toBe('{\n  "ignore": [\n    "b"\n  ]\n}\n');
+  });
+
+  it('fails atomically: a not-found entry later in the batch fails the whole call', () => {
+    const content = '{\n  "ignore": [\n    "a",\n    "b"\n  ]\n}\n';
+    const entries: IgnoreEntry[] = [
+      { kind: 'ignore', value: 'a' },
+      { kind: 'ignore', value: 'does-not-exist' },
+    ];
+    expect(removeIgnores(content, 'knip.json', entries)).toEqual({ ok: false, reason: 'not-found' });
+  });
+});
+
+describe('listIgnores', () => {
+  let dir: string;
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns empty entries and kind "none" when there is no config at all', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'knip-gui-list-'));
+    writeFileSync(join(dir, 'package.json'), '{"name":"pkg"}\n');
+    expect(await listIgnores(dir)).toEqual({ entries: [], configKind: 'none' });
+  });
+
+  it('returns empty entries and kind "code" (with path) for a code config', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'knip-gui-list-'));
+    writeFileSync(join(dir, 'package.json'), '{"name":"pkg"}\n');
+    writeFileSync(join(dir, 'knip.ts'), 'export default {};\n');
+    expect(await listIgnores(dir)).toEqual({ entries: [], configKind: 'code', configPath: 'knip.ts' });
+  });
+
+  it('lists root-level entries across all three ignore kinds, tagged workspace "."', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'knip-gui-list-'));
+    writeFileSync(
+      join(dir, 'knip.json'),
+      JSON.stringify({
+        ignore: ['src/orphan.ts'],
+        ignoreDependencies: ['left-pad', 'chalk'],
+        ignoreBinaries: ['tsc'],
+      }),
+    );
+    const result = await listIgnores(dir);
+    expect(result.configKind).toBe('knip.json');
+    expect(result.configPath).toBe('knip.json');
+    expect(result.entries).toEqual(
+      expect.arrayContaining([
+        { kind: 'ignore', value: 'src/orphan.ts', workspace: '.' },
+        { kind: 'ignoreDependencies', value: 'left-pad', workspace: '.' },
+        { kind: 'ignoreDependencies', value: 'chalk', workspace: '.' },
+        { kind: 'ignoreBinaries', value: 'tsc', workspace: '.' },
+      ]),
+    );
+    expect(result.entries).toHaveLength(4);
+  });
+
+  it('lists workspace-scoped entries tagged with their own workspace name', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'knip-gui-list-'));
+    writeFileSync(
+      join(dir, 'knip.json'),
+      JSON.stringify({
+        ignoreDependencies: ['left-pad'],
+        workspaces: {
+          'packages/app': { ignore: ['src/orphan.ts'] },
+          'packages/lib': { ignoreDependencies: ['chalk'] },
+        },
+      }),
+    );
+    const result = await listIgnores(dir);
+    expect(result.entries).toEqual(
+      expect.arrayContaining([
+        { kind: 'ignoreDependencies', value: 'left-pad', workspace: '.' },
+        { kind: 'ignore', value: 'src/orphan.ts', workspace: 'packages/app' },
+        { kind: 'ignoreDependencies', value: 'chalk', workspace: 'packages/lib' },
+      ]),
+    );
+    expect(result.entries).toHaveLength(3);
+  });
+
+  it('reads package.json#knip, including its nested workspaces', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'knip-gui-list-'));
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({
+        name: 'pkg',
+        knip: {
+          ignoreDependencies: ['left-pad'],
+          workspaces: { 'packages/app': { ignore: ['src/orphan.ts'] } },
+        },
+      }),
+    );
+    const result = await listIgnores(dir);
+    expect(result.configKind).toBe('package.json');
+    expect(result.configPath).toBe('package.json');
+    expect(result.entries).toEqual(
+      expect.arrayContaining([
+        { kind: 'ignoreDependencies', value: 'left-pad', workspace: '.' },
+        { kind: 'ignore', value: 'src/orphan.ts', workspace: 'packages/app' },
+      ]),
+    );
+    expect(result.entries).toHaveLength(2);
+  });
+
+  it('preserves jsonc comments — parses (rather than edits) a knip.jsonc file fine', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'knip-gui-list-'));
+    writeFileSync(
+      join(dir, 'knip.jsonc'),
+      '{\n  // deps we know about\n  "ignoreDependencies": ["left-pad"]\n}\n',
+    );
+    const result = await listIgnores(dir);
+    expect(result.configKind).toBe('knip.jsonc');
+    expect(result.entries).toEqual([{ kind: 'ignoreDependencies', value: 'left-pad', workspace: '.' }]);
+  });
+
+  it('nested workspace directories do not confuse project-relative configPath', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'knip-gui-list-'));
+    await mkdir(join(dir, 'packages', 'app'), { recursive: true });
+    writeFileSync(join(dir, 'knip.json'), JSON.stringify({ ignoreDependencies: ['left-pad'] }));
+    const result = await listIgnores(dir);
+    expect(result.configPath).toBe('knip.json');
   });
 });

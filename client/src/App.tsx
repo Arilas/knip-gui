@@ -3,8 +3,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ActionModal } from './components/ActionModal.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { ActivityPage } from './components/pages/ActivityPage.js';
 import { CodePage } from './components/pages/CodePage.js';
 import { Dashboard } from './components/pages/Dashboard.js';
+import { IgnoredPage } from './components/pages/IgnoredPage.js';
 import { PackagesPage } from './components/pages/PackagesPage.js';
 import { SelectionBar } from './components/SelectionBar.js';
 import { ToastProvider } from './components/Toast.js';
@@ -64,17 +66,9 @@ function AppShell() {
       case 'packages':
         return <PackagesPage issues={issues} />;
       case 'ignored':
-        return (
-          <div className="p-4 text-sm text-muted-foreground">
-            Ignored — coming in Task 5 (server-backed ignore-entry listing + removal).
-          </div>
-        );
+        return <IgnoredPage />;
       case 'activity':
-        return (
-          <div className="p-4 text-sm text-muted-foreground">
-            Activity — coming in Task 5 (session-local apply/ignore/sweep/commit log).
-          </div>
-        );
+        return <ActivityPage />;
       default:
         return null;
     }
