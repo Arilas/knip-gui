@@ -13,8 +13,8 @@ export interface CliHandle {
   close: () => Promise<void>;
 }
 
-export async function startCli(opts: { dir: string; port: number; open: boolean }): Promise<CliHandle> {
-  const { port, open } = opts;
+export async function startCli(opts: { dir: string; port: number; open: boolean; production?: boolean }): Promise<CliHandle> {
+  const { port, open, production = false } = opts;
   // A relative --dir must be anchored to cwd here: resolveKnip's createRequire
   // (and the server's path containment checks) require an absolute path, and a
   // relative one would silently report "knip not found".
@@ -26,7 +26,7 @@ export async function startCli(opts: { dir: string; port: number; open: boolean 
     console.log(`Using knip ${knip.version}`);
   }
 
-  const { app, token } = createServer({ projectDir: dir });
+  const { app, token, store } = createServer({ projectDir: dir, production });
 
   let actualPort = port;
   const server = await new Promise<ReturnType<typeof serve>>((res) => {
@@ -70,7 +70,22 @@ export async function startCli(opts: { dir: string; port: number; open: boolean 
   return {
     url,
     token,
-    close: () => new Promise<void>((res, rej) => server.close((e) => (e ? rej(e) : res()))),
+    close: () =>
+      new Promise<void>((res, rej) => {
+        // Reap a stalled knip child (a stuck/slow scan) before tearing the
+        // server down: aborting the active scan's signal kills its execFile
+        // child immediately (see runScan/ReportStore.abortActiveScan), and
+        // closeAllConnections forces any lingering keep-alive socket — e.g.
+        // the fire-and-forget initial-scan request still parked mid-response
+        // — shut so server.close()'s callback isn't left waiting on it.
+        store.abortActiveScan();
+        // Only http.Server/https.Server (not Http2Server, which ServerType
+        // also allows for) has closeAllConnections — guard for the type, we
+        // only ever actually get a plain http.Server here since serve() below
+        // is never given TLS/HTTP2 options.
+        (server as { closeAllConnections?: () => void }).closeAllConnections?.();
+        server.close((e) => (e ? rej(e) : res()));
+      }),
   };
 }
 
@@ -96,12 +111,24 @@ if (isMain()) {
       port: { type: 'string', default: '0' },
       'no-open': { type: 'boolean', default: false },
       dir: { type: 'string', default: process.cwd() },
+      production: { type: 'boolean', default: false },
     },
   });
+
+  const port = Number(values.port);
+  // Number('') / Number('  ') is 0, not NaN, so an explicit trim-and-empty
+  // check is needed alongside Number.isInteger to reject those the same way
+  // as a genuinely non-numeric value like "abc".
+  if (values.port!.trim() === '' || !Number.isInteger(port) || port < 0 || port > 65535) {
+    console.error(`invalid --port: ${values.port}`);
+    process.exit(1);
+  }
+
   startCli({
     dir: values.dir!,
-    port: Number(values.port),
+    port,
     open: !values['no-open'],
+    production: values.production,
   }).catch((e) => {
     console.error(e);
     process.exit(1);

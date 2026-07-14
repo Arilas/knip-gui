@@ -60,6 +60,13 @@ export interface Report {
    * this value rather than silently widening back to a full-project scan.
    */
   scope?: string;
+  /**
+   * Whether this scan ran with knip's `--production` flag (fixed for the
+   * lifetime of a server instance — see `createServer`'s `production` option).
+   * Always present (default `false`) rather than optional, unlike `scope`,
+   * since every scan has a definite production/non-production mode.
+   */
+  production: boolean;
 }
 
 export const FIX_MODES_BY_TYPE: Record<IssueType, FixMode[]> = {

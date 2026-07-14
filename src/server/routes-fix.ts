@@ -11,8 +11,12 @@ import type { ReportStore, StoreError } from './store.js';
 export interface FixRoutesCtx {
   projectDir: string;
   scan: typeof runScan;
+  /** Defaults to the real `runSweep` in createServer; injectable so tests can stall it to exercise the sweep latch. */
+  sweep?: typeof runSweep;
   store: ReportStore;
   planStore: PlanStore;
+  /** Fixed for the server's lifetime — see createServer's `production` option. Applied to every rescan. */
+  production: boolean;
 }
 
 function toStoreError(e: unknown): StoreError {
@@ -27,19 +31,22 @@ function toStoreError(e: unknown): StoreError {
 async function performRescan(
   ctx: FixRoutesCtx,
 ): Promise<{ ok: true; issueCount: number } | { ok: false; error: StoreError }> {
+  const controller = ctx.store.beginScan();
   try {
     // Reuse the last scan's workspace rather than silently widening back to a
     // full-project scan (Plan 2 carried-over obligation).
     const scope = ctx.store.lastScanScope;
-    const raw = await ctx.scan(ctx.projectDir, { workspace: scope });
+    const raw = await ctx.scan(ctx.projectDir, { workspace: scope, production: ctx.production, signal: controller.signal });
     const workspaces = await getWorkspaceDirs(ctx.projectDir);
     const issues = normalize(raw, workspaces);
-    ctx.store.setReady({ issues, scannedAt: new Date().toISOString(), workspaces, scope });
+    ctx.store.setReady({ issues, scannedAt: new Date().toISOString(), workspaces, scope, production: ctx.production });
     return { ok: true, issueCount: issues.length };
   } catch (e) {
     const err = toStoreError(e);
     ctx.store.setError(err);
     return { ok: false, error: err };
+  } finally {
+    ctx.store.endScan(controller);
   }
 }
 
@@ -58,7 +65,14 @@ export function triggerBackgroundRescan(ctx: FixRoutesCtx): boolean {
 }
 
 export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
-  const { store, planStore, projectDir } = ctx;
+  const { store, planStore, projectDir, sweep = runSweep } = ctx;
+  // Synchronous latch for /api/sweep, mirroring /api/scan's check-then-latch
+  // pattern: set before the route's first await, cleared in `finally`, so two
+  // concurrent sweep POSTs can't both pass the guard and both spawn a sweep.
+  // Scoped to this call of registerFixRoutes (i.e. per createServer instance)
+  // rather than module-level, so unrelated server instances in the same
+  // process (e.g. parallel tests) never share this latch.
+  let sweeping = false;
 
   app.post('/api/fix/preview', async (c) => {
     if (store.status !== 'ready' || !store.report) return c.json({ error: 'no report available' }, 409);
@@ -104,27 +118,32 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   });
 
   app.post('/api/sweep', async (c) => {
-    // Guard only rejects a sweep that starts while a scan is already known to
-    // be in flight; the store is latched to 'scanning' below only for the
-    // rescan phase (per task spec — the sweep child-process run itself is not
-    // latched the way /api/scan's own single-flight guard is).
-    if (store.status === 'scanning') return c.json({ error: 'scan in progress' }, 409);
-    const body = await c.req.json().catch(() => ({}));
-    // No explicit workspace on the sweep request falls back to the last scan's
-    // scope rather than defaulting to a full-project sweep.
-    const workspace = typeof body.workspace === 'string' ? body.workspace : store.lastScanScope;
-    const sweepResult = await runSweep(projectDir, {
-      workspace,
-      fixTypes: Array.isArray(body.fixTypes) ? body.fixTypes : undefined,
-      allowRemoveFiles: !!body.allowRemoveFiles,
-    });
-    if (!sweepResult.ok) return c.json({ error: 'sweep failed', stderr: sweepResult.stderr }, 500);
+    // Check-and-latch must be synchronous (no await between the status/latch
+    // check and setting `sweeping`), otherwise two concurrent requests both
+    // pass the guard and both spawn a sweep — same reasoning as /api/scan's
+    // own single-flight guard in server/index.ts.
+    if (store.status === 'scanning' || sweeping) return c.json({ error: 'scan in progress' }, 409);
+    sweeping = true;
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      // No explicit workspace on the sweep request falls back to the last scan's
+      // scope rather than defaulting to a full-project sweep.
+      const workspace = typeof body.workspace === 'string' ? body.workspace : store.lastScanScope;
+      const sweepResult = await sweep(projectDir, {
+        workspace,
+        fixTypes: Array.isArray(body.fixTypes) ? body.fixTypes : undefined,
+        allowRemoveFiles: !!body.allowRemoveFiles,
+      });
+      if (!sweepResult.ok) return c.json({ error: 'sweep failed', stderr: sweepResult.stderr }, 500);
 
-    store.lastScanScope = workspace;
-    store.setScanning();
-    const result = await performRescan(ctx);
-    if (!result.ok) return c.json({ error: result.error }, 500);
-    return c.json({ issueCount: result.issueCount });
+      store.lastScanScope = workspace;
+      store.setScanning();
+      const result = await performRescan(ctx);
+      if (!result.ok) return c.json({ error: result.error }, 500);
+      return c.json({ issueCount: result.issueCount });
+    } finally {
+      sweeping = false;
+    }
   });
 
   app.get('/api/sweep/capabilities', async (c) => {

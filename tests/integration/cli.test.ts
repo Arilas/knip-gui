@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,34 @@ import { startCli } from '../../src/cli.js';
 
 const single = new URL('../fixtures/single/', import.meta.url).pathname;
 const root = new URL('../../', import.meta.url).pathname;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Fabricates a fake local `knip` install whose bin script sleeps ~30s instead
+// of ever producing a report — long enough to reliably still be "scanning"
+// when the test calls close(), without actually depending on real knip.
+// Mirrors tests/integration/knip-runner.test.ts's fake-knip fixture builder.
+function makeSlowFakeKnipProject(): { dir: string; pidFile: string } {
+  const tmpTestsDir = new URL('../../.tmp-tests/', import.meta.url).pathname;
+  mkdirSync(tmpTestsDir, { recursive: true });
+  const dir = mkdtempSync(join(tmpTestsDir, 'cli-slow-'));
+  mkdirSync(join(dir, 'node_modules', 'knip', 'bin'), { recursive: true });
+  mkdirSync(join(dir, 'node_modules', 'knip', 'dist'), { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0' }));
+  writeFileSync(join(dir, 'node_modules', 'knip', 'dist', 'index.js'), 'module.exports = {};\n');
+  writeFileSync(
+    join(dir, 'node_modules', 'knip', 'package.json'),
+    JSON.stringify({ name: 'knip', version: '0.0.0-fake', main: 'dist/index.js', bin: { knip: 'bin/knip.js' } }),
+  );
+  const pidFile = join(dir, 'node_modules', 'knip', 'bin', 'pid.txt');
+  writeFileSync(
+    join(dir, 'node_modules', 'knip', 'bin', 'knip.js'),
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => {}, 30000);\n`,
+  );
+  return { dir, pidFile };
+}
 
 async function pollUntilReady(url: string, token: string): Promise<string> {
   let status = '';
@@ -142,5 +170,63 @@ describe('cli', () => {
       child.kill();
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  it('rejects an invalid --port before starting anything, with no stack trace', async () => {
+    execFileSync('npm', ['run', 'build'], { cwd: root, stdio: 'pipe' });
+
+    for (const badPort of ['abc', '-1', '99999', '3.5', '']) {
+      // `--port=<value>` (rather than `--port <value>`) sidesteps node's own
+      // parseArgs treating a negative-looking value like "-1" as an ambiguous
+      // second option rather than this option's argument.
+      const child = spawn(
+        process.execPath,
+        [join(root, 'dist/cli.js'), '--dir', single, '--no-open', `--port=${badPort}`],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      let stderr = '';
+      child.stderr.on('data', (d: Buffer) => {
+        stderr += d.toString();
+      });
+      const code = await new Promise<number | null>((res) => child.on('exit', res));
+      expect(code).toBe(1);
+      expect(stderr).toContain(`invalid --port: ${badPort}`);
+      // No bare stack trace from an unhandled throw — just the one-line message.
+      expect(stderr).not.toContain('at ');
+    }
+  });
+
+  it('close() reaps a stalled knip child process (aborts the in-flight initial scan)', async () => {
+    const { dir, pidFile } = makeSlowFakeKnipProject();
+    tmpDirs.push(dir);
+
+    const { close } = await startCli({ dir, open: false, port: 0 });
+
+    // Wait for the fake knip child to actually start and record its own pid.
+    let pid = 0;
+    for (let i = 0; i < 40 && !pid; i++) {
+      await sleep(50);
+      try {
+        pid = Number(readFileSync(pidFile, 'utf8'));
+      } catch {
+        // pid file not written yet
+      }
+    }
+    expect(pid).toBeGreaterThan(0);
+
+    const closeStarted = Date.now();
+    await close();
+    expect(Date.now() - closeStarted).toBeLessThan(1000);
+
+    let alive = true;
+    for (let i = 0; i < 20 && alive; i++) {
+      try {
+        process.kill(pid, 0);
+        await sleep(50);
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive).toBe(false);
   });
 });
