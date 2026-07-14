@@ -288,12 +288,81 @@ describe('sweep routes', () => {
     expect(res.status).toBe(409);
   });
 
+  it('409s a second concurrent sweep POST while the first is still stalling (synchronous latch)', async () => {
+    const dir = await makeProject();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let calls = 0;
+    const server = createServer({
+      projectDir: dir,
+      scan: async () => fakeRaw,
+      sweep: async () => {
+        calls++;
+        await gate;
+        return { ok: true };
+      },
+    });
+    const h = jsonHeaders(server.token);
+    await server.app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+
+    const first = server.app.request('/api/sweep', { method: 'POST', headers: h, body: '{}' });
+    const second = server.app.request('/api/sweep', { method: 'POST', headers: h, body: '{}' });
+    release();
+
+    const statuses = (await Promise.all([first, second])).map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 409]);
+    expect(calls).toBe(1);
+  });
+
   it('capabilities probe reports all-false for a project with no resolvable knip', async () => {
     const { app, h } = await makeReadyServer();
     const res = await app.request('/api/sweep/capabilities', { headers: h });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({ fix: false, fixType: false, allowRemoveFiles: false, workspace: false });
+  });
+});
+
+describe('production mode threading', () => {
+  it('applies production to the rescan after a fix apply, and keeps it on the resulting report', async () => {
+    const dir = await makeProject();
+    const rescanCalls: Array<{ production?: boolean }> = [];
+    const server = createServer({
+      projectDir: dir,
+      production: true,
+      scan: async (_projectDir, opts = {}) => {
+        rescanCalls.push({ production: opts.production });
+        return fakeRaw;
+      },
+    });
+    const h = jsonHeaders(server.token);
+    await server.app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+
+    const exportIssue = server.store.report!.issues.find((i) => i.type === 'exports')!;
+    const previewRes = await server.app.request('/api/fix/preview', {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({ issueIds: [exportIssue.id] }),
+    });
+    const { planId } = await previewRes.json();
+    const applyRes = await server.app.request('/api/fix/apply', {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({ planId }),
+    });
+    expect(applyRes.status).toBe(200);
+    expect((await applyRes.json()).rescanning).toBe(true);
+
+    // The post-apply rescan is fire-and-forget (triggerBackgroundRescan) — poll
+    // briefly for it to land rather than asserting immediately.
+    for (let i = 0; i < 20 && rescanCalls.length < 2; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(rescanCalls.length).toBeGreaterThanOrEqual(2); // initial scan + post-apply rescan
+    expect(rescanCalls.every((c) => c.production === true)).toBe(true);
+    expect(server.store.report!.production).toBe(true);
   });
 });
 

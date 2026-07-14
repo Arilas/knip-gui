@@ -3,15 +3,44 @@
 // combining both in one pass) before calling buildTree, so "chips filter the
 // tree" is just "build a smaller tree" rather than a separate pass — every
 // downstream count/badge/row naturally reflects only enabled types. Flattens
-// the buildTree() output into a plain dir/file row list driven by local
-// expand-state, and hands that list to TanStack Virtual so only the visible
-// rows are ever mounted.
-import { useMemo, useRef, useState } from 'react';
+// the buildTree() output into a plain dir/file row list driven by expand-
+// state, and hands that list to TanStack Virtual so only the visible rows
+// are ever mounted.
+//
+// Expand-state lift (Task 2, v0.3): expandedDirs now lives in the ui store
+// (state/ui.ts) rather than local useState, so it survives this component
+// unmounting on a Code -> Packages -> Code round trip. The auto-expand-on-
+// first-load POLICY (lib/tree.ts's autoExpandDepth) still runs here, though
+// — it needs the built tree, which is page-local — via `policyExpandedDirs`
+// (recomputed on every tree change, cheap) as the render-time fallback
+// whenever the store hasn't been seeded yet (`expandedDirsInitialized ===
+// false`), plus an effect that performs the ONE-TIME seed write into the
+// store once mounted. Using the computed fallback for the actual render
+// (rather than waiting for the effect to fire) avoids a first-paint flash of
+// an unexpanded tree; the effect no-ops forever once seeded, which is
+// exactly what keeps "Collapse all" from being silently undone on the next
+// render (see ui.ts's doc comment for the full rationale).
+//
+// Seed-delta (Task 6, v0.3, dogfood finding): a rescan that introduces a
+// brand-new top-level dir (e.g. a fix/ignore round trip that happens to add
+// one) used to render it collapsed by default — the one-time seed above has
+// already fired, so nothing ever auto-expands a dir that didn't exist yet at
+// seed time. The tree-change effect below tracks "new since we last looked"
+// against a SEPARATE tree built from the raw `issues` prop (pre search/chip
+// filtering) specifically so toggling a filter chip or typing a search term
+// — which also changes the rendered `tree` below, but never adds real dir
+// paths to the underlying data — can never be mistaken for a rescan and
+// spuriously re-expand a dir the user filtered into view (search-revealed
+// dirs staying collapsed by default is an accepted design choice; see Task 3
+// UX overhaul notes). Only genuinely new paths get merged in, additively —
+// see ui.ts's `expandDirs` doc comment for why this can't undo a Collapse all.
+import { useEffect, useMemo, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronsDownUp, ChevronsUpDown, PanelRightClose, PanelRightOpen, Search } from 'lucide-react';
 import type { Issue, IssueType } from '../../../../src/core/types.js';
 import { CODE_TYPES, filterIssues } from '../../lib/filters.js';
 import { autoExpandDepth, buildTree, countFiles, type DirNode } from '../../lib/tree.js';
+import { useUiStore } from '../../state/ui.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
 import { FilterChips } from './FilterChips.js';
@@ -96,19 +125,64 @@ export function TreeView({
   const filtered = useMemo(() => filterIssues(issues, enabledTypes, search), [issues, enabledTypes, search]);
   const tree = useMemo(() => buildTree(filtered), [filtered]);
 
-  // Manually-toggled expand state; null means "not touched yet, use the
-  // auto-expand policy" (see lib/tree.ts's autoExpandDepth). Once the user
-  // (or expand/collapse-all) sets it, later search/filter changes reuse
-  // whatever's already in the set — dir paths that still exist keep their
-  // state, newly-revealed ones default to collapsed. This intentionally
-  // avoids resetting the user's manual expand/collapse choices on every
-  // keystroke/chip toggle.
-  const [manualExpandedDirs, setManualExpandedDirs] = useState<Set<string> | null>(null);
-  const expandedDirs = useMemo(() => {
-    if (manualExpandedDirs !== null) return manualExpandedDirs;
+  // Lifted expand state (ui store) — see this file's top doc comment and
+  // ui.ts's doc comment for the full seed-once-and-never-reseed rationale.
+  const storeExpandedDirs = useUiStore((s) => s.expandedDirs);
+  const expandedDirsInitialized = useUiStore((s) => s.expandedDirsInitialized);
+  const initExpandedDirs = useUiStore((s) => s.initExpandedDirs);
+  const storeToggleDir = useUiStore((s) => s.toggleDir);
+  const storeExpandAll = useUiStore((s) => s.expandAll);
+  const storeCollapseAll = useUiStore((s) => s.collapseAll);
+
+  const policyExpandedDirs = useMemo(() => {
     const policy = autoExpandDepth(tree, countFiles(tree));
     return policy === 'all' ? allDirPaths(tree) : topDirPaths(tree);
-  }, [manualExpandedDirs, tree]);
+  }, [tree]);
+
+  // Render-time value: the real store set once seeded, otherwise the policy
+  // default computed above — this is what avoids a first-paint flash while
+  // the seeding effect (below) hasn't run yet.
+  const expandedDirs = expandedDirsInitialized ? storeExpandedDirs : policyExpandedDirs;
+
+  // One-time seed: writes the policy default into the store the first time
+  // this tree mounts (or, if a rescan somehow lands before the first mount's
+  // effect fires, the first time the tree itself changes) — a permanent
+  // no-op after that (initExpandedDirs itself guards on
+  // expandedDirsInitialized), so it never overwrites a later Collapse
+  // all/Expand all/manual toggle, and expansion set by an earlier Code page
+  // visit survives navigating away and back.
+  useEffect(() => {
+    if (!expandedDirsInitialized) initExpandedDirs(policyExpandedDirs);
+  }, [expandedDirsInitialized, initExpandedDirs, policyExpandedDirs]);
+
+  // Seed-delta (Task 6, v0.3): built from the raw `issues` prop, NOT the
+  // locally-filtered `tree` above — search/chip changes must never look like
+  // "new paths appeared" (see this file's top doc comment). `fullPolicyDirs`
+  // is what a fresh seed would expand by default for the CURRENT underlying
+  // data; diffing it against what was seen last time isolates paths a rescan
+  // actually introduced.
+  const fullTree = useMemo(() => buildTree(issues), [issues]);
+  const fullPolicyExpandedDirs = useMemo(() => {
+    const policy = autoExpandDepth(fullTree, countFiles(fullTree));
+    return policy === 'all' ? allDirPaths(fullTree) : topDirPaths(fullTree);
+  }, [fullTree]);
+  const expandDirs = useUiStore((s) => s.expandDirs);
+  const seenDirPathsRef = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    if (!expandedDirsInitialized) {
+      // Not seeded yet — the seed effect above will use this same set as its
+      // baseline momentarily; just track it so the FIRST post-seed render
+      // doesn't see every initial dir as "new".
+      seenDirPathsRef.current = fullPolicyExpandedDirs;
+      return;
+    }
+    const seen = seenDirPathsRef.current;
+    seenDirPathsRef.current = fullPolicyExpandedDirs;
+    if (!seen) return;
+    const newPaths = [...fullPolicyExpandedDirs].filter((p) => !seen.has(p));
+    if (newPaths.length > 0) expandDirs(newPaths);
+  }, [expandedDirsInitialized, fullPolicyExpandedDirs, expandDirs]);
 
   const rows = useMemo(() => {
     const out: FlatRow[] = [];
@@ -123,21 +197,25 @@ export function TreeView({
     overscan: 12,
   });
 
+  // toggleDir merges into whatever's already expanded — if the store hasn't
+  // been seeded yet (theoretically possible: the seeding effect above hasn't
+  // committed, though in practice it always has by the time a row is
+  // interactive), seed it first from the same policy default the render
+  // already used, so the toggle merges against what the user is actually
+  // looking at rather than an empty store set. initExpandedDirs/
+  // storeToggleDir are both synchronous zustand `set` calls, so the store
+  // reflects the seed before storeToggleDir reads it.
   function toggleDir(path: string) {
-    setManualExpandedDirs((prev) => {
-      const next = new Set(prev ?? expandedDirs);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
+    if (!expandedDirsInitialized) initExpandedDirs(policyExpandedDirs);
+    storeToggleDir(path);
   }
 
   function expandAll() {
-    setManualExpandedDirs(allDirPaths(tree));
+    storeExpandAll(allDirPaths(tree));
   }
 
   function collapseAll() {
-    setManualExpandedDirs(new Set());
+    storeCollapseAll();
   }
 
   return (

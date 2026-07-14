@@ -16,10 +16,10 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Issue } from '../../../../src/core/types.js';
 import { ApiError } from '../../api.js';
-import { isFixable, isIgnorable } from '../../lib/filters.js';
+import { isFixable, isIgnorable, isLikelyTestFile } from '../../lib/filters.js';
 import { highlightToHtml, issueLines, langForPath } from '../../lib/highlighter.js';
 import { useFile } from '../../state/queries.js';
-import { TYPE_BADGE_LABELS, unactionableReason } from './TreeNode.js';
+import { TestFileHint, TYPE_BADGE_LABELS, unactionableReason } from './TreeNode.js';
 
 export interface CodePaneProps {
   /** null = nothing open yet (empty state). */
@@ -28,6 +28,15 @@ export interface CodePaneProps {
   issues: Issue[];
   selected: ReadonlySet<string>;
   onToggleIds: (ids: string[]) => void;
+  /**
+   * ui store's `openFileNonce` (Task 4, v0.3) — bumped on every explicit
+   * file-open, including re-opening the same path. Combined with `filePath`
+   * into CodeBlock's `scrollKey`, this is what lets the auto-scroll-to-
+   * first-issue + pulse effect re-fire on a re-open, since `filePath` alone
+   * wouldn't change in that case. See state/ui.ts's doc comment for why
+   * `filePath` alone isn't a reliable enough signal on its own.
+   */
+  openFileNonce: number;
 }
 
 function escapeHtml(text: string): string {
@@ -72,14 +81,34 @@ function CodeBlock({
   lineIssues,
   selected,
   onToggleIds,
+  scrollKey,
 }: {
   html: string;
   lineIssues: Map<number, Issue[]>;
   selected: ReadonlySet<string>;
   onToggleIds: (ids: string[]) => void;
+  /**
+   * Identity of "the file just opened" — `${filePath}#${openFileNonce}` (see
+   * CodePane). The auto-scroll-to-first-issue + pulse effect below runs at
+   * most once per distinct value: a mid-view content refresh (e.g. a rescan
+   * landing after an ignore-apply elsewhere) changes `html`/`lineIssues`
+   * without changing `scrollKey`, and must NOT yank the user's scroll
+   * position or re-trigger the pulse.
+   */
+  scrollKey: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
   const [markers, setMarkers] = useState<Marker[]>([]);
+  // The pulsing marker, if any — React state rather than a DOM classList
+  // mutation (see below for why that matters), cleared via setTimeout once
+  // the 1.2s animation has had time to finish.
+  const [pulseMarker, setPulseMarker] = useState<Marker | null>(null);
+  // Tracks which `scrollKey` the auto-scroll/pulse has already run for, so it
+  // fires exactly once per open (not on every re-measure caused by an
+  // unrelated content refresh). A ref rather than state — it must survive
+  // across renders without itself triggering one.
+  const scrolledKeyRef = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -89,23 +118,69 @@ function CodeBlock({
     }
     const lineEls = container.querySelectorAll<HTMLElement>('.line');
     const next: Marker[] = [];
+    let firstIssueMarker: Marker | undefined;
     lineEls.forEach((el, idx) => {
       const lineNo = idx + 1;
-      el.classList.remove('code-pane-flagged-line');
       if (lineIssues.has(lineNo)) {
-        el.classList.add('code-pane-flagged-line');
-        next.push({ line: lineNo, top: el.offsetTop, height: el.offsetHeight });
+        const marker = { line: lineNo, top: el.offsetTop, height: el.offsetHeight };
+        next.push(marker);
+        if (firstIssueMarker === undefined || lineNo < firstIssueMarker.line) firstIssueMarker = marker;
       }
     });
     setMarkers(next);
-    // `html` changing means shiki re-rendered fresh DOM (dangerouslySetInnerHTML
-    // fully replaces innerHTML), so classes/measurements must be redone; `lineIssues`
-    // changing (e.g. after a rescan prunes an issue) must also re-measure.
-  }, [html, lineIssues]);
+    // The flagged-line background tint and the pulse ring are BOTH rendered
+    // as their own absolutely-positioned overlay elements below (React state,
+    // like the badges already were) rather than a classList mutation on the
+    // shiki-injected `.line` span itself, which is what this used to do. That
+    // turned out to be genuinely broken in a production build: `setMarkers`
+    // above schedules a re-render of this component, and — confirmed live by
+    // instrumenting `Element.prototype.innerHTML`'s setter — React commits a
+    // SECOND `dangerouslySetInnerHTML` write for the `.code-pane-html` div on
+    // that follow-up render even though the `html` string itself is byte-
+    // identical to the one already there, wiping any class just added onto
+    // the (now-replaced) `.line` nodes with no further layout-effect run to
+    // reapply it (this effect's own deps — `html`/`lineIssues`/`scrollKey` —
+    // are unchanged by `setMarkers`, so it correctly does NOT re-fire). The
+    // badges already dodged this because they were always React-rendered
+    // overlay elements, never a mutation on the raw shiki HTML; matching that
+    // pattern here is what actually fixes it, rather than fighting the reset.
+
+    if (scrolledKeyRef.current === scrollKey) return;
+    // Mark this open handled regardless of outcome — a whole-file-banner-only
+    // file (no line-bearing issues) has no `firstIssueMarker` and simply
+    // never scrolls; retrying on every subsequent re-measure would be wasted
+    // work and risks scrolling later if a rescan happens to add a line issue
+    // mid-view, which is exactly the "don't yank the scroll position on an
+    // unrelated refresh" behavior this guard exists to prevent.
+    scrolledKeyRef.current = scrollKey;
+    const scroller = scrollerRef.current;
+    if (!firstIssueMarker || !scroller) return;
+    const target = firstIssueMarker.top - scroller.clientHeight / 2 + firstIssueMarker.height / 2;
+    scroller.scrollTop = Math.max(0, Math.min(target, scroller.scrollHeight - scroller.clientHeight));
+    setPulseMarker(firstIssueMarker);
+    const timer = setTimeout(() => setPulseMarker(null), 1200);
+    return () => clearTimeout(timer);
+  }, [html, lineIssues, scrollKey]);
 
   return (
-    <div className="relative flex-1 overflow-auto">
+    <div ref={scrollerRef} className="relative flex-1 overflow-auto">
       <div ref={containerRef} className="code-pane-html" dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Flagged-line background tint + pulse ring: full-width, behind the
+          code text (-z-10 — the scroller above is `position: relative`, so
+          this negative z-index paints below its other, non-positioned
+          static children within that stacking context, same visual result
+          as the old background-color-on-the-line-span approach). */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 -z-10">
+        {markers.map(({ line, top, height }) => (
+          <div key={line} className="code-pane-flagged-line-bg absolute inset-x-0" style={{ top, height }} />
+        ))}
+        {pulseMarker && (
+          <div
+            className="code-pane-pulse-line-bg absolute inset-x-0"
+            style={{ top: pulseMarker.top, height: pulseMarker.height }}
+          />
+        )}
+      </div>
       <div className="pointer-events-none absolute inset-0 left-0 top-0">
         {markers.map(({ line, top, height }) => (
           <div key={line} className="pointer-events-none absolute right-1 flex items-center gap-1" style={{ top, height }}>
@@ -143,15 +218,22 @@ function CodeBlock({
 
 function WholeFileBanner({
   issue,
+  filePath,
   selected,
   onToggleIds,
 }: {
   issue: Issue;
+  filePath: string;
   selected: ReadonlySet<string>;
   onToggleIds: (ids: string[]) => void;
 }) {
   const actionable = isFixable(issue).ok || isIgnorable(issue).ok;
   const message = issue.type === 'files' ? 'This whole file is unused.' : `This file has an unused ${issue.type} with no specific line.`;
+  // The flask hint only ever applies to the whole-file 'files' issue type —
+  // an unused export/type/etc. with no line info on an otherwise-live test
+  // file isn't the "knip can't see your test runner" false positive this
+  // hint is for.
+  const showTestHint = issue.type === 'files' && isLikelyTestFile(filePath);
   return (
     <label
       className="flex items-center gap-2 border-b border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
@@ -165,11 +247,12 @@ function WholeFileBanner({
         className="disabled:cursor-not-allowed"
       />
       {message}
+      {showTestHint && <TestFileHint />}
     </label>
   );
 }
 
-export function CodePane({ filePath, issues, selected, onToggleIds }: CodePaneProps) {
+export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonce }: CodePaneProps) {
   const fileQuery = useFile(filePath);
   const content = fileQuery.data?.content;
   const lang = filePath ? langForPath(filePath) : undefined;
@@ -240,7 +323,7 @@ export function CodePane({ filePath, issues, selected, onToggleIds }: CodePanePr
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {wholeFileIssues.map((issue) => (
-        <WholeFileBanner key={issue.id} issue={issue} selected={selected} onToggleIds={onToggleIds} />
+        <WholeFileBanner key={issue.id} issue={issue} filePath={filePath} selected={selected} onToggleIds={onToggleIds} />
       ))}
       {highlightNote && (
         <p className="border-b border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
@@ -250,7 +333,13 @@ export function CodePane({ filePath, issues, selected, onToggleIds }: CodePanePr
       {html === undefined ? (
         <div className="p-4 text-sm text-gray-500 dark:text-gray-400">Highlighting…</div>
       ) : (
-        <CodeBlock html={html} lineIssues={lineIssues} selected={selected} onToggleIds={onToggleIds} />
+        <CodeBlock
+          html={html}
+          lineIssues={lineIssues}
+          selected={selected}
+          onToggleIds={onToggleIds}
+          scrollKey={`${filePath}#${openFileNonce}`}
+        />
       )}
     </div>
   );

@@ -15,6 +15,7 @@ import { idsToToggleForNode, nodeSelectionState } from '../../lib/tree.js';
 import { useFile } from '../../state/queries.js';
 import { useSelectionStore } from '../../state/selection.js';
 import { useUiStore } from '../../state/ui.js';
+import { SelectionDock } from '../SelectionDock.js';
 import { FilterChips } from '../code/FilterChips.js';
 import { TriStateCheckbox, TYPE_BADGE_LABELS, unactionableReason } from '../code/TreeNode.js';
 import { Input } from '../ui/input.js';
@@ -83,48 +84,52 @@ export function PackagesPage({ issues }: PackagesPageProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">Packages</h2>
-        <Input
-          type="search"
-          placeholder="Filter by name or path…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="max-w-64"
-          data-testid="packages-search"
-        />
-      </div>
-
-      <div className="mb-3">
-        <FilterChips issues={chipScopeIssues} enabled={packagesFilters} onToggle={togglePackagesFilter} types={PACKAGE_TYPES} />
-      </div>
-
-      {groups.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {issues.some((i) => ALL_PACKAGE_TYPES.has(i.type))
-            ? 'No package issues match the current filters.'
-            : 'No package issues found — knip is happy.'}
-        </p>
-      ) : (
-        <div className="min-h-0 flex-1 overflow-auto" data-testid="packages-scroll">
-          <div className="flex flex-col gap-6 pb-2">
-            {groups.map((group) => (
-              <WorkspaceTable
-                key={group.workspace}
-                group={group}
-                selected={selected}
-                onToggleIds={toggle}
-                sortKey={sortKey}
-                sortDir={sortDir}
-                onSort={toggleSort}
-                sortIndicator={sortIndicator}
-                onRowClick={setDetailIssue}
-              />
-            ))}
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">Packages</h2>
+          <Input
+            type="search"
+            placeholder="Filter by name or path…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="max-w-64"
+            data-testid="packages-search"
+          />
         </div>
-      )}
+
+        <div className="mb-3">
+          <FilterChips issues={chipScopeIssues} enabled={packagesFilters} onToggle={togglePackagesFilter} types={PACKAGE_TYPES} />
+        </div>
+
+        {groups.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {issues.some((i) => ALL_PACKAGE_TYPES.has(i.type))
+              ? 'No package issues match the current filters.'
+              : 'No package issues found — knip is happy.'}
+          </p>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-auto" data-testid="packages-scroll">
+            <div className="flex flex-col gap-6 pb-2">
+              {groups.map((group) => (
+                <WorkspaceTable
+                  key={group.workspace}
+                  group={group}
+                  selected={selected}
+                  onToggleIds={toggle}
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onSort={toggleSort}
+                  sortIndicator={sortIndicator}
+                  onRowClick={setDetailIssue}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <SelectionDock issues={issues} />
 
       <PackageDetailSheet
         issue={detailIssue}

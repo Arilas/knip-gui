@@ -162,8 +162,22 @@ export async function gitCommitPaths(
     await assertContained(root, p);
   }
 
+  // The commit itself is pathspec-scoped (`git commit -m <msg> -- <paths>`),
+  // NOT a bare `git commit`: a bare commit commits the ENTIRE index, so
+  // anything the user had pre-staged themselves (mid-edit on something
+  // unrelated) would silently land in our commit under our message — exactly
+  // the leak the empty-paths guard above describes, just via a non-empty
+  // list. The pathspec form commits only the named paths' contents and
+  // leaves every other index entry exactly as staged (verified: a pre-staged
+  // unrelated file stays staged-but-uncommitted afterwards; regression-pinned
+  // in tests/unit/git.test.ts).
+  //
+  // The `git add -- <paths>` beforehand is still required: a pathspec commit
+  // of an UNTRACKED file fails with "pathspec ... did not match any file(s)
+  // known to git" until the file is in the index (verified) — and it also
+  // stages deletions (`git add` of a removed path records the removal).
   await execGit(projectDir, ['add', '--', ...paths]);
-  await execGit(projectDir, ['commit', '-m', message]);
+  await execGit(projectDir, ['commit', '-m', message, '--', ...paths]);
   const { stdout } = await execGit(projectDir, ['rev-parse', 'HEAD']);
   return { sha: stdout.trim() };
 }

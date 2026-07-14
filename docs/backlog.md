@@ -1,9 +1,71 @@
-# Backlog (v0.2 candidates)
+# Backlog
 
-Deferred findings from the v0.1 review cycles — none block usage; all were
-explicitly triaged as non-blocking by the final whole-branch reviews. Task 7
-(final polish/dogfood pass) re-checked every item below against the current
-code; status notes are inline where something changed.
+Deferred findings from review cycles across v0.1–v0.3 — none block usage; all
+were explicitly triaged as non-blocking by the final whole-branch reviews.
+Each polish/dogfood pass (most recently Task 6 of the v0.3 plan) re-checks
+every item below against the current code; status notes are inline where
+something changed, and resolved items are struck through rather than
+deleted so the history stays legible.
+
+## Delivered in v0.3 (Task 6 final review + dogfood)
+
+New e2e coverage: `tests/e2e/workspace-switcher.spec.ts` (real scoped rescan
+against a monorepo-shaped fixture, asserts `report.scope` and the tree both
+narrow), `tests/e2e/resizable.spec.ts` (drag-to-resize and pane-collapse both
+persist across a reload), `tests/e2e/production-mode.spec.ts` (the new
+sidebar badge below).
+
+- **Sidebar "Production" badge** (new, this task): `Report.production` has
+  existed since v0.3 Task 1's `--production` CLI flag, but nothing in the UI
+  ever surfaced it — found while dogfooding this task's own mandatory
+  `--production` boot, whose brief assumed a badge already existed. Added
+  next to `GitFooter`'s "Scanned <time>" stamp. See the README's
+  `--production` gotcha below for what else this dogfood run turned up.
+- **Tree expansion seed-delta** (new, this task): a rescan that introduces a
+  brand-new top-level directory used to render it collapsed by default (the
+  one-time expansion seed had already fired and never re-runs) — carried over
+  from the v0.3 Task 2 review as a "dogfood-check in T6" item. Implemented
+  the cheap fix rather than just documenting it: `state/ui.ts`'s new
+  `expandDirs` action additively merges paths a rescan introduces that
+  weren't present at the last look, tracked off the raw (pre search/filter)
+  issue list so toggling a chip or typing a search term can never be mistaken
+  for a rescan (`components/code/TreeView.tsx`'s tree-change effect).
+- **`--production` mode dependency false-positive** (dogfood finding, not
+  fixable in knip-gui): booting this repo's own `node dist/cli.js --dir .
+  --production` reports all 19 of `client/`'s runtime dependencies as
+  unused, because knip's production mode doesn't traverse past
+  `client/src/main.tsx` on this project's layout (confirmed via `knip
+  --production --trace-file client/src/App.tsx` → "No exports found", vs. a
+  full reachability trace in normal mode). knip-gui just threads
+  `--production` straight through to real knip, so this isn't a knip-gui
+  bug — documented prominently in the README as a gotcha for anyone running
+  `--production` against a similarly-shaped (bundler-driven, non-workspace
+  client subdirectory) project.
+- Packages page's `lsof`-binary false positive (see the still-open note
+  below) now shows **3** occurrences instead of 1 — the two new e2e specs
+  above reuse the existing stray-server-reaping pattern (`lsof -ti :<port>`)
+  from `scripts/e2e-fixture.ts`. Same non-issue, just more instances of it;
+  still not worth a permanent ignore entry.
+- Walked every page again (Dashboard, Code, Packages, Ignored, Activity)
+  against this repo's own report in both `--production` and normal mode,
+  both themes — ran a real multi-file fix (two files, one export + one type)
+  through the Review page on a throwaway `dogfood-tmp` branch, committed
+  through the Review page's own commit bar (verified sha `4d88941` via `git
+  show --stat`), ran a second fix and deliberately Skipped its commit bar,
+  then committed that one separately via the sidebar footer's "N uncommitted
+  files" affordance (verified sha `ab9f1ca`) — both commit affordances (the
+  Review page's and the footer's) exercised in the same session, Activity
+  page logged all 4 entries correctly. No new papercuts found beyond the two
+  items above; switched back to `feat/v03-review` and deleted `dogfood-tmp`
+  per protocol.
+- The "app appeared stuck in a disabled/busy state for 10+ seconds after an
+  early modal dismissal" item from the old Task 7 dogfood findings (below) no
+  longer applies to the current app: `ActionModal` (the component that bug
+  was about) doesn't exist anymore — Task 3 of the v0.3 plan replaced it with
+  the dedicated Review page, which doesn't have an equivalent "dismiss
+  mid-flow" gesture (Escape is explicitly a no-op while Review is open, per
+  its own e2e coverage). Marking as superseded rather than re-verifying a
+  code path that's gone.
 
 ## Delivered in Task 7 (polish + dogfood)
 
@@ -37,45 +99,32 @@ code; status notes are inline where something changed.
 
 ## Dogfood findings (Task 7 — built CLI run against this repo's own code)
 
-- `client/src/components/ui/scroll-area.tsx` and `tabs.tsx` are
-  genuinely-dead vendored shadcn primitives (zero imports anywhere).
-  Confirmed via the new `knip.json` and live-fixed via the app's own Fix
-  (delete-file) flow on a throwaway branch (`dogfood-tmp`) specifically to
-  verify the apply-through-commit round trip; the branch was discarded per
-  the dogfood protocol once verified, so both files are still present here.
-  Trivial follow-up: delete them for real in a small cleanup PR.
-- **Real gap found live:** once a Fix is applied, the `ActionModal`'s inline
-  Commit step is the *only* place in the UI that can commit it. Dismissing
-  the modal first (Close / Escape / backdrop click) instead of clicking
-  Commit leaves the fix applied-but-uncommitted with no warning, and there is
-  no other in-app affordance to commit it later — the user must trigger
-  another fix/ignore/sweep flow (whose own Commit step only stages *that*
-  flow's just-fixed paths — confirmed live, it correctly warned "Your working
-  tree also has 1 other uncommitted change(s)") or fall back to git directly.
-  Follow-up: either a persistent "commit N uncommitted files" action in
-  `GitFooter`, or block modal dismissal until Skip/Commit is chosen
-  explicitly (Skip already exists as the intentional escape hatch; the gap is
-  that Close/Escape/backdrop behave like an unlabeled Skip with no way back).
-- Observed once, not root-caused: after that early modal dismissal, the app
-  appeared stuck in a disabled/busy state for 10+ seconds — a direct `curl`
-  to `/api/report` showed `status:"ready"` with the fresh post-fix report
-  well before the UI reflected it; only a full page reload recovered. May be
-  related to dismissing the modal mid-flow rather than a universal bug on
-  every apply. Flagged for follow-up investigation.
+- ~~`client/src/components/ui/scroll-area.tsx` and `tabs.tsx` are
+  genuinely-dead vendored shadcn primitives.~~ **Delivered**: both files are
+  gone from the tree — the "small cleanup PR" this item asked for happened.
+- ~~**Real gap found live:** once a Fix is applied, the `ActionModal`'s inline
+  Commit step is the *only* place in the UI that can commit it.~~
+  **Delivered** (v0.3 Task 3 replaced `ActionModal` with the Review page;
+  v0.3 Task 5 added the persistent "N uncommitted files" `GitFooter` action
+  this item's follow-up proposed) — both the Review page's docked commit bar
+  and the sidebar footer's standing affordance now exist, and Task 6
+  exercised both live in the same dogfood session (see above).
+- ~~Observed once, not root-caused: after that early modal dismissal, the app
+  appeared stuck in a disabled/busy state for 10+ seconds.~~ **Superseded**:
+  the modal this was about no longer exists (see above) — not re-verified
+  since there's no equivalent code path left to check.
 - Packages page correctly flags `lsof` (invoked via `execFile` in
   `scripts/e2e-fixture.ts` for a port-liveness check) as an "unused binary" —
   a legitimate knip false positive for system utilities that aren't npm
   dependencies; not fixable through the app (binaries have no fix mode) and
-  not worth a permanent ignore entry for one occurrence. Noted for awareness.
-- Activity page's own copy ("Session only — clears on restart") is slightly
-  imprecise — the log is a client-only zustand store
-  (`client/src/state/activity.ts`), so it clears on any full page
-  reload/navigation, not only a server restart. Low-priority copy fix.
-- Commit-message pluralization: the Fix flow's default commit message read
-  "chore(knip): remove 1 files" for a single file — the same gap as the
-  "Pluralization" item below, now also confirmed live in the generated
-  message template (`client/src/components/flows/CommitPanel.tsx`). Rolled
-  into that existing item rather than listed twice.
+  not worth a permanent ignore entry. Still open — now 3 occurrences (see
+  Task 6 entry above).
+- ~~Activity page's own copy ("Session only — clears on restart") is slightly
+  imprecise.~~ **Delivered** (v0.3 Task 5): now reads "clears when the page
+  reloads."
+- ~~Commit-message pluralization: the Fix flow's default commit message read
+  "chore(knip): remove 1 files" for a single file.~~ **Delivered** — see the
+  "Pluralization" item below (same fix covers both).
 - Filter-chip counts (Task 3 review carryover): confirmed live that an OFF
   chip shows the count it *would* reveal, scoped only by search, not by which
   chips are enabled (`client/src/components/code/FilterChips.tsx`,
@@ -90,19 +139,29 @@ code; status notes are inline where something changed.
 
 ## UX
 
-- Code pane shows cached pre-apply content when an apply touches the open file —
-  invalidate the file query on rescan (`client/src/state/queries.ts`). Still open.
-- Modal title reads "Ignore 0 issues" on the results step (recomputes from live
-  selection after pruning) — freeze the count at plan time (`ActionModal.tsx`).
-  Still open.
-- Empty source lines render 0-height spans, hiding their line numbers (`index.css`).
-  Still open.
-- Pluralization: "1 exports" / "1 files" in summaries and badges (`selection.ts`),
-  and in the Fix flow's generated commit message (`CommitPanel.tsx`). Still open.
-- Tree expand/collapse state resets when passing through a table facet — lift
-  expansion state to App. The original "table facet" toggle is gone (Code/Packages
-  are now separate pages) but the root cause reproduces via page navigation
-  instead (`TreeView.tsx`'s expansion state is still local, not lifted). Still open.
+- ~~Code pane shows cached pre-apply content when an apply touches the open
+  file.~~ **Delivered** (v0.3 Task 4): every fix/ignore/sweep mutation
+  invalidates the whole `['file']` query-key prefix on settle
+  (`invalidateFileQueries` in `client/src/state/queries.ts`).
+- ~~Modal title reads "Ignore 0 issues" on the results step (recomputes from
+  live selection after pruning).~~ **Delivered**: `ActionModal` is gone; the
+  Review page's `ReviewRequest.frozenCount`/`summary` (`client/src/state/ui.ts`)
+  are frozen at `startReview` time specifically to fix this class of bug.
+- ~~Empty source lines render 0-height spans, hiding their line numbers.~~
+  **Delivered** (v0.3 Task 4): `min-height` on `.shiki code .line`
+  (`client/src/index.css`) — confirmed live during Task 6 dogfood (opened a
+  700-line real file with a blank line mid-scroll; its gutter number rendered
+  correctly).
+- ~~Pluralization: "1 exports" / "1 files" in summaries and badges, and in the
+  Fix flow's generated commit message.~~ **Delivered** (v0.3 Task 2/5):
+  `client/src/lib/pluralize.ts`, used by selection summaries and both
+  `CommitBar`'s and `CommitDialog`'s generated messages — confirmed live
+  during Task 6 dogfood ("chore(knip): commit 1 file", singular, not "1
+  files").
+- ~~Tree expand/collapse state resets when passing through a table facet.~~
+  **Delivered** (v0.3 Task 2): `expandedDirs` lives in `state/ui.ts`, not
+  local component state, and survives page navigation. Task 6 went further
+  and fixed the seed-delta follow-up too (see above).
 - Overview quick actions from the spec ("fix all unused deps in <ws>" pre-filling
   the cart) — plan-approved narrowing, revisit.
 - Table row-click preview (package.json context / unresolved import site) —
@@ -118,15 +177,27 @@ code; status notes are inline where something changed.
 
 ## Engine / server
 
-- Coerce string-form `ignore` knip config to array instead of rejecting
-  (`src/ignore/config-writer.ts`).
+- ~~Coerce string-form `ignore` knip config to array instead of rejecting.~~
+  **Delivered** (v0.3 Task 1): `src/ignore/config-writer.ts`'s addIgnores
+  coerces an existing string-form `ignore` glob into the first array element
+  before appending.
 - Defensive parse-error check before editing pre-malformed JSON configs.
 - PlanStore size cap / TTL for never-applied plans.
-- Sweep endpoint server-side latch (client serializes today).
+- ~~Sweep endpoint server-side latch (client serializes today).~~
+  **Delivered** (v0.3 Task 1): `src/server/routes-fix.ts`'s `registerFixRoutes`
+  now has a synchronous `sweeping` boolean latch (set before the route's
+  first `await`, cleared in `finally`) mirroring `/api/scan`'s own
+  check-then-latch pattern.
 - Tighten Origin check to the server's exact origin (port) now that the SPA origin
   is fixed.
-- `close()` doesn't reap an in-flight knip child process.
-- `--port abc` prints a raw stack instead of a friendly message.
+- ~~`close()` doesn't reap an in-flight knip child process.~~ **Delivered**
+  (v0.3 Task 1): `src/cli.ts`'s `close()` calls `store.abortActiveScan()`
+  (which aborts the active scan's `AbortSignal`, killing its `execFile`
+  child) before shutting the HTTP server down.
+- ~~`--port abc` prints a raw stack instead of a friendly message.~~
+  **Delivered** (v0.3 Task 1): `src/cli.ts` validates `--port` synchronously
+  before calling `startCli` — prints `invalid --port: <value>` and exits 1,
+  no stack trace.
 - maxBuffer overflow indistinguishable from knip crash in error code.
 - Monorepo workspace-scoped ignore lacks a real-knip e2e (unit-verified against
   knip source).
@@ -137,3 +208,18 @@ code; status notes are inline where something changed.
 
 Trash-instead-of-delete · PR creation via `gh` · watch mode · git-blame age of dead
 code · export-usage heatmap · per-issue fix-mode overrides in the modal.
+
+## v0.3 final-review findings (all minor, post-merge candidates)
+
+- Cancel/Done from Review clears the previously-open Code file (`ui.ts` navigate
+  always overwrites openFile) — restore it on return.
+- Navigating away mid-applying skips the activity-log effect, so CommitDialog
+  later shows those files as "not changed by knip-gui" (tiny window).
+- CommitDialog unmounts abruptly (no Done state) when a commit cleans the whole
+  tree — success toast still shows.
+- `/api/scan` doesn't check the sweeping latch (scan can start during a sweep's
+  child-process phase; client serializes via useBusy).
+- Cancel-after-preview orphans the compiled plan server-side (feeds the existing
+  PlanStore cap/TTL item).
+- Seed-delta TreeView diff logic untested at component level; Production badge
+  lacks tooltip and uses secondary variant (spec said amber).

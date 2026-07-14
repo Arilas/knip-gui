@@ -22,6 +22,7 @@ import type { Issue } from '../../../../src/core/types.js';
 import { CODE_TYPES, filterIssues } from '../../lib/filters.js';
 import { useSelectionStore } from '../../state/selection.js';
 import { useUiStore } from '../../state/ui.js';
+import { SelectionDock } from '../SelectionDock.js';
 import { CodePane } from '../code/CodePane.js';
 import { TreeView } from '../code/TreeView.js';
 import { Button } from '../ui/button.js';
@@ -39,6 +40,7 @@ export function CodePage({ issues }: CodePageProps) {
   const codeSearch = useUiStore((s) => s.codeSearch);
   const setCodeSearch = useUiStore((s) => s.setCodeSearch);
   const openFile = useUiStore((s) => s.openFile);
+  const openFileNonce = useUiStore((s) => s.openFileNonce);
   const navigate = useUiStore((s) => s.navigate);
 
   const selected = useSelectionStore((s) => s.selected);
@@ -75,52 +77,62 @@ export function CodePage({ issues }: CodePageProps) {
   }
 
   return (
-    <ResizablePanelGroup
-      orientation="horizontal"
-      className="min-h-0 flex-1"
-      defaultLayout={defaultLayout}
-      onLayoutChanged={onLayoutChanged}
-    >
-      <ResizablePanel id="code-tree" defaultSize={35} minSize={20} className="flex min-h-0 flex-col">
-        <TreeView
-          issues={codeIssues}
-          enabledTypes={codeFilters}
-          onToggleFilter={toggleCodeFilter}
-          search={codeSearch}
-          onSearchChange={setCodeSearch}
-          selected={selected}
-          onToggleIds={toggle}
-          onAddFileFiltered={addFileFiltered}
-          onOpenFile={onOpenFile}
-          paneCollapsed={paneCollapsed}
-          onTogglePane={toggleCodePanel}
-        />
-      </ResizablePanel>
-
-      <ResizableHandle withHandle />
-
-      <ResizablePanel
-        id="code-pane"
-        defaultSize={65}
-        minSize={20}
-        collapsible
-        collapsedSize={0}
-        panelRef={codePanelRef}
-        onResize={(size) => setPaneCollapsed(size.inPixels === 0)}
-        className="flex min-h-0 flex-col"
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
       >
-        {openFile && (
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
-            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={openFile}>
-              {openFile}
-            </span>
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="Close file panel" onClick={closeFile}>
-              <X className="size-4" />
-            </Button>
-          </div>
-        )}
-        <CodePane filePath={openFile ?? null} issues={openFileIssues} selected={selected} onToggleIds={toggle} />
-      </ResizablePanel>
-    </ResizablePanelGroup>
+        <ResizablePanel id="code-tree" defaultSize={35} minSize={20} className="flex min-h-0 flex-col">
+          <TreeView
+            issues={codeIssues}
+            enabledTypes={codeFilters}
+            onToggleFilter={toggleCodeFilter}
+            search={codeSearch}
+            onSearchChange={setCodeSearch}
+            selected={selected}
+            onToggleIds={toggle}
+            onAddFileFiltered={addFileFiltered}
+            onOpenFile={onOpenFile}
+            paneCollapsed={paneCollapsed}
+            onTogglePane={toggleCodePanel}
+          />
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
+
+        <ResizablePanel
+          id="code-pane"
+          defaultSize={65}
+          minSize={20}
+          collapsible
+          collapsedSize={0}
+          panelRef={codePanelRef}
+          onResize={(size) => setPaneCollapsed(size.inPixels === 0)}
+          className="flex min-h-0 flex-col"
+        >
+          {openFile && (
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={openFile}>
+                {openFile}
+              </span>
+              <Button type="button" variant="ghost" size="icon-sm" aria-label="Close file panel" onClick={closeFile}>
+                <X className="size-4" />
+              </Button>
+            </div>
+          )}
+          <CodePane
+            filePath={openFile ?? null}
+            issues={openFileIssues}
+            selected={selected}
+            onToggleIds={toggle}
+            openFileNonce={openFileNonce}
+          />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+
+      <SelectionDock issues={issues} />
+    </div>
   );
 }

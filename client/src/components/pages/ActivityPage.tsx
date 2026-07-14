@@ -1,8 +1,10 @@
 // Activity page (Task 5, UX overhaul): a simple newest-first list of this
 // session's fix/ignore/sweep/commit/ignore-remove outcomes, read straight off
 // state/activity.ts's zustand store — no server round-trip, since the log
-// itself is session-local (cleared on restart, which the page states
-// explicitly per the design spec).
+// itself is session-local (cleared when the page reloads, which the page
+// states explicitly per the design spec — Task 5, v0.3 papercuts fixed the
+// copy's original "clears on restart" wording, which read as if it meant the
+// server process rather than a browser reload).
 import type { ComponentType } from 'react';
 import { EyeOff, GitCommit, History, Sparkles, Undo2, Wrench } from 'lucide-react';
 import { formatRelativeTime } from '../../lib/activity.js';
@@ -30,7 +32,7 @@ export function ActivityPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
       <h2 className="mb-1 text-sm font-semibold">Activity</h2>
-      <p className="mb-3 text-xs text-muted-foreground">Session only — clears on restart.</p>
+      <p className="mb-3 text-xs text-muted-foreground">Session only — clears when the page reloads.</p>
 
       {entries.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">

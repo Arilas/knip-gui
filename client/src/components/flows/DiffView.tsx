@@ -1,17 +1,19 @@
-// Per-file collapsible unified-diff block for ActionModal's preview step
-// (Task 5): shiki-highlights the diff text itself (lang 'diff', via
-// highlighter.ts's highlightDiff) rather than re-diffing/tokenizing the
-// before/after source, since the server already rendered a unified diff
-// string (src/fix/diff.ts's renderDiff) and shipped just that.
+// Per-file collapsible unified-diff block, originally built for
+// ActionModal's preview step (Task 5): shiki-highlights the diff text itself
+// (lang 'diff', via highlighter.ts's highlightDiff) rather than re-diffing/
+// tokenizing the before/after source, since the server already rendered a
+// unified diff string (src/fix/diff.ts's renderDiff) and shipped just that.
 //
-// Moved from components/ to components/flows/ (Task 6, UX overhaul) alongside
-// ActionModal/CommitPanel's move onto shadcn Dialog — this component's own
-// markup is unchanged (it's plain content rendered INSIDE a dialog, not a
-// dialog itself), only its file path and relative imports moved.
+// ActionModal + CommitPanel were deleted in Task 3 (v0.3) — their preview
+// step's diff rendering moved to the Review page (components/pages/
+// ReviewPage.tsx), which reuses this component unchanged (still plain
+// content, not a dialog itself) to show whichever single file the FileRail's
+// selected row points at.
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { DiffEntry } from '../../lib/apply-flow.js';
 import { highlightDiff } from '../../lib/highlighter.js';
+import { Button } from '../ui/button.js';
 
 export interface DiffViewProps {
   diff: DiffEntry;
@@ -30,23 +32,24 @@ export function DiffView({ diff, defaultOpen = true }: DiffViewProps) {
 
   return (
     <div
-      className="overflow-hidden rounded border border-gray-200 dark:border-gray-800"
+      className="overflow-hidden rounded border border-border"
       data-testid={`diff-view-${diff.filePath}`}
     >
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 bg-gray-50 px-3 py-1.5 text-left font-mono text-xs dark:bg-gray-900"
+        className="h-auto w-full justify-start gap-2 rounded-none bg-muted px-3 py-1.5 text-left font-mono text-xs"
       >
-        <span className="w-3 shrink-0 text-gray-500 dark:text-gray-400">{open ? '▾' : '▸'}</span>
+        <span className="w-3 shrink-0 text-muted-foreground">{open ? '▾' : '▸'}</span>
         <span className="min-w-0 flex-1 truncate">{diff.filePath}</span>
-      </button>
+      </Button>
 
       {open && (
-        <div className="diff-view-html border-t border-gray-200 dark:border-gray-800">
+        <div className="diff-view-html border-t border-border">
           {highlightQuery.isLoading && (
-            <p className="p-2 text-xs text-gray-500 dark:text-gray-400">Highlighting…</p>
+            <p className="p-2 text-xs text-muted-foreground">Highlighting…</p>
           )}
           {highlightQuery.error && (
             <pre className="overflow-x-auto whitespace-pre p-2 font-mono text-xs">{diff.diff}</pre>

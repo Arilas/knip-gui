@@ -210,6 +210,70 @@ describe('gitCommitPaths', () => {
     expect(after.dirtyFiles).toEqual(['untouched.txt']);
   });
 
+  it('never sweeps a PRE-STAGED unrelated file into the commit (pathspec-scoped commit)', async () => {
+    // Regression pin (review finding, live-reproduced): the old implementation
+    // did `git add -- <paths>` followed by a BARE `git commit`, which commits
+    // the ENTIRE index — so a file the user staged themselves (mid-edit on
+    // something unrelated, left unchecked in CommitDialog) silently landed in
+    // knip-gui's commit under knip-gui's message. The commit must be
+    // pathspec-scoped so only the requested paths are committed.
+    const dir = await makeTmpDir('knip-gui-git-prestaged-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'base.txt'), 'base', 'utf8');
+    await commitAll(dir, 'initial');
+
+    // The user's own in-progress work: staged, but NOT passed to gitCommitPaths.
+    await writeFile(join(dir, 'user-staged.txt'), 'user mid-edit', 'utf8');
+    await git(dir, ['add', 'user-staged.txt']);
+
+    // The file knip-gui actually wants to commit (a NEW untracked file — also
+    // covers the "add before pathspec-commit" requirement, since a pathspec
+    // commit of an untracked file fails without the prior `git add`).
+    await writeFile(join(dir, 'knip.txt'), 'knip change', 'utf8');
+
+    const result = await gitCommitPaths(dir, ['knip.txt'], 'knip-only commit');
+    expect(result.sha).toMatch(/^[0-9a-f]{40}$/);
+
+    const { stdout: showFiles } = await git(dir, ['show', '--name-only', '--pretty=format:', 'HEAD']);
+    expect(showFiles.split('\n').filter(Boolean)).toEqual(['knip.txt']);
+
+    // The user's pre-staged file must survive the commit exactly as they left
+    // it: still staged (in the index), still uncommitted.
+    const { stdout: staged } = await git(dir, ['diff', '--cached', '--name-only']);
+    expect(staged.split('\n').filter(Boolean)).toEqual(['user-staged.txt']);
+    const after = await gitStatus(dir);
+    expect(after.dirtyFiles).toEqual(['user-staged.txt']);
+  });
+
+  it('pathspec-scopes a DELETION too, leaving a pre-staged unrelated file staged-but-uncommitted', async () => {
+    const dir = await makeTmpDir('knip-gui-git-prestaged-del-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'base.txt'), 'base', 'utf8');
+    await writeFile(join(dir, 'gone.txt'), 'delete me', 'utf8');
+    await commitAll(dir, 'initial');
+
+    await writeFile(join(dir, 'user-staged.txt'), 'user mid-edit', 'utf8');
+    await git(dir, ['add', 'user-staged.txt']);
+
+    // The requested path is a deletion this time (`git add` of a removed path
+    // stages the removal; the pathspec commit must then include it).
+    await unlink(join(dir, 'gone.txt'));
+
+    const result = await gitCommitPaths(dir, ['gone.txt'], 'delete gone.txt only');
+    expect(result.sha).toMatch(/^[0-9a-f]{40}$/);
+
+    const { stdout: showFiles } = await git(dir, ['show', '--name-only', '--pretty=format:', 'HEAD']);
+    expect(showFiles.split('\n').filter(Boolean)).toEqual(['gone.txt']);
+    // The deletion actually landed: gone.txt is no longer tracked at HEAD.
+    const { stdout: lsTree } = await git(dir, ['ls-tree', '--name-only', 'HEAD']);
+    expect(lsTree.split('\n').filter(Boolean)).not.toContain('gone.txt');
+
+    const { stdout: staged } = await git(dir, ['diff', '--cached', '--name-only']);
+    expect(staged.split('\n').filter(Boolean)).toEqual(['user-staged.txt']);
+    const after = await gitStatus(dir);
+    expect(after.dirtyFiles).toEqual(['user-staged.txt']);
+  });
+
   it('throws GitError carrying the useful "nothing to commit" detail (git writes it to STDOUT)', async () => {
     const dir = await makeTmpDir('knip-gui-git-nothing-');
     await initRepo(dir);

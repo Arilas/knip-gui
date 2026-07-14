@@ -158,6 +158,29 @@ describe('scan + report + file', () => {
     expect((await app.request('/api/file?path=src/nope.ts', { headers: h })).status).toBe(404);
   });
 
+  it('threads production:true through to the scan call and the resulting report', async () => {
+    const calls: Array<{ workspace?: string; production?: boolean }> = [];
+    const { app, token, store } = createServer({
+      projectDir: single,
+      production: true,
+      scan: async (_dir, opts = {}) => {
+        calls.push({ workspace: opts.workspace, production: opts.production });
+        return fakeRaw;
+      },
+    });
+    const h = { 'x-knip-gui-token': token };
+    await app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+    expect(calls).toEqual([{ workspace: undefined, production: true }]);
+    expect(store.report!.production).toBe(true);
+  });
+
+  it('defaults production to false and still records it on the report', async () => {
+    const { app, token, store } = makeServer();
+    const h = { 'x-knip-gui-token': token };
+    await app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+    expect(store.report!.production).toBe(false);
+  });
+
   it('rejects a concurrent scan while one is in flight', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => {

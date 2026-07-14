@@ -3,15 +3,19 @@
 // copy of tests/fixtures/single (see scripts/e2e-fixture.ts + this repo's
 // playwright.config.ts webServer command). Mutates that copy: selects the
 // `unusedHelper` unused export (src/used.ts) and the `orphan.ts` unused file,
-// fixes both, waits for the background rescan to clear them from the tree,
-// then commits. See playwright.config.ts's doc comment for why this and
-// ignore.spec.ts are independent of each other (different target issues) but
-// still run serially (workers: 1) against the one shared fixture/server.
+// fixes both through the Review page (Task 3, v0.3 — replaces the old
+// ActionModal-driven flow this spec used to pin), waits for the background
+// rescan to clear them from the tree, then commits. See playwright.config.ts's
+// doc comment for why this and ignore.spec.ts are independent of each other
+// (different target issues) but still run serially (workers: 1) against the
+// one shared fixture/server.
 import { expect, test } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial' });
 
-test('select unused export + unused file, fix, rescan clears them, commit', async ({ page }) => {
+test('select unused export + unused file, fix through the Review page, rescan clears them, commit', async ({
+  page,
+}) => {
   await page.goto('/');
   await expect(page).toHaveTitle('knip-gui');
 
@@ -36,73 +40,65 @@ test('select unused export + unused file, fix, rescan clears them, commit', asyn
 
   await page.getByTestId('tree-file-src/orphan.ts').getByRole('checkbox').check();
 
-  await expect(page.getByTestId('selection-count')).toHaveText('2 selected');
+  await expect(page.getByTestId('selbar-count')).toHaveText('2 selected');
 
-  await page.getByRole('button', { name: 'Fix…' }).click();
+  await page.getByTestId('selbar-fix').click();
 
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
-
-  // Modal-centering regression pin (Task 6, UX overhaul): ActionModal used to
-  // render as a native <dialog>, which — combined with this app's Tailwind
-  // preflight reset — didn't reliably center itself; it's now shadcn's Dialog
-  // (fixed + top-1/2/left-1/2/-translate-x/y-1/2), which centers by
-  // construction. Assert it landed roughly centered horizontally (within 5%
-  // of true center — "roughly" since translate(-50%) rounds to whole pixels)
-  // and comfortably below the very top of the viewport (a modal pinned to
-  // y=0 would indicate the centering transform silently isn't applying).
-  const dialogBox = await dialog.boundingBox();
-  expect(dialogBox).not.toBeNull();
-  const viewport = page.viewportSize();
-  expect(viewport).not.toBeNull();
-  if (dialogBox && viewport) {
-    const dialogCenterX = dialogBox.x + dialogBox.width / 2;
-    const viewportCenterX = viewport.width / 2;
-    expect(Math.abs(dialogCenterX - viewportCenterX)).toBeLessThan(viewport.width * 0.05);
-    expect(dialogBox.y).toBeGreaterThan(40);
-  }
+  // Review page opened directly (no modal) — SelectionDock's Fix… hands off
+  // to state/ui.ts's startReview, landing on the 'options' step.
+  const reviewPage = page.getByTestId('review-page');
+  await expect(reviewPage).toBeVisible();
+  await expect(page.getByTestId('review-header')).toContainText('Fix 2 issues');
 
   // orphan.ts's only fix mode is delete-file, so the options step shows the
-  // file-deletion confirm checkbox and blocks Next until it's checked.
+  // file-deletion confirm checkbox and blocks "Preview changes" until it's
+  // checked.
   await page.getByLabel('I understand these files will be permanently deleted.').check();
-  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByTestId('review-preview').click();
 
-  // Preview step: exactly 2 diffs (src/used.ts strip-export, src/orphan.ts delete).
-  await expect(page.locator('[data-testid^="diff-view-"]')).toHaveCount(2, { timeout: 10_000 });
-  // Not just visible — the diff CONTENT must show the right change: the
-  // used.ts diff touches the unusedHelper declaration, and the orphan.ts
-  // diff is a whole-file deletion (renderDiff diffs against empty content
-  // when patch.kind === 'delete' — see src/fix/diff.ts), so its single line
-  // of content shows up as a `-` removal line.
-  await expect(page.getByTestId('diff-view-src/used.ts')).toContainText('unusedHelper');
+  // Preview step: exactly 2 rail rows (src/used.ts strip-export, src/orphan.ts
+  // delete), each showing ONE diff at a time in the main area (no more
+  // ActionModal's stacked-diffs list — see FileRail.tsx's doc comment).
+  const usedRow = page.getByTestId('review-rail-row-src/used.ts');
+  const orphanRow = page.getByTestId('review-rail-row-src/orphan.ts');
+  await expect(usedRow).toBeVisible({ timeout: 10_000 });
+  await expect(orphanRow).toBeVisible();
+
+  // orphan.ts sorts before used.ts, so it's the default-selected row; assert
+  // its diff content (a whole-file deletion — renderDiff diffs against empty
+  // content when patch.kind === 'delete', so its single line of content
+  // shows up as a `-` removal line), then switch to used.ts's diff.
   await expect(page.getByTestId('diff-view-src/orphan.ts')).toContainText('-export const nobodyImportsMe');
+  await usedRow.click();
+  await expect(page.getByTestId('diff-view-src/used.ts')).toContainText('unusedHelper');
 
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('review-apply').click();
 
-  // Results step: both files applied ok.
-  await expect(page.getByTestId('result-status-src/used.ts')).toHaveText('ok', { timeout: 10_000 });
-  await expect(page.getByTestId('result-status-src/orphan.ts')).toHaveText('ok');
+  // Applied step: both rows report ok (sr-only status text on each row).
+  await expect(usedRow).toContainText('applied ok', { timeout: 10_000 });
+  await expect(orphanRow).toContainText('applied ok');
 
-  // Wait for the background rescan to land: the tree (still mounted behind
-  // the open modal) drops both the unusedHelper issue row and the orphan.ts
-  // file row entirely once the fresh report excludes them.
-  await expect(page.getByTestId('tree-issue-exports-unusedHelper')).toHaveCount(0, { timeout: 30_000 });
-  await expect(page.getByTestId('tree-file-src/orphan.ts')).toHaveCount(0, { timeout: 30_000 });
-
-  // Commit panel: prefilled message, commit, sha rendered.
+  // Commit bar: prefilled message, commit, sha rendered.
   const messageBox = page.getByLabel('Commit message');
   await expect(messageBox).toHaveValue(/^chore\(knip\): remove/);
-  await page.getByRole('button', { name: 'Commit', exact: true }).click();
+  await page.getByTestId('review-commit').click();
 
-  const commitSha = page.getByTestId('commit-sha');
+  const commitSha = page.getByTestId('review-commit-sha');
   await expect(commitSha).toBeVisible();
   await expect(commitSha).toContainText(/[0-9a-f]{7,40}/);
 
-  // Escape at the results step closes the modal (Radix Dialog's Escape
-  // handling isn't blocked here since flow.status isn't 'applying' — see
-  // ActionModal.tsx's onEscapeKeyDown; this was flagged untestable via the
-  // Browser pane in Task 5 since it needs a real trusted key event, which
-  // Playwright can send).
+  // Escape never dismisses the Review page (it's a page, not a dialog) —
+  // pin this before actually leaving via Done.
   await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
+  await expect(reviewPage).toBeVisible();
+
+  await page.getByTestId('review-done').click();
+  await expect(reviewPage).toHaveCount(0);
+
+  // Back on Code: wait for the background rescan to land. unusedHelper was
+  // src/used.ts's ONLY code-type issue in this fixture, so once it's fixed
+  // the whole FILE ROW disappears from the (issues-driven) tree — not just a
+  // gutter badge inside an still-open pane — same as orphan.ts's row.
+  await expect(page.getByTestId('tree-file-src/used.ts')).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId('tree-file-src/orphan.ts')).toHaveCount(0, { timeout: 30_000 });
 });

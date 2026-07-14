@@ -133,9 +133,9 @@ describe('selectionCount', () => {
 });
 
 describe('summaryByType', () => {
-  it('renders a human summary grouped by issue type', () => {
+  it('renders a human, pluralized summary grouped by issue type', () => {
     useSelectionStore.getState().toggle(['a', 'b', 'c']);
-    expect(summaryByType(useSelectionStore.getState(), issues)).toBe('2 exports, 1 files');
+    expect(summaryByType(useSelectionStore.getState(), issues)).toBe('2 exports, 1 file');
   });
 
   it('is empty when nothing is selected', () => {
@@ -144,6 +144,11 @@ describe('summaryByType', () => {
 
   it('ignores selected ids that no longer match a known issue', () => {
     useSelectionStore.getState().toggle(['a', 'ghost']);
-    expect(summaryByType(useSelectionStore.getState(), issues)).toBe('1 exports');
+    expect(summaryByType(useSelectionStore.getState(), issues)).toBe('1 export');
+  });
+
+  it('singularizes a lone match instead of leaving the raw plural type name', () => {
+    useSelectionStore.getState().toggle(['c']);
+    expect(summaryByType(useSelectionStore.getState(), issues)).toBe('1 file');
   });
 });

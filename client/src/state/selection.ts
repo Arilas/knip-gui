@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import type { FixMode, Issue, IssueType } from '../../../src/core/types.js';
 import { isActionable } from '../lib/filters.js';
+import { pluralizeType } from '../lib/pluralize.js';
 
 export interface SelectionState {
   selected: Set<string>;
@@ -71,7 +72,13 @@ export function selectionCount(state: Pick<SelectionState, 'selected'>): number 
 }
 
 // "12 exports, 3 files" — sorted by descending count (ties broken
-// alphabetically by type name) so the biggest buckets read first.
+// alphabetically by type name) so the biggest buckets read first. Each
+// segment is pluralized via lib/pluralize.ts's pluralizeType (Task 2, v0.3)
+// rather than the raw IssueType string — "1 files"/"1 namespaceMembers" (the
+// old, un-pluralized-and-un-humanized output) reads wrong at count 1 and
+// leaks camelCase type keys into user-facing copy; this is also what
+// SelectionDock's per-type badges and commit messages (defaultCommitMessage,
+// lib/apply-flow.ts) read.
 export function summaryByType(state: Pick<SelectionState, 'selected'>, issues: Issue[]): string {
   const issueById = new Map(issues.map((i) => [i.id, i]));
   const counts = new Map<IssueType, number>();
@@ -82,6 +89,6 @@ export function summaryByType(state: Pick<SelectionState, 'selected'>, issues: I
   }
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([type, n]) => `${n} ${type}`)
+    .map(([type, n]) => pluralizeType(n, type))
     .join(', ');
 }

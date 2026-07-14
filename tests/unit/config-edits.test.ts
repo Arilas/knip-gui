@@ -163,6 +163,39 @@ describe('addIgnores', () => {
     );
   });
 
+  it('coerces an existing string-form "ignore" value into an array with the new value appended', () => {
+    // knip's own schema allows `ignore` to be a single glob string rather than
+    // an array — addIgnores must widen it into [existing, ...new] instead of
+    // rejecting it as "expected an array".
+    const content = '{\n  "ignore": "src/orphan.ts"\n}\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignore', value: 'src/other.ts' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    expect(expectOk(result)).toBe('{\n  "ignore": [\n    "src/orphan.ts",\n    "src/other.ts"\n  ]\n}\n');
+  });
+
+  it('a string-form "ignore" value equal to the new value is a no-op (byte-exact passthrough)', () => {
+    const content = '{\n  "ignore": "src/orphan.ts"\n}\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignore', value: 'src/orphan.ts' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    expect(expectOk(result)).toBe(content);
+  });
+
+  it('still rejects a string-form "ignoreDependencies" value (array-only per schema)', () => {
+    const content = '{\n  "ignoreDependencies": "left-pad"\n}\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignoreDependencies', value: 'chalk' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    expect(result).toEqual({ ok: false, reason: "expected an array at 'ignoreDependencies', found string" });
+  });
+
+  it('coerces a string-form "ignore" value scoped to a workspace', () => {
+    const content = '{\n  "workspaces": {\n    "packages/app": {\n      "ignore": "src/orphan.ts"\n    }\n  }\n}\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignore', value: 'src/other.ts', workspace: 'packages/app' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    expect(expectOk(result)).toBe(
+      '{\n  "workspaces": {\n    "packages/app": {\n      "ignore": [\n        "src/orphan.ts",\n        "src/other.ts"\n      ]\n    }\n  }\n}\n',
+    );
+  });
+
   it('package.json variant + workspace scoping nests under knip.workspaces[<ws>]', () => {
     const content = '{\n  "name": "pkg",\n  "knip": {}\n}\n';
     const edits: IgnoreEdit[] = [{ kind: 'ignore', value: '**/fixtures/**', workspace: 'packages/app' }];

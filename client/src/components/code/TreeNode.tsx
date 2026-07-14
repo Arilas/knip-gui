@@ -9,9 +9,10 @@
 // readable.
 import type { ComponentType } from 'react';
 import { useEffect, useRef } from 'react';
-import { File, FileCode2, FileJson, FileText, Folder, FolderOpen } from 'lucide-react';
+import { File, FileCode2, FileJson, FileText, FlaskConical, Folder, FolderOpen } from 'lucide-react';
 import type { Issue, IssueType } from '../../../../src/core/types.js';
-import { isFixable, isIgnorable, typeLabel } from '../../lib/filters.js';
+import { isFixable, isIgnorable, isLikelyTestFile, typeLabel } from '../../lib/filters.js';
+import { pluralizeType } from '../../lib/pluralize.js';
 import {
   collectFileIssues,
   idsToToggleForNode,
@@ -60,11 +61,15 @@ export const TYPE_BADGE_LABELS: Record<IssueType, string> = {
   cycles: 'cycle',
 };
 
+// Pluralized ("2 exports, 1 file"), not typeLabel()'s always-plural category
+// label ("Unused exports") — see lib/pluralize.ts's doc comment for why
+// those two are kept separate (typeLabel would read as "1 Unused exports"
+// at n=1).
 function countsBreakdown(counts: Partial<Record<IssueType, number>>): string {
   return (Object.entries(counts) as [IssueType, number][])
     .filter(([, n]) => n > 0)
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([type, n]) => `${n} ${typeLabel(type)}`)
+    .map(([type, n]) => pluralizeType(n, type))
     .join(', ');
 }
 
@@ -101,7 +106,12 @@ function CountBadges({
   // badges must never wrap onto a second line: that would spill outside the
   // row's box and visually overlap the next virtualized row. Clip
   // overflowing badges instead of wrapping; the full set is still visible
-  // by widening the window or opening the file.
+  // by widening the window or opening the file. Text is pluralizeType's
+  // count+noun (Task 2, v0.3) rather than TYPE_BADGE_LABELS + a bare
+  // conditional 's' — the old ad hoc suffix was actually wrong for `files`
+  // (TYPE_BADGE_LABELS.files is already the plural 'files', so a singular
+  // count rendered "1 files"); pluralizeType is the single source of truth
+  // for singular/plural per type everywhere a count is shown.
   return (
     <span className="flex min-w-0 shrink flex-nowrap items-center gap-1 overflow-hidden">
       {entries.map(([type, n]) => (
@@ -109,8 +119,7 @@ function CountBadges({
           key={type}
           className="shrink-0 whitespace-nowrap rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground"
         >
-          {n} {TYPE_BADGE_LABELS[type]}
-          {n === 1 ? '' : 's'}
+          {pluralizeType(n, type)}
         </span>
       ))}
     </span>
@@ -122,6 +131,51 @@ function UnusedFileBadge() {
     <span className="shrink-0 whitespace-nowrap rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] leading-none text-amber-900 dark:bg-amber-800 dark:text-amber-100">
       unused file
     </span>
+  );
+}
+
+// Test-file hint (Task 4, v0.3): shown next to an unused-file badge whenever
+// `isLikelyTestFile` (lib/filters.ts) flags the path — knip flagging a whole
+// test file as "unused" is very often just a missing test-runner plugin
+// config rather than genuinely dead code. Shared by TreeNodeRow's file rows
+// below and CodePane's whole-file banner (same icon/copy/link in both
+// places, so the hint reads as one consistent affordance regardless of where
+// the user encounters the issue).
+export function TestFileHint() {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* preventDefault suppresses a subtle side-effect where CodePane's
+            WholeFileBanner renders this inside a <label>: without it, a
+            click here would ALSO toggle the label's wrapped checkbox (the
+            browser's default "click bubbled to label -> activate the
+            associated control" behavior) — this icon is informational only,
+            not another way to (de)select the issue. stopPropagation mirrors
+            TriStateCheckbox's own guard so a click here never also fires the
+            tree row's onOpenFile. */}
+        <FlaskConical
+          className="size-3.5 shrink-0 text-amber-700 dark:text-amber-300"
+          aria-label="Likely a test file"
+          data-testid="test-file-hint"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        />
+      </TooltipTrigger>
+      <TooltipContent>
+        Looks like a test file — knip may be missing your test runner&apos;s config.{' '}
+        <a
+          href="https://knip.dev/reference/plugins"
+          target="_blank"
+          rel="noreferrer"
+          className="underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          docs
+        </a>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -285,6 +339,7 @@ export function TreeNodeRow({
       <FileIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
       <span className="min-w-0 shrink truncate">{node.name}</span>
       {(node.counts.files ?? 0) > 0 && <UnusedFileBadge />}
+      {(node.counts.files ?? 0) > 0 && isLikelyTestFile(node.path) && <TestFileHint />}
       <CountBadges counts={node.counts} excludeFiles />
     </div>
   );

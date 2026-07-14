@@ -106,6 +106,16 @@ export function addIgnores(
     const root = parse(newContent);
     if (root === undefined) return { ok: false, reason: 'invalid-json' };
     const existing = getAtPath(root, path);
+    // knip's own schema allows `ignore` (only `ignore` — not
+    // ignoreDependencies/ignoreBinaries, which are array-only) to be a single
+    // glob string instead of an array. Coerce that string into the first
+    // element of the new array rather than rejecting it as a type mismatch.
+    if (existing !== undefined && typeof existing === 'string' && edit.kind === 'ignore') {
+      if (existing === edit.value) continue; // already ignored — no-op
+      const nextValues = [existing, edit.value];
+      newContent = applyEdits(newContent, modify(newContent, path, nextValues, { formattingOptions }));
+      continue;
+    }
     if (existing !== undefined && !Array.isArray(existing)) {
       return { ok: false, reason: `expected an array at '${path.join('.')}', found ${typeof existing}` };
     }

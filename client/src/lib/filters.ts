@@ -142,6 +142,35 @@ export interface WorkspaceGroup {
   issues: Issue[];
 }
 
+// Test-file heuristic (Task 4, v0.3): a "files" (whole-file-unused) issue on
+// what looks like a test file is very often a false positive — knip just
+// isn't configured with the project's test runner (e.g. no `vitest`/`jest`
+// plugin), so it can't see the runner picking the file up. CodePane's banner
+// and TreeNode's file rows use this to show a hint pointing at knip's plugin
+// docs rather than presenting it as an ordinary "delete this" candidate.
+//
+// Matching is SEGMENT-boundary based, not a bare substring test, specifically
+// to avoid false positives like `src/latest/file.ts` (`latest` contains
+// "test" but isn't the directory `test`) or `attest/file.ts` (same shape) or
+// `contest.ts` (contains "test" but isn't `*.test.*`). The filename check
+// requires the dot-delimited `.test.`/`.spec.`/`.stories.` infix (so
+// `src/test-utils.ts` — "test" isn't dot-delimited there — correctly reads as
+// a negative), and the directory check requires an EXACT path-segment match
+// against a fixed set of conventional test-directory names.
+const TEST_DIR_SEGMENTS = new Set(['__tests__', '__mocks__', 'e2e', 'test', 'tests']);
+const TEST_FILENAME_RE = /\.(test|spec|stories)\.[^./]+$/i;
+
+// Splits on a bare '/' only — safe because knip always emits forward-slash-
+// delimited paths (even on Windows), so there's no backslash case to handle here.
+export function isLikelyTestFile(path: string): boolean {
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length === 0) return false;
+  const filename = segments[segments.length - 1]!;
+  if (TEST_FILENAME_RE.test(filename)) return true;
+  const dirSegments = segments.slice(0, -1);
+  return dirSegments.some((seg) => TEST_DIR_SEGMENTS.has(seg));
+}
+
 // Buckets issues by their `workspace` field for the Packages page (Task 4):
 // one shadcn Table per workspace group. Never fabricates an empty group for a
 // workspace with no issues — only workspaces actually present in `issues`

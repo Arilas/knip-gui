@@ -111,6 +111,25 @@ describe('apply-mutation query invalidation', () => {
     expect(keys).not.toContainEqual(ignoresQueryKey);
   });
 
+  // Task 4 (v0.3) UX backlog item: the code pane kept showing cached
+  // pre-apply file content because nothing ever told react-query's cache
+  // that an apply could have rewritten the currently-open file. Every
+  // mutation that can rewrite source content (fix apply, ignore apply,
+  // ignore-remove apply, sweep) must invalidate the `['file']` query-key
+  // PREFIX — not just the exact `['file', <path>]` entry for whatever
+  // happens to be open — so react-query's default prefix-matching
+  // `invalidateQueries` catches it regardless of which file the apply
+  // actually touched.
+  it.each([
+    ['fix apply', useFixApplyMutation, 'plan-1'],
+    ['ignore apply', useIgnoreApplyMutation, 'plan-1'],
+    ['ignore-remove apply', useIgnoreRemoveApplyMutation, 'plan-1'],
+    ['sweep', useSweepMutation, {}],
+  ] as const)('%s invalidates the file query prefix', async (_label, useHook, arg) => {
+    const keys = await invalidatedKeysAfter(useHook, arg);
+    expect(keys).toContainEqual(['file']);
+  });
+
   it('scan invalidates the report on success', async () => {
     vi.mocked(postScan).mockResolvedValueOnce({ status: 'ready', issueCount: 0 });
     const keys = await invalidatedKeysAfter(useScanMutation, undefined);

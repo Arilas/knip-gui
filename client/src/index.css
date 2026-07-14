@@ -205,6 +205,22 @@
   width: 100%;
   padding-left: 3.5em;
   position: relative;
+  /* Blank source lines (Task 4, v0.3 UX backlog item): shiki emits an EMPTY
+     `<span class="line"></span>` for these — no text node at all. An empty
+     `display: inline-block` box generates no line box of its own, so
+     `line-height` (which only sizes actual line boxes) never applies and the
+     span collapses to 0 height, hiding that row's CSS-counter number
+     entirely and breaking the visual "every line gets a number" contract.
+     `min-height` matching the non-empty-line height (line-height 1.6 * this
+     block's 12px font-size) makes every line — blank or not — occupy the
+     same vertical space, without needing an HTML-side change (a stray
+     `&nbsp;` per blank line) that CodeBlock's `.line`-position measurement
+     (offsetTop/offsetHeight, used for both the gutter-marker overlay and the
+     auto-scroll-to-first-issue effect) would otherwise have to special-case
+     around. Verified this keeps markers aligned below a blank line: the
+     measurement reads the SAME box model this rule affects, so a blank
+     line's real height and its counted height always agree. */
+  min-height: 19.2px;
 }
 
 .code-pane-html .shiki code .line::before {
@@ -219,9 +235,41 @@
 }
 
 /* Gutter marker: a subtle full-width highlight behind any line carrying an
-   issue, independent of the badge overlay CodePane.tsx renders on top. */
-.code-pane-html .shiki code .line.code-pane-flagged-line {
+   issue, independent of the badge overlay CodePane.tsx renders on top.
+   Rendered as its own absolutely-positioned overlay `div` (CodeBlock's
+   `markers` state — same mechanism as the badge overlay), NOT a class
+   toggled on the shiki-injected `.line` span itself: an earlier version did
+   exactly that via direct DOM classList mutation, but that turned out to be
+   silently broken in a production build — a state update in the SAME effect
+   that added the class (`setMarkers`) triggers a follow-up render on which
+   React recommits `dangerouslySetInnerHTML` for the `.code-pane-html` div
+   even though its `html` string is unchanged, replacing the very `.line`
+   nodes the class had just been added to and leaving the highlight invisible
+   with no further effect run to reapply it. Confirmed live by instrumenting
+   `Element.prototype.innerHTML`'s setter — see CodePane.tsx's CodeBlock doc
+   comment for the full trace. A plain React-rendered overlay sidesteps the
+   problem entirely, matching how the badges already worked. */
+.code-pane-flagged-line-bg {
   background-color: rgba(245, 158, 11, 0.14);
+}
+
+/* Auto-scroll pulse ring (Task 4, v0.3): same overlay-div approach as
+   `.code-pane-flagged-line-bg` above (CodeBlock's `pulseMarker` state,
+   cleared via `setTimeout` after the animation's 1.2s duration) rather than
+   a classList mutation on the shiki DOM, for the same reason. A `box-shadow`
+   ring (rather than resizing/repositioning the element) so it never causes
+   layout shift. */
+.code-pane-pulse-line-bg {
+  animation: code-pane-pulse 1.2s ease-out;
+}
+
+@keyframes code-pane-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 0.6em rgba(245, 158, 11, 0);
+  }
 }
 
 /*

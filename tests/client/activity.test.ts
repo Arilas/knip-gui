@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { formatRelativeTime } from '../../client/src/lib/activity.js';
-import { useActivityStore } from '../../client/src/state/activity.js';
+import { appliedPaths, useActivityStore } from '../../client/src/state/activity.js';
 
 beforeEach(() => {
   useActivityStore.getState().clear();
@@ -62,6 +62,25 @@ describe('useActivityStore', () => {
     useActivityStore.getState().log({ kind: 'fix', summary: 'x', at: '2026-07-13T10:00:00.000Z' });
     useActivityStore.getState().clear();
     expect(useActivityStore.getState().entries).toEqual([]);
+  });
+});
+
+describe('appliedPaths', () => {
+  it('is empty when nothing has been logged', () => {
+    expect(appliedPaths()).toEqual(new Set());
+  });
+
+  it('unions paths across every logged entry', () => {
+    useActivityStore.getState().log({ kind: 'fix', summary: 'x', paths: ['a.ts', 'b.ts'], at: '2026-07-13T10:00:00.000Z' });
+    useActivityStore
+      .getState()
+      .log({ kind: 'ignore-remove', summary: 'y', paths: ['b.ts', 'c.ts'], at: '2026-07-13T10:01:00.000Z' });
+    expect(appliedPaths()).toEqual(new Set(['a.ts', 'b.ts', 'c.ts']));
+  });
+
+  it('ignores entries that carry no paths at all (backward-compatible entry shape)', () => {
+    useActivityStore.getState().log({ kind: 'sweep', summary: 'no paths here', at: '2026-07-13T10:00:00.000Z' });
+    expect(appliedPaths()).toEqual(new Set());
   });
 });
 

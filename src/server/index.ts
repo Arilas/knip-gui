@@ -7,6 +7,7 @@ import { KnipError, runScan } from '../core/knip-runner.js';
 import { normalize } from '../core/normalize.js';
 import { getWorkspaceDirs } from '../core/workspaces.js';
 import { PlanStore } from '../fix/plan-store.js';
+import { runSweep } from '../fix/sweep.js';
 import { registerFixRoutes } from './routes-fix.js';
 import { registerGitRoutes } from './routes-git.js';
 import { registerIgnoresRoutes } from './routes-ignores.js';
@@ -45,8 +46,19 @@ function fallbackShell(token: string): string {
   );
 }
 
-export function createServer(opts: { projectDir: string; scan?: typeof runScan; clientDir?: string }) {
-  const { projectDir, scan = runScan, clientDir = DEFAULT_CLIENT_DIR } = opts;
+export function createServer(opts: {
+  projectDir: string;
+  scan?: typeof runScan;
+  sweep?: typeof runSweep;
+  clientDir?: string;
+  /**
+   * Fixed for the lifetime of this server instance (set from the CLI's
+   * `--production` flag) and applied to every scan it runs, including
+   * rescans — there is no per-request override.
+   */
+  production?: boolean;
+}) {
+  const { projectDir, scan = runScan, sweep = runSweep, clientDir = DEFAULT_CLIENT_DIR, production = false } = opts;
   const token = randomBytes(24).toString('hex');
   const store = new ReportStore();
   const planStore = new PlanStore();
@@ -98,6 +110,7 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan; 
     // try block, so no failure path can leave the store stuck in 'scanning'.
     if (store.status === 'scanning') return c.json({ error: 'scan in progress' }, 409);
     store.setScanning();
+    const controller = store.beginScan();
     try {
       const body = await c.req.json().catch(() => ({}));
       const workspace = typeof body.workspace === 'string' ? body.workspace : undefined;
@@ -105,10 +118,10 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan; 
       // subsequent rescan reuses this scope instead of widening to the full
       // project — see ReportStore.lastScanScope.
       store.lastScanScope = workspace;
-      const raw = await scan(projectDir, { workspace });
+      const raw = await scan(projectDir, { workspace, production, signal: controller.signal });
       const workspaces = await getWorkspaceDirs(projectDir);
       const issues = normalize(raw, workspaces);
-      store.setReady({ issues, scannedAt: new Date().toISOString(), workspaces, scope: workspace });
+      store.setReady({ issues, scannedAt: new Date().toISOString(), workspaces, scope: workspace, production });
       return c.json({ status: 'ready', issueCount: issues.length });
     } catch (e) {
       const err = e instanceof KnipError
@@ -116,6 +129,8 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan; 
         : { code: 'internal', message: String(e) };
       store.setError(err);
       return c.json({ status: 'error', error: err }, 500);
+    } finally {
+      store.endScan(controller);
     }
   });
 
@@ -157,7 +172,7 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan; 
     }
   });
 
-  const fixCtx = { projectDir, scan, store, planStore };
+  const fixCtx = { projectDir, scan, sweep, store, planStore, production };
   registerFixRoutes(app, fixCtx);
   registerGitRoutes(app, { projectDir });
   registerIgnoresRoutes(app, fixCtx);
