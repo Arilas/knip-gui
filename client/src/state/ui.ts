@@ -84,6 +84,19 @@ export interface UiState {
   packagesFilters: Set<IssueType>;
   codeSearch: string;
   openFile?: string;
+  // Bumped by `navigate` on every call that OPENS a file (`opts.openFile !==
+  // undefined`), even when it's the same path as the one already open —
+  // CodePane's auto-scroll-to-first-issue effect (Task 4, v0.3) keys off
+  // `${openFile}#${openFileNonce}` rather than `openFile` alone. Reason: a
+  // zustand selector hook (`useUiStore((s) => s.openFile)`) bails out with no
+  // re-render when the selected value is unchanged (`Object.is` comparison)
+  // — clicking the SAME already-open tree row re-sets `openFile` to an
+  // identical string, a no-op from every consumer's point of view unless
+  // something else in its selected slice also changed. The nonce is that
+  // "something else": it always changes on an explicit open, giving CodePane
+  // a distinct key to re-trigger the scroll/pulse even when the path didn't
+  // change.
+  openFileNonce: number;
   review?: ReviewRequest;
   expandedDirs: Set<string>;
   expandedDirsInitialized: boolean;
@@ -115,6 +128,7 @@ export const useUiStore = create<UiState>((set) => ({
   packagesFilters: new Set(PACKAGE_TYPES),
   codeSearch: '',
   openFile: undefined,
+  openFileNonce: 0,
   review: undefined,
   expandedDirs: new Set<string>(),
   expandedDirsInitialized: false,
@@ -122,6 +136,9 @@ export const useUiStore = create<UiState>((set) => ({
   navigate: (page, opts) =>
     set((state) => {
       const next: Partial<UiState> = { page, openFile: opts?.openFile };
+      // See openFileNonce's doc comment above: bump on every explicit open,
+      // including re-opening the file that's already open.
+      if (opts?.openFile !== undefined) next.openFileNonce = state.openFileNonce + 1;
       if (opts?.filters) {
         if (page === 'code') next.codeFilters = new Set(opts.filters);
         else if (page === 'packages') next.packagesFilters = new Set(opts.filters);

@@ -62,6 +62,22 @@ export function useFile(path: string | null) {
   });
 }
 
+// Shared by every mutation below that can rewrite source-file content (fix
+// apply, ignore apply, ignore-remove apply, and sweep — an ignore/its removal
+// both go through compileIgnorePlan, which for some issue types inserts/
+// strips an `@public` JSDoc tag directly in the file rather than touching the
+// knip config; a sweep is `knip --fix` across the whole project, just as
+// capable of touching the currently-open file as a single apply). Invalidating
+// the WHOLE `['file']` prefix rather than tracking "the currently-open file"
+// specifically (Task 4, v0.3 UX backlog item) is the cheap-to-reason option
+// the plan calls for: one extra cache-prefix invalidation, harmless even for
+// files a mutation didn't touch (react-query only refetches ones with an
+// active observer — see useFile), and it never needs updating if a future
+// apply flow touches a file other than the one CodePane currently has open.
+function invalidateFileQueries(queryClient: ReturnType<typeof useQueryClient>): void {
+  queryClient.invalidateQueries({ queryKey: ['file'] });
+}
+
 export function useScanMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -90,7 +106,13 @@ export function useSweepMutation() {
     // onSettled, not onSuccess-only (mirrors useScanMutation's Task 6 fix): a
     // sweep that itself fails must not leave the report query showing stale
     // cached data with no visible sign the sweep failed.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: reportQueryKey });
+      // A sweep is `knip --fix` across the whole project — just as capable
+      // of rewriting the currently-open file's content as a single fix/
+      // ignore apply (see invalidateFileQueries' doc comment above).
+      invalidateFileQueries(queryClient);
+    },
   });
 }
 
@@ -106,7 +128,10 @@ export function useFixApplyMutation() {
   return useMutation({
     mutationKey: ['fixApply'],
     mutationFn: (planId: string) => postFixApply(planId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: reportQueryKey });
+      invalidateFileQueries(queryClient);
+    },
   });
 }
 
@@ -130,6 +155,11 @@ export function useIgnoreApplyMutation() {
       // until the user happens to visit the Ignored page (Task 5 review
       // finding, live-reproduced). Mirrors useIgnoreRemoveApplyMutation.
       queryClient.invalidateQueries({ queryKey: ignoresQueryKey });
+      // See invalidateFileQueries' doc comment: an ignore apply can also
+      // rewrite the open file's own content (an inserted `@public` tag), not
+      // just the knip config — the code pane must reflect that on the very
+      // next reopen, not a stale pre-apply cache entry (Task 4, v0.3).
+      invalidateFileQueries(queryClient);
     },
   });
 }
@@ -159,6 +189,7 @@ export function useIgnoreRemoveApplyMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: reportQueryKey });
       queryClient.invalidateQueries({ queryKey: ignoresQueryKey });
+      invalidateFileQueries(queryClient);
     },
   });
 }

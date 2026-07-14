@@ -8,6 +8,7 @@ function resetStore() {
     packagesFilters: new Set(PACKAGE_TYPES),
     codeSearch: '',
     openFile: undefined,
+    openFileNonce: 0,
     review: undefined,
     expandedDirs: new Set<string>(),
     expandedDirsInitialized: false,
@@ -79,6 +80,21 @@ describe('navigate', () => {
     useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
     useUiStore.getState().navigate('packages');
     expect(useUiStore.getState().openFile).toBeUndefined();
+  });
+
+  it('bumps openFileNonce every time opts.openFile is given, even for the same path (CodePane re-scroll signal)', () => {
+    const start = useUiStore.getState().openFileNonce;
+    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
+    expect(useUiStore.getState().openFileNonce).toBe(start + 1);
+    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
+    expect(useUiStore.getState().openFileNonce).toBe(start + 2);
+  });
+
+  it('does not bump openFileNonce on a navigate call that omits opts.openFile', () => {
+    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
+    const afterOpen = useUiStore.getState().openFileNonce;
+    useUiStore.getState().navigate('code');
+    expect(useUiStore.getState().openFileNonce).toBe(afterOpen);
   });
 
   it('sets codeSearch when opts.search is given', () => {

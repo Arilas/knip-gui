@@ -7,6 +7,7 @@ import {
   isActionable,
   isFixable,
   isIgnorable,
+  isLikelyTestFile,
   PACKAGE_TYPES,
   typeLabel,
 } from '../../client/src/lib/filters.js';
@@ -179,6 +180,32 @@ describe('filterIssues', () => {
   it('an empty/whitespace query is a no-op on top of the type filter', () => {
     const enabled = new Set(CODE_TYPES);
     expect(filterIssues(issues, enabled, '   ')).toHaveLength(filterIssues(issues, enabled, '').length);
+  });
+});
+
+describe('isLikelyTestFile', () => {
+  it.each([
+    ['Button.test.tsx', true],
+    ['src/foo.spec.ts', true],
+    ['src/__tests__/x.ts', true],
+    ['a/e2e/y.spec.tsx', true],
+    ['Button.stories.tsx', true],
+    ['src/__mocks__/fs.ts', true],
+    ['test/foo.ts', true],
+    ['tests/bar.ts', true],
+    ['a/b/tests/c.ts', true],
+  ])('flags %s as a likely test file', (path, expected) => {
+    expect(isLikelyTestFile(path)).toBe(expected);
+  });
+
+  it.each([
+    ['src/test-utils.ts', false],
+    ['contest.ts', false],
+    ['src/latest/file.ts', false],
+    ['attest/file.ts', false],
+    ['src/used.ts', false],
+  ])('does not flag %s (segment-boundary, not substring, match)', (path, expected) => {
+    expect(isLikelyTestFile(path)).toBe(expected);
   });
 });
 

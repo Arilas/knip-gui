@@ -40,6 +40,7 @@ export function CodePage({ issues }: CodePageProps) {
   const codeSearch = useUiStore((s) => s.codeSearch);
   const setCodeSearch = useUiStore((s) => s.setCodeSearch);
   const openFile = useUiStore((s) => s.openFile);
+  const openFileNonce = useUiStore((s) => s.openFileNonce);
   const navigate = useUiStore((s) => s.navigate);
 
   const selected = useSelectionStore((s) => s.selected);
@@ -121,7 +122,13 @@ export function CodePage({ issues }: CodePageProps) {
               </Button>
             </div>
           )}
-          <CodePane filePath={openFile ?? null} issues={openFileIssues} selected={selected} onToggleIds={toggle} />
+          <CodePane
+            filePath={openFile ?? null}
+            issues={openFileIssues}
+            selected={selected}
+            onToggleIds={toggle}
+            openFileNonce={openFileNonce}
+          />
         </ResizablePanel>
       </ResizablePanelGroup>
 
