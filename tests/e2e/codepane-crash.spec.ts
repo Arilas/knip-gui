@@ -66,11 +66,29 @@ test('code pane reopened after an ignore survives the rescan that prunes its iss
   await page.getByTestId('review-skip').click();
   await expect(page.getByTestId('review-page')).toHaveCount(0);
 
+  // Structural pin, not a vacuous wall-clock race: this spec only actually
+  // exercises the crash if the background rescan triggered by the apply
+  // (src/server/routes-fix.ts's triggerBackgroundRescan, fire-and-forget) is
+  // STILL in flight at the moment src/used.ts remounts below. Assert that
+  // precondition directly via an API poll (bypassing the client's own 2s
+  // /api/report polling interval, which would be too coarse to catch a
+  // narrow window) using the session token embedded in the page — if a
+  // future change ever makes the rescan finish before this point, THIS
+  // assertion is what fails loudly, rather than the badge-count check below
+  // silently passing because there was nothing left to race.
+  const token = await page.evaluate(
+    () => document.querySelector('meta[name="knip-gui-token"]')?.getAttribute('content'),
+  );
+  const statusRes = await page.request.get('/api/report', { headers: { 'x-knip-gui-token': token! } });
+  expect((await statusRes.json()).status, 'rescan should still be in flight here — see comment above').toBe(
+    'scanning',
+  );
+
   // Back on Code — ui.openFile is page-scoped and was cleared by the
   // navigation back, so reopen src/used.ts explicitly (a fresh CodePane
-  // mount, left mounted from here on). The apply's background rescan may
-  // still be in flight; wait for it to land and actually drop the
-  // now-ignored issue's badge — this is the moment the old code crashed.
+  // mount, left mounted from here on). The apply's background rescan is
+  // confirmed still in flight above; wait for it to land and actually drop
+  // the now-ignored issue's badge — this is the moment the old code crashed.
   await page.getByTestId('tree-file-src/used.ts').click();
   await expect(badge).toHaveCount(0, { timeout: 30_000 });
 

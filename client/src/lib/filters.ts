@@ -160,6 +160,8 @@ export interface WorkspaceGroup {
 const TEST_DIR_SEGMENTS = new Set(['__tests__', '__mocks__', 'e2e', 'test', 'tests']);
 const TEST_FILENAME_RE = /\.(test|spec|stories)\.[^./]+$/i;
 
+// Splits on a bare '/' only — safe because knip always emits forward-slash-
+// delimited paths (even on Windows), so there's no backslash case to handle here.
 export function isLikelyTestFile(path: string): boolean {
   const segments = path.split('/').filter(Boolean);
   if (segments.length === 0) return false;

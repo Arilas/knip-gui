@@ -252,4 +252,38 @@ describe('tree expansion lift (expandedDirs/toggleDir/expandAll/collapseAll/init
     useUiStore.getState().navigate('code');
     expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['src', 'src/lib']);
   });
+
+  describe('expandDirs (seed-delta for dirs a rescan introduces post-seed)', () => {
+    it('adds paths not already present, without touching existing ones', () => {
+      useUiStore.getState().expandAll(['src']);
+      useUiStore.getState().expandDirs(['src', 'src/new-dir']);
+      expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['src', 'src/new-dir']);
+    });
+
+    it('leaves an unrelated already-collapsed dir alone — only the given paths are added', () => {
+      useUiStore.getState().expandAll(['a', 'b']);
+      useUiStore.getState().collapseAll();
+      // 'a' was collapsed by the user; only 'c' is the "genuinely new" path
+      // TreeView.tsx would diff out and pass here (see its tree-change
+      // effect) — expandDirs itself is a plain unconditional merge with no
+      // memory of collapseAll, so this only demonstrates the safe case:
+      // 'a' stays out because it's simply not in the call's argument list,
+      // not because the action itself protects it.
+      useUiStore.getState().expandDirs(['c']);
+      expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['c']);
+    });
+
+    it('is a no-op (same Set reference) when every path is already present', () => {
+      useUiStore.getState().expandAll(['src']);
+      const before = useUiStore.getState().expandedDirs;
+      useUiStore.getState().expandDirs(['src']);
+      expect(useUiStore.getState().expandedDirs).toBe(before);
+    });
+
+    it('does not flip expandedDirsInitialized on its own', () => {
+      useUiStore.getState().expandDirs(['src']);
+      expect(useUiStore.getState().expandedDirsInitialized).toBe(false);
+      expect(useUiStore.getState().expandedDirs.has('src')).toBe(true);
+    });
+  });
 });

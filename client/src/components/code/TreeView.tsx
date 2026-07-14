@@ -20,6 +20,20 @@
 // an unexpanded tree; the effect no-ops forever once seeded, which is
 // exactly what keeps "Collapse all" from being silently undone on the next
 // render (see ui.ts's doc comment for the full rationale).
+//
+// Seed-delta (Task 6, v0.3, dogfood finding): a rescan that introduces a
+// brand-new top-level dir (e.g. a fix/ignore round trip that happens to add
+// one) used to render it collapsed by default — the one-time seed above has
+// already fired, so nothing ever auto-expands a dir that didn't exist yet at
+// seed time. The tree-change effect below tracks "new since we last looked"
+// against a SEPARATE tree built from the raw `issues` prop (pre search/chip
+// filtering) specifically so toggling a filter chip or typing a search term
+// — which also changes the rendered `tree` below, but never adds real dir
+// paths to the underlying data — can never be mistaken for a rescan and
+// spuriously re-expand a dir the user filtered into view (search-revealed
+// dirs staying collapsed by default is an accepted design choice; see Task 3
+// UX overhaul notes). Only genuinely new paths get merged in, additively —
+// see ui.ts's `expandDirs` doc comment for why this can't undo a Collapse all.
 import { useEffect, useMemo, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronsDownUp, ChevronsUpDown, PanelRightClose, PanelRightOpen, Search } from 'lucide-react';
@@ -140,6 +154,35 @@ export function TreeView({
   useEffect(() => {
     if (!expandedDirsInitialized) initExpandedDirs(policyExpandedDirs);
   }, [expandedDirsInitialized, initExpandedDirs, policyExpandedDirs]);
+
+  // Seed-delta (Task 6, v0.3): built from the raw `issues` prop, NOT the
+  // locally-filtered `tree` above — search/chip changes must never look like
+  // "new paths appeared" (see this file's top doc comment). `fullPolicyDirs`
+  // is what a fresh seed would expand by default for the CURRENT underlying
+  // data; diffing it against what was seen last time isolates paths a rescan
+  // actually introduced.
+  const fullTree = useMemo(() => buildTree(issues), [issues]);
+  const fullPolicyExpandedDirs = useMemo(() => {
+    const policy = autoExpandDepth(fullTree, countFiles(fullTree));
+    return policy === 'all' ? allDirPaths(fullTree) : topDirPaths(fullTree);
+  }, [fullTree]);
+  const expandDirs = useUiStore((s) => s.expandDirs);
+  const seenDirPathsRef = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    if (!expandedDirsInitialized) {
+      // Not seeded yet — the seed effect above will use this same set as its
+      // baseline momentarily; just track it so the FIRST post-seed render
+      // doesn't see every initial dir as "new".
+      seenDirPathsRef.current = fullPolicyExpandedDirs;
+      return;
+    }
+    const seen = seenDirPathsRef.current;
+    seenDirPathsRef.current = fullPolicyExpandedDirs;
+    if (!seen) return;
+    const newPaths = [...fullPolicyExpandedDirs].filter((p) => !seen.has(p));
+    if (newPaths.length > 0) expandDirs(newPaths);
+  }, [expandedDirsInitialized, fullPolicyExpandedDirs, expandDirs]);
 
   const rows = useMemo(() => {
     const out: FlatRow[] = [];

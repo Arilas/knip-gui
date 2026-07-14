@@ -120,6 +120,15 @@ export interface UiState {
   // called from a button; TreeView.tsx's mount/tree-change effect is the one
   // caller (see this file's tree-expansion doc comment above).
   initExpandedDirs: (paths: Iterable<string>) => void;
+  // Seed-delta (Task 6, v0.3): additive-only merge, called AFTER
+  // expandedDirsInitialized is already true, for directory paths a rescan
+  // introduces that didn't exist at seed (or any prior rescan) time — e.g. a
+  // fix/ignore round trip that happens to add a brand-new top-level dir.
+  // Deliberately does NOT touch expandedDirsInitialized or remove/collapse
+  // anything: only ever adds paths, never overrides an explicit Collapse
+  // all/manual collapse of a dir that already existed. See TreeView.tsx's
+  // tree-change effect, the one caller, for how "genuinely new" is computed.
+  expandDirs: (paths: Iterable<string>) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -188,4 +197,17 @@ export const useUiStore = create<UiState>((set) => ({
     set((state) =>
       state.expandedDirsInitialized ? state : { expandedDirs: new Set(paths), expandedDirsInitialized: true },
     ),
+
+  expandDirs: (paths) =>
+    set((state) => {
+      const next = new Set(state.expandedDirs);
+      let changed = false;
+      for (const path of paths) {
+        if (!next.has(path)) {
+          next.add(path);
+          changed = true;
+        }
+      }
+      return changed ? { expandedDirs: next } : state;
+    }),
 }));
