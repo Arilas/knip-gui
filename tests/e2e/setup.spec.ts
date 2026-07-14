@@ -127,3 +127,46 @@ test('broken knip config renders the setup screen; fixing it and Re-run recovers
   await expect(setupScreen).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true, level: 2 })).toBeVisible();
 });
+
+// Session-expiry pin (Task 6 review fix, reproduced live 3x): real scenario —
+// the CLI restarts, an old tab stays open holding the previous token, so every
+// API call from it 401s. Before the fix, clicking Re-run softlocked the button
+// (scanMutation.isPending stuck: the 401'd report REFETCH that Re-run's
+// onSettled invalidation awaits gets retried by react-query behind a
+// focus-gated pause that can never win — see App.tsx's QueryClient retry
+// comment for the full chain) with no toast and no recovery short of a manual
+// reload the user had no reason to know they needed. Now any 401 swaps the
+// whole app for an explicit session-expired notice. Runs after the recovery
+// test above (serial), so the server is healthy and the dashboard reachable;
+// the stale token is simulated by overwriting the meta tag the same way a
+// restarted server would invalidate it (api.ts reads the tag on every call).
+test('stale token: Re-run swaps the app for the session-expired screen instead of softlocking', async ({
+  page,
+}) => {
+  await page.goto(baseURL);
+  await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
+
+  await page.evaluate(() => {
+    document
+      .querySelector('meta[name="knip-gui-token"]')!
+      .setAttribute('content', 'stale-token-from-before-the-cli-restarted');
+  });
+
+  await page.getByTestId('rerun-button').click();
+
+  const expired = page.getByTestId('session-expired');
+  await expect(expired).toBeVisible();
+  await expect(expired).toContainText('Session expired');
+  await expect(expired).toContainText('knip-gui was restarted');
+  await expect(expired.getByRole('button', { name: 'Reload' })).toBeVisible();
+
+  // The ENTIRE app is replaced — no sidebar, and in particular no Re-run
+  // button left behind stuck in its spinning "Scanning…" state.
+  await expect(page.getByTestId('rerun-button')).toHaveCount(0);
+  await expect(page.getByTestId('sidebar-trigger')).toHaveCount(0);
+
+  // Reload recovers: the server re-serves the shell with the real token.
+  await page.getByRole('button', { name: 'Reload' }).click();
+  await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('session-expired')).toHaveCount(0);
+});

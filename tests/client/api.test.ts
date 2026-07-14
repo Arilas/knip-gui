@@ -172,4 +172,44 @@ describe('api.ts', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ message: 'chore: cleanup', paths: ['src/a.ts'] });
     expect(result.sha).toBe('deadbeef');
   });
+
+  // Session-expiry hook (Task 6 review fix): a 401 means the baked-in token
+  // is dead (CLI restarted, old tab still open) — App.tsx registers a single
+  // handler that swaps the UI for a session-expired notice. Pin that the
+  // handler fires on exactly 401, not on other failures or successes.
+  describe('setOnUnauthorized', () => {
+    it('invokes the registered handler on a 401 response (and still throws ApiError)', async () => {
+      const { getReport, setOnUnauthorized, ApiError } = await import('../../client/src/api.js');
+      const handler = vi.fn();
+      setOnUnauthorized(handler);
+      try {
+        vi.mocked(fetch).mockResolvedValue(jsonResponse(401, { error: 'unauthorized' }));
+        await expect(getReport()).rejects.toBeInstanceOf(ApiError);
+        expect(handler).toHaveBeenCalledTimes(1);
+      } finally {
+        setOnUnauthorized(undefined);
+      }
+    });
+
+    it('does not invoke the handler on non-401 failures or on success', async () => {
+      const { getReport, setOnUnauthorized } = await import('../../client/src/api.js');
+      const handler = vi.fn();
+      setOnUnauthorized(handler);
+      try {
+        vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(500, { error: 'boom' }));
+        await expect(getReport()).rejects.toThrow();
+        vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { status: 'ready' }));
+        await getReport();
+        expect(handler).not.toHaveBeenCalled();
+      } finally {
+        setOnUnauthorized(undefined);
+      }
+    });
+
+    it('is a no-op (401 still just throws) when no handler is registered', async () => {
+      const { getReport, ApiError } = await import('../../client/src/api.js');
+      vi.mocked(fetch).mockResolvedValue(jsonResponse(401, { error: 'unauthorized' }));
+      await expect(getReport()).rejects.toBeInstanceOf(ApiError);
+    });
+  });
 });

@@ -64,12 +64,34 @@ function getToken(): string {
   return import.meta.env.VITE_KNIP_TOKEN ?? '';
 }
 
+// --- session-expiry notification (Task 6 review fix) ---
+// The session token is baked into the served page at load time; when the CLI
+// restarts, a still-open tab holds a token the new server has never seen, so
+// EVERY api call from it 401s forever — only a reload (which re-serves the
+// shell with the fresh token) can recover. A 401 therefore means "this
+// session is dead", not "this request failed": App.tsx registers a handler
+// here and swaps the whole UI for a session-expired notice the moment any
+// response comes back 401, instead of letting each caller trip over the
+// error individually (the observed failure mode was worse than a bad
+// message: Re-run's mutation got stuck isPending forever — see App.tsx's
+// QueryClient retry comment for that chain).
+type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | undefined;
+
+/** Register (or clear, with undefined) the single app-level 401 handler. */
+export function setOnUnauthorized(handler: UnauthorizedHandler | undefined): void {
+  unauthorizedHandler = handler;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'x-knip-gui-token': getToken() };
   if (init?.body !== undefined) headers['content-type'] = 'application/json';
   const res = await fetch(path, { ...init, headers: { ...headers, ...(init?.headers as Record<string, string>) } });
   const body = await res.json().catch(() => undefined);
-  if (!res.ok) throw new ApiError(res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) unauthorizedHandler?.();
+    throw new ApiError(res.status, body);
+  }
   return body as T;
 }
 
