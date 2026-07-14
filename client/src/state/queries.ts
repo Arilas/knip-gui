@@ -87,7 +87,10 @@ export function useSweepMutation() {
   return useMutation({
     mutationKey: ['sweep'],
     mutationFn: (opts: SweepOptions = {}) => postSweep(opts),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
+    // onSettled, not onSuccess-only (mirrors useScanMutation's Task 6 fix): a
+    // sweep that itself fails must not leave the report query showing stale
+    // cached data with no visible sign the sweep failed.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
   });
 }
 

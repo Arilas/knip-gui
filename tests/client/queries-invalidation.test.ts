@@ -134,4 +134,21 @@ describe('apply-mutation query invalidation', () => {
     const keys = spy.mock.calls.map(([filters]) => (filters as { queryKey?: unknown } | undefined)?.queryKey);
     expect(keys).toContainEqual(reportQueryKey);
   });
+
+  // Task 7 polish item: useSweepMutation mirrored useScanMutation's Task 6
+  // onSuccess-only bug — a failed sweep left the report query's stale cached
+  // data on screen with no sign anything went wrong. Fixed to onSettled;
+  // pinned the same way the scan-failure test above pins its fix.
+  it('sweep invalidates the report on failure too, not just success', async () => {
+    const { postSweep } = await import('../../client/src/api.js');
+    vi.mocked(postSweep).mockRejectedValueOnce(new Error('sweep failed'));
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const result = renderHook(useSweepMutation, queryClient);
+    await act(async () => {
+      await result.current.mutateAsync({}).catch(() => {});
+    });
+    const keys = spy.mock.calls.map(([filters]) => (filters as { queryKey?: unknown } | undefined)?.queryKey);
+    expect(keys).toContainEqual(reportQueryKey);
+  });
 });

@@ -18,8 +18,6 @@
 // would render 0-height containers and assert nothing honest.
 import { expect, test } from '@playwright/test';
 
-test.describe.configure({ mode: 'serial' });
-
 // Shape must match src/core/types.ts's Issue/Report and the /api/report
 // response envelope ({ status, report }).
 function syntheticReport(workspaceCount: number) {

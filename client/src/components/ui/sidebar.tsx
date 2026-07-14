@@ -41,6 +41,23 @@ type SidebarContextProps = {
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
 
+// Task 7 dogfood finding: shadcn's stock SidebarProvider WRITES
+// `sidebar_state` to a cookie on every toggle but never reads it back — that
+// pattern assumes a Next.js-style server component reads the cookie during
+// SSR and passes the result down as `defaultOpen`. This app has no SSR (it's
+// a client-rendered SPA served by the Hono server), so without this read the
+// cookie was pure write-only and a reload always reverted to `defaultOpen`
+// (true), silently discarding whatever the user last chose. Read the cookie
+// synchronously in the initial-state lazy initializer below so it's applied
+// before first paint (no expanded->collapsed flash).
+function readSidebarCookie(): boolean | undefined {
+  if (typeof document === "undefined") return undefined
+  const match = document.cookie.match(
+    new RegExp(`(?:^|; )${SIDEBAR_COOKIE_NAME}=([^;]*)`)
+  )
+  return match ? match[1] === "true" : undefined
+}
+
 function useSidebar() {
   const context = React.useContext(SidebarContext)
   if (!context) {
@@ -68,7 +85,11 @@ function SidebarProvider({
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
-  const [_open, _setOpen] = React.useState(defaultOpen)
+  // Uncontrolled case only (openProp undefined): seed from the persisted
+  // cookie if one exists, falling back to defaultOpen on a first visit.
+  const [_open, _setOpen] = React.useState(
+    () => readSidebarCookie() ?? defaultOpen
+  )
   const open = openProp ?? _open
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
