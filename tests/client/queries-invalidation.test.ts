@@ -36,12 +36,14 @@ vi.mock('../../client/src/api.js', () => ({
   postSweep: vi.fn(async () => ({ issueCount: 0 })),
 }));
 
+import { postScan } from '../../client/src/api.js';
 import {
   ignoresQueryKey,
   reportQueryKey,
   useFixApplyMutation,
   useIgnoreApplyMutation,
   useIgnoreRemoveApplyMutation,
+  useScanMutation,
   useSweepMutation,
 } from '../../client/src/state/queries.js';
 
@@ -107,5 +109,29 @@ describe('apply-mutation query invalidation', () => {
     const keys = await invalidatedKeysAfter(useSweepMutation, {});
     expect(keys).toContainEqual(reportQueryKey);
     expect(keys).not.toContainEqual(ignoresQueryKey);
+  });
+
+  it('scan invalidates the report on success', async () => {
+    vi.mocked(postScan).mockResolvedValueOnce({ status: 'ready', issueCount: 0 });
+    const keys = await invalidatedKeysAfter(useScanMutation, undefined);
+    expect(keys).toContainEqual(reportQueryKey);
+  });
+
+  // Task 6 browser-verification finding: a scan that ITSELF fails (e.g.
+  // Re-run from SetupScreen against a still-broken, or newly-broken, config)
+  // must still invalidate the report query — the server has already landed
+  // the fresh error in the store by the time POST /api/scan responds (and
+  // throws), so without this the UI just keeps showing whatever was cached
+  // before the failed retry, with no visible sign anything changed.
+  it('scan invalidates the report on failure too, not just success', async () => {
+    vi.mocked(postScan).mockRejectedValueOnce(new Error('scan failed'));
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const result = renderHook(useScanMutation, queryClient);
+    await act(async () => {
+      await result.current.mutateAsync(undefined).catch(() => {});
+    });
+    const keys = spy.mock.calls.map(([filters]) => (filters as { queryKey?: unknown } | undefined)?.queryKey);
+    expect(keys).toContainEqual(reportQueryKey);
   });
 });

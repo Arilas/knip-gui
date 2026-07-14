@@ -1,20 +1,37 @@
 import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ActionModal } from './components/ActionModal.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { ActionModal } from './components/flows/ActionModal.js';
 import { ActivityPage } from './components/pages/ActivityPage.js';
 import { CodePage } from './components/pages/CodePage.js';
 import { Dashboard } from './components/pages/Dashboard.js';
 import { IgnoredPage } from './components/pages/IgnoredPage.js';
 import { PackagesPage } from './components/pages/PackagesPage.js';
+import { SetupScreen } from './components/pages/SetupScreen.js';
 import { SelectionBar } from './components/SelectionBar.js';
-import { ToastProvider } from './components/Toast.js';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar.js';
+import { Toaster } from './components/ui/sonner.js';
 import { TooltipProvider } from './components/ui/tooltip.js';
 import { useReport } from './state/queries.js';
 import { useSelectionStore } from './state/selection.js';
 import { useUiStore } from './state/ui.js';
+
+// A knip-not-found error means knip can't even be resolved from this project;
+// a knip-failed error with exitCode >= 2 means knip itself exited fatally
+// (bad/missing config, or some other non-"issues found" failure — see
+// src/core/knip-runner.ts's runScan, which only rejects at exitCode >= 2).
+// Either way there's no report to show and no amount of retrying without
+// fixing the project will help — SetupScreen replaces the page body instead.
+// A `bad-json`/`internal` error, or a knip-failed with exitCode < 2 (there
+// isn't one today, but nothing rules it out), falls through to the plain
+// error message below instead — those aren't "go fix your knip setup"
+// problems in the same way.
+function isSetupError(error: { code: string; exitCode?: number } | undefined): boolean {
+  if (!error) return false;
+  if (error.code === 'knip-not-found') return true;
+  return error.code === 'knip-failed' && (error.exitCode ?? 0) >= 2;
+}
 
 const queryClient = new QueryClient();
 
@@ -46,6 +63,14 @@ function AppShell() {
   }
 
   function renderPage() {
+    // Ignored/Activity are never report-dependent (their own server
+    // query / session store, respectively — see AppSidebar.tsx's doc
+    // comment), so they render normally regardless of report/scan state,
+    // including the setup-error state below: the sidebar stays reachable and
+    // useful even while Dashboard/Code/Packages can't show anything.
+    if (page === 'ignored') return <IgnoredPage />;
+    if (page === 'activity') return <ActivityPage />;
+
     if (isLoading) return <p className="p-4 text-sm text-muted-foreground">Loading report…</p>;
     if (error) {
       return (
@@ -53,6 +78,9 @@ function AppShell() {
           Failed to load the report: {error instanceof Error ? error.message : String(error)}
         </p>
       );
+    }
+    if (data?.status === 'error' && isSetupError(data.error)) {
+      return <SetupScreen error={data.error!} />;
     }
     if (data?.status === 'error') {
       return <p className="p-4 text-sm text-destructive">{data.error?.message ?? 'The last scan failed.'}</p>;
@@ -65,10 +93,6 @@ function AppShell() {
         return <CodePage issues={issues} />;
       case 'packages':
         return <PackagesPage issues={issues} />;
-      case 'ignored':
-        return <IgnoredPage />;
-      case 'activity':
-        return <ActivityPage />;
       default:
         return null;
     }
@@ -105,9 +129,8 @@ export default function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <ToastProvider>
-            <AppShell />
-          </ToastProvider>
+          <AppShell />
+          <Toaster />
         </TooltipProvider>
       </QueryClientProvider>
     </ErrorBoundary>

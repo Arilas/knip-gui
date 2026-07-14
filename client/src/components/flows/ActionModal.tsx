@@ -1,14 +1,30 @@
 // Fix/ignore modal (Task 5): options -> preview -> applying -> results(+
-// optional commit), driven by apply-flow.ts's pure reducer. Rendered as a
-// native <dialog> via showModal() — this gets keyboard-Escape and
-// page-inertness (nothing behind the modal is clickable) for free; the
-// 'cancel' handler below blocks Escape specifically while applying, and the
-// backdrop-click handler blocks a stray dismiss-click for the same reason
-// (the "must not lose state on accidental backdrop click during applying"
-// requirement).
+// optional commit), driven by apply-flow.ts's pure reducer.
+//
+// Rebuilt on shadcn's Dialog primitives (Task 6, UX overhaul) — replacing the
+// native <dialog>+showModal() plumbing this used to have (that's the
+// centering bug's home: a native <dialog> combined with this app's Tailwind
+// preflight reset doesn't reliably center itself the way Radix's
+// fixed/top-1/2/left-1/2/-translate-x-1/2/-translate-y-1/2 DialogContent
+// does). None of the flow.status branches below, nor apply-flow.ts's reducer
+// itself, changed — only the dialog-chrome plumbing did:
+//  - Escape / outside-click while `applying`: Radix's own
+//    onEscapeKeyDown/onInteractOutside are preventDefault'd, mirroring the old
+//    native <dialog> 'cancel'-event guard and backdrop-click guard exactly.
+//  - The X close button: still a plain disabled (not hidden) button while
+//    applying, same as before — shadcn's DialogContent built-in close button
+//    is turned off (`showCloseButton={false}`) so there isn't a second,
+//    always-enabled X layered on top of this one.
+//  - `onClose` (App.tsx unmounts this component) fires from Dialog's
+//    `onOpenChange(false)` for any Radix-initiated close (Escape when not
+//    applying, a stray non-preventDefault't outside interaction) and from the
+//    X button directly — there's no native <dialog>.close()/'close' event to
+//    round-trip through anymore.
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import type { FixMode, Issue } from '../../../src/core/types.js';
-import { apiErrorMessage } from '../api.js';
+import { XIcon } from 'lucide-react';
+import { toast } from 'sonner';
+import type { FixMode, Issue } from '../../api.js';
+import { apiErrorMessage } from '../../api.js';
 import {
   appliedOkIssueIds,
   applyFlowReducer,
@@ -17,8 +33,8 @@ import {
   initialApplyFlowState,
   joinResults,
   optionsNextBlocked,
-} from '../lib/apply-flow.js';
-import { useActivityStore } from '../state/activity.js';
+} from '../../lib/apply-flow.js';
+import { useActivityStore } from '../../state/activity.js';
 import {
   useFixApplyMutation,
   useFixPreviewMutation,
@@ -26,11 +42,11 @@ import {
   useIgnoreApplyMutation,
   useIgnorePreviewMutation,
   useReport,
-} from '../state/queries.js';
-import { summaryByType, useSelectionStore } from '../state/selection.js';
+} from '../../state/queries.js';
+import { summaryByType, useSelectionStore } from '../../state/selection.js';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.js';
 import { CommitPanel } from './CommitPanel.js';
 import { DiffView } from './DiffView.js';
-import { useToast } from './Toast.js';
 
 export interface ActionModalProps {
   mode: 'fix' | 'ignore';
@@ -58,14 +74,12 @@ function issueLabel(issueId: string, issues: Issue[]): string {
 }
 
 export function ActionModal({ mode, issues, onClose }: ActionModalProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const selected = useSelectionStore((s) => s.selected);
   const modeOverrides = useSelectionStore((s) => s.modeOverrides);
   const setModeOverride = useSelectionStore((s) => s.setMode);
 
   const [flow, dispatch] = useReducer(applyFlowReducer, initialApplyFlowState);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const { push } = useToast();
 
   const fixPreview = useFixPreviewMutation();
   const fixApply = useFixApplyMutation();
@@ -96,43 +110,11 @@ export function ActionModal({ mode, issues, onClose }: ActionModalProps) {
     [issues, selected, modeOverrides],
   );
 
-  // --- native <dialog> plumbing ---
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (!dialog.open) dialog.showModal();
-    return () => {
-      if (dialog.open) dialog.close();
-    };
-    // Mount/unmount only — ActionModal itself is conditionally mounted by App.tsx.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    function handleCancel(e: Event) {
-      if (flow.status === 'applying') e.preventDefault();
-    }
-    function handleClose() {
-      onClose();
-    }
-    dialog.addEventListener('cancel', handleCancel);
-    dialog.addEventListener('close', handleClose);
-    return () => {
-      dialog.removeEventListener('cancel', handleCancel);
-      dialog.removeEventListener('close', handleClose);
-    };
-  }, [flow.status, onClose]);
+  const applying = flow.status === 'applying';
 
   function requestClose() {
-    dialogRef.current?.close();
-  }
-
-  function handleBackdropClick(e: React.MouseEvent<HTMLDialogElement>) {
-    if (e.target === dialogRef.current && flow.status !== 'applying') {
-      requestClose();
-    }
+    if (applying) return;
+    onClose();
   }
 
   // --- step handlers ---
@@ -153,7 +135,7 @@ export function ActionModal({ mode, issues, onClose }: ActionModalProps) {
     } catch (e) {
       const message = apiErrorMessage(e);
       dispatch({ type: 'preview:error', error: message });
-      push('error', message);
+      toast.error(message);
     }
   }
 
@@ -172,32 +154,45 @@ export function ActionModal({ mode, issues, onClose }: ActionModalProps) {
     } catch (e) {
       const message = apiErrorMessage(e);
       dispatch({ type: 'apply:error', error: message });
-      push('error', message);
+      toast.error(message);
     }
   }
 
   const title = mode === 'fix' ? `Fix ${selected.size} issue${selected.size === 1 ? '' : 's'}` : `Ignore ${selected.size} issue${selected.size === 1 ? '' : 's'}`;
 
   return (
-    <dialog
-      ref={dialogRef}
-      onClick={handleBackdropClick}
-      onCancel={(e) => {
-        if (flow.status === 'applying') e.preventDefault();
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) requestClose();
       }}
-      className="w-full max-w-2xl rounded-lg border border-gray-200 bg-white p-0 text-gray-900 shadow-xl backdrop:bg-black/40 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"
     >
-      <div className="flex max-h-[85vh] flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <DialogContent
+        showCloseButton={false}
+        className="flex max-h-[85vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
+        onEscapeKeyDown={(e) => {
+          if (applying) e.preventDefault();
+        }}
+        onInteractOutside={(e) => {
+          if (applying) e.preventDefault();
+        }}
+      >
         <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-800">
-          <h2 className="text-sm font-semibold">{title}</h2>
+          <DialogTitle className="text-sm font-semibold">{title}</DialogTitle>
+          {/* Radix requires a Description (or an explicit aria-describedby) linked
+              to DialogContent — there's no secondary explanatory line in this
+              header design, so this is sr-only rather than rendered. */}
+          <DialogDescription className="sr-only">
+            {mode === 'fix' ? 'Preview and apply fixes for the selected issues.' : 'Preview and apply ignores for the selected issues.'}
+          </DialogDescription>
           <button
             type="button"
             aria-label="Close"
-            disabled={flow.status === 'applying'}
+            disabled={applying}
             onClick={requestClose}
             className="text-gray-500 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:text-gray-100"
           >
-            ✕
+            <XIcon className="size-4" />
           </button>
         </div>
 
@@ -356,8 +351,8 @@ export function ActionModal({ mode, issues, onClose }: ActionModalProps) {
             />
           )}
         </div>
-      </div>
-    </dialog>
+      </DialogContent>
+    </Dialog>
   );
 }
 

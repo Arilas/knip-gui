@@ -17,7 +17,7 @@ export interface FixRoutesCtx {
 
 function toStoreError(e: unknown): StoreError {
   return e instanceof KnipError
-    ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr }
+    ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr, exitCode: e.exitCode }
     : { code: 'internal', message: String(e) };
 }
 

@@ -112,7 +112,7 @@ export function createServer(opts: { projectDir: string; scan?: typeof runScan; 
       return c.json({ status: 'ready', issueCount: issues.length });
     } catch (e) {
       const err = e instanceof KnipError
-        ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr }
+        ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr, exitCode: e.exitCode }
         : { code: 'internal', message: String(e) };
       store.setError(err);
       return c.json({ status: 'error', error: err }, 500);

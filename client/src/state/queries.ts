@@ -67,7 +67,18 @@ export function useScanMutation() {
   return useMutation({
     mutationKey: ['scan'],
     mutationFn: (workspace?: string) => postScan(workspace),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
+    // Invalidate on settle (success OR failure), not just onSuccess (Task 6
+    // browser-verification finding): POST /api/scan itself throws an ApiError
+    // when the scan fails, but the server has ALREADY landed the fresh error
+    // in the report store by then (src/server/index.ts's /api/scan catch sets
+    // it before responding) — GET /api/report reflects it immediately.
+    // onSuccess-only invalidation left nothing telling react-query's cache to
+    // go get that fresh state, so a Re-run that itself fails (SetupScreen's
+    // own primary action, or GitFooter's) just left the UI showing whatever
+    // was cached before — stale 'ready' data with no visible sign the retry
+    // failed, or a stale, no-longer-accurate error/stderr from a PREVIOUS
+    // failed attempt once the user's fix changes what's wrong.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
   });
 }
 

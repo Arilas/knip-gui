@@ -131,6 +131,22 @@ describe('scan + report + file', () => {
     expect(rep.error.stderr).toBe('stack...');
   });
 
+  // SetupScreen (Task 6) decides whether a knip-failed error is "setup help"
+  // territory (exitCode >= 2) purely off this field, so it must survive the
+  // KnipError -> StoreError -> JSON round trip, not just message/stderr.
+  it('scan failure surfaces the knip exit code for a knip-failed error', async () => {
+    const { app, token } = makeServer(async () => {
+      const { KnipError } = await import('../../src/core/knip-runner.js');
+      throw new KnipError('knip exited with 7', { code: 'knip-failed', exitCode: 7, stderr: 'stack...' });
+    });
+    const h = { 'x-knip-gui-token': token };
+    await app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+    const rep = await (await app.request('/api/report', { headers: h })).json();
+    expect(rep.status).toBe('error');
+    expect(rep.error.code).toBe('knip-failed');
+    expect(rep.error.exitCode).toBe(7);
+  });
+
   it('serves file content within the project only', async () => {
     const { app, token } = makeServer();
     const h = { 'x-knip-gui-token': token };

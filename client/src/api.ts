@@ -2,7 +2,8 @@
 // routes-fix.ts, routes-git.ts). Every call sends the session token as
 // `x-knip-gui-token` (Global Constraint: token only via the meta tag, never
 // in the URL). Non-2xx responses throw ApiError so react-query's mutation
-// error state / Toast (Task 5) can surface `body.error`/`body.stderr`.
+// error state / sonner's toast (Task 5, swapped from a hand-rolled Toast.tsx
+// to sonner in Task 6) can surface `body.error`/`body.stderr`.
 //
 // Cross-root type-only imports: verified `tsc -p client/tsconfig.json`
 // resolves `../../src/**/*.ts` fine for `import type` (no rootDir/emit
@@ -31,8 +32,8 @@ export class ApiError extends Error {
   }
 }
 
-// Toast.tsx's error toasts (and CommitPanel's inline git-failure message) all
-// funnel through here: every failing route in this app replies with a JSON
+// sonner's toast.error(...) call sites (and CommitPanel's inline git-failure
+// message) all funnel through here: every failing route in this app replies with a JSON
 // body shaped `{ error, stderr? }` (routes-git.ts's gitErrorBody) or just
 // `{ error }` (routes-fix.ts) — `body.error` is preferred since it's always a
 // human-readable message, `stderr` is appended when present since it's the

@@ -39,13 +39,27 @@ export async function startCli(opts: { dir: string; port: number; open: boolean 
   console.log(`knip-gui running at ${url}`);
 
   if (knip) {
-    // Fire-and-forget initial scan: failures land in the store via /api/report,
-    // there is nothing useful to do with the rejection here.
+    // Fire-and-forget initial scan: the outcome lands in the store via
+    // /api/report either way, so there's nothing to await here — but a failed
+    // scan used to leave the CLI printing nothing at all, silently stranding a
+    // terminal-only user. Print a one-line pointer at the UI (which has the
+    // full stderr + setup help via SetupScreen) instead.
     fetch(`${url}/api/scan`, {
       method: 'POST',
       headers: { 'x-knip-gui-token': token, 'content-type': 'application/json' },
       body: '{}',
-    }).catch(() => {});
+    })
+      .then(async (res) => {
+        if (res.ok) return;
+        const body = await res.json().catch(() => undefined);
+        const err = body?.error as { code?: string; message?: string; exitCode?: number } | undefined;
+        if (err?.code === 'knip-failed' && typeof err.exitCode === 'number') {
+          console.error(`knip exited with ${err.exitCode} — open the UI for details and setup help`);
+        } else if (err?.message) {
+          console.error(`${err.message} — open the UI for details and setup help`);
+        }
+      })
+      .catch(() => {});
   }
 
   if (open) {

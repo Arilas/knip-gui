@@ -3,12 +3,16 @@
 // these from joinResults' 'ok' rows) — never the full diff list, so a
 // stale/missing/io-error/compile-failed file never gets staged under a
 // message that claims it was fixed.
+//
+// Moved from components/ to components/flows/ (Task 6, UX overhaul), and its
+// toast calls swapped from the hand-rolled Toast.tsx (deleted this task) to
+// sonner's toast.error/success — same call sites, same messages.
 import { useState } from 'react';
-import { apiErrorMessage } from '../api.js';
-import { defaultBranchName } from '../lib/apply-flow.js';
-import { useActivityStore } from '../state/activity.js';
-import { useGitBranchMutation, useGitCommitMutation, useGitStatus } from '../state/queries.js';
-import { useToast } from './Toast.js';
+import { toast } from 'sonner';
+import { apiErrorMessage } from '../../api.js';
+import { defaultBranchName } from '../../lib/apply-flow.js';
+import { useActivityStore } from '../../state/activity.js';
+import { useGitBranchMutation, useGitCommitMutation, useGitStatus } from '../../state/queries.js';
 
 export interface CommitPanelProps {
   /** Applied-ok file paths only — see module doc comment. */
@@ -21,7 +25,6 @@ export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps)
   const gitStatusQuery = useGitStatus();
   const branchMutation = useGitBranchMutation();
   const commitMutation = useGitCommitMutation();
-  const { push } = useToast();
   const log = useActivityStore((s) => s.log);
 
   const [createBranch, setCreateBranch] = useState(false);
@@ -47,12 +50,12 @@ export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps)
       }
       const result = await commitMutation.mutateAsync({ message: message.trim(), paths });
       setSha(result.sha);
-      push('success', `Committed ${result.sha.slice(0, 7)}`);
+      toast.success(`Committed ${result.sha.slice(0, 7)}`);
       log({ kind: 'commit', summary: message.trim(), sha: result.sha, at: new Date().toISOString() });
     } catch (e) {
       const msg = apiErrorMessage(e);
       setCommitError(msg);
-      push('error', msg);
+      toast.error(msg);
     }
   }
 

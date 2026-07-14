@@ -3,10 +3,15 @@
 // highlighter.ts's highlightDiff) rather than re-diffing/tokenizing the
 // before/after source, since the server already rendered a unified diff
 // string (src/fix/diff.ts's renderDiff) and shipped just that.
+//
+// Moved from components/ to components/flows/ (Task 6, UX overhaul) alongside
+// ActionModal/CommitPanel's move onto shadcn Dialog — this component's own
+// markup is unchanged (it's plain content rendered INSIDE a dialog, not a
+// dialog itself), only its file path and relative imports moved.
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { DiffEntry } from '../lib/apply-flow.js';
-import { highlightDiff } from '../lib/highlighter.js';
+import type { DiffEntry } from '../../lib/apply-flow.js';
+import { highlightDiff } from '../../lib/highlighter.js';
 
 export interface DiffViewProps {
   diff: DiffEntry;

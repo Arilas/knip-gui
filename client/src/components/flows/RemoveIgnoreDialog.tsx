@@ -3,27 +3,24 @@
 // (multi-issue, fix-mode overrides, an options step, a post-apply commit
 // panel) — none of which applies to removing one already-listed config
 // entry (no options to choose, and Activity logging replaces a commit step
-// here). Generalizing it to cover this case would mean threading a bunch of
-// fix/ignore-only branches through a component that's ALSO not yet on shadcn
-// Dialog itself (see docs/superpowers/specs/2026-07-14-ux-overhaul-design.md
-// — that migration is its own follow-up task). Built directly on shadcn's
-// Dialog instead (centers correctly by construction, unlike a native
-// <dialog>+Tailwind-preflight combination), reusing DiffView for the diff
-// render and apply-flow.ts's `joinResults` for the post-apply per-file
-// ok/stale/missing/io-error rows — the same join ActionModal's ResultsStep
-// uses, just fed empty `items`/`issues` arrays (there's nothing more to
-// reconcile: preview already gates Remove on every entry compiling ok, so no
-// compile-failed row can appear post-apply).
+// here). Built directly on shadcn's Dialog instead (centers correctly by
+// construction, unlike a native <dialog>+Tailwind-preflight combination —
+// ActionModal itself moved onto the same primitives in Task 6), reusing
+// DiffView for the diff render and apply-flow.ts's `joinResults` for the
+// post-apply per-file ok/stale/missing/io-error rows — the same join
+// ActionModal's ResultsStep uses, just fed empty `items`/`issues` arrays
+// (there's nothing more to reconcile: preview already gates Remove on every
+// entry compiling ok, so no compile-failed row can appear post-apply).
 import { useEffect, useReducer } from 'react';
+import { toast } from 'sonner';
 import type { IgnoreEntry, PatchResult, PlanItem } from '../../api.js';
 import { apiErrorMessage } from '../../api.js';
 import { joinResults, type DiffEntry } from '../../lib/apply-flow.js';
 import { useActivityStore } from '../../state/activity.js';
 import { useIgnoreRemoveApplyMutation, useIgnoreRemovePreviewMutation } from '../../state/queries.js';
-import { DiffView } from '../DiffView.js';
-import { useToast } from '../Toast.js';
 import { Button } from '../ui/button.js';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog.js';
+import { DiffView } from './DiffView.js';
 
 type Flow =
   | { status: 'previewing' }
@@ -76,7 +73,6 @@ export function RemoveIgnoreDialog({ entry, onOpenChange }: RemoveIgnoreDialogPr
   const previewMutation = useIgnoreRemovePreviewMutation();
   const applyMutation = useIgnoreRemoveApplyMutation();
   const log = useActivityStore((s) => s.log);
-  const { push } = useToast();
 
   // Fires the preview the moment a (new) entry opens the dialog — there's no
   // options step for a single already-known entry to configure first, unlike
@@ -92,7 +88,7 @@ export function RemoveIgnoreDialog({ entry, onOpenChange }: RemoveIgnoreDialogPr
       .catch((e: unknown) => {
         const message = apiErrorMessage(e);
         dispatch({ type: 'preview:error', error: message });
-        push('error', message);
+        toast.error(message);
       });
     // Re-run only when a DIFFERENT entry opens this dialog (IgnoredPage mounts
     // this once and swaps `entry` in/out); mutation/push identities and flow
@@ -108,15 +104,15 @@ export function RemoveIgnoreDialog({ entry, onOpenChange }: RemoveIgnoreDialogPr
       dispatch({ type: 'apply:success', results: result.results });
       if (result.results.some((r) => r.ok)) {
         log({ kind: 'ignore-remove', summary: `removed ${entryLabel(entry)}`, at: new Date().toISOString() });
-        push('success', `Removed ${entryLabel(entry)}`);
+        toast.success(`Removed ${entryLabel(entry)}`);
       } else {
         const reason = result.results[0]?.reason ?? 'apply failed';
-        push('error', `Could not remove ${entryLabel(entry)}: ${reason}`);
+        toast.error(`Could not remove ${entryLabel(entry)}: ${reason}`);
       }
     } catch (e) {
       const message = apiErrorMessage(e);
       dispatch({ type: 'apply:error', error: message });
-      push('error', message);
+      toast.error(message);
     }
   }
 

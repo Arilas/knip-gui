@@ -43,6 +43,25 @@ test('select unused export + unused file, fix, rescan clears them, commit', asyn
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
 
+  // Modal-centering regression pin (Task 6, UX overhaul): ActionModal used to
+  // render as a native <dialog>, which — combined with this app's Tailwind
+  // preflight reset — didn't reliably center itself; it's now shadcn's Dialog
+  // (fixed + top-1/2/left-1/2/-translate-x/y-1/2), which centers by
+  // construction. Assert it landed roughly centered horizontally (within 5%
+  // of true center — "roughly" since translate(-50%) rounds to whole pixels)
+  // and comfortably below the very top of the viewport (a modal pinned to
+  // y=0 would indicate the centering transform silently isn't applying).
+  const dialogBox = await dialog.boundingBox();
+  expect(dialogBox).not.toBeNull();
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  if (dialogBox && viewport) {
+    const dialogCenterX = dialogBox.x + dialogBox.width / 2;
+    const viewportCenterX = viewport.width / 2;
+    expect(Math.abs(dialogCenterX - viewportCenterX)).toBeLessThan(viewport.width * 0.05);
+    expect(dialogBox.y).toBeGreaterThan(40);
+  }
+
   // orphan.ts's only fix mode is delete-file, so the options step shows the
   // file-deletion confirm checkbox and blocks Next until it's checked.
   await page.getByLabel('I understand these files will be permanently deleted.').check();
@@ -79,10 +98,11 @@ test('select unused export + unused file, fix, rescan clears them, commit', asyn
   await expect(commitSha).toBeVisible();
   await expect(commitSha).toContainText(/[0-9a-f]{7,40}/);
 
-  // Escape at the results step closes the modal (native <dialog> Escape ->
-  // 'cancel' -> 'close', not blocked here since flow.status isn't 'applying'
-  // — this was flagged untestable via the Browser pane in Task 5 since it
-  // needs a real trusted key event, which Playwright can send).
+  // Escape at the results step closes the modal (Radix Dialog's Escape
+  // handling isn't blocked here since flow.status isn't 'applying' — see
+  // ActionModal.tsx's onEscapeKeyDown; this was flagged untestable via the
+  // Browser pane in Task 5 since it needs a real trusted key event, which
+  // Playwright can send).
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
 });

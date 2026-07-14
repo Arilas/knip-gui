@@ -1,6 +1,6 @@
 import type { Report } from '../core/types.js';
 
-export interface StoreError { code: string; message: string; stderr?: string }
+export interface StoreError { code: string; message: string; stderr?: string; exitCode?: number }
 
 export class ReportStore {
   status: 'idle' | 'scanning' | 'ready' | 'error' = 'idle';
