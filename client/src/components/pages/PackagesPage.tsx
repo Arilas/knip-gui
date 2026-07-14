@@ -195,13 +195,28 @@ function WorkspaceTable({
             {sortedIssues.map((issue) => {
               const actionable = isActionable(issue);
               return (
+                // Keyboard-operable row, same pattern as TreeNode.tsx's
+                // TreeNodeRow: role="button" + tabIndex=0 + Enter/Space both
+                // open the detail Sheet, so keyboard-only users can reach it
+                // (a bare onClick on a <tr> is mouse-only). The checkbox cell
+                // swallows click AND keydown (Space bubbles as keydown)
+                // below, so checking a box never also opens the Sheet.
                 <TableRow
                   key={issue.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View ${issue.filePath.split('/').pop() ?? 'package.json'} for ${issue.symbol ?? issue.filePath}`}
                   data-testid={`packages-row-${issue.type}-${issue.symbol ?? issue.id}`}
-                  className="cursor-pointer"
+                  className="cursor-pointer outline-none focus-visible:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={() => onRowClick(issue)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onRowClick(issue);
+                    }
+                  }}
                 >
-                  <TableCell onClick={(e) => e.stopPropagation()}>
+                  <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       checked={selected.has(issue.id)}

@@ -21,6 +21,22 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
   // symbol suffix rather than assuming which one.
   const row = page.locator('[data-testid^="packages-row-"][data-testid$="-left-pad"]');
   await expect(row).toBeVisible();
+
+  // Keyboard accessibility pin (Task 4 review finding): the row must be
+  // reachable and operable without a mouse — focusable (tabindex=0, exposed
+  // as a button) and Enter must open the detail Sheet. Playwright key events
+  // are trusted, unlike the Browser pane's synthetic dispatch. Runs BEFORE
+  // the ignore flow below, since that flow removes this row entirely (and
+  // this spec runs before any later packages spec would — file order).
+  await expect(row).toHaveAttribute('role', 'button');
+  await expect(row).toHaveAttribute('tabindex', '0');
+  await row.press('Enter');
+  const sheet = page.getByTestId('package-detail-sheet');
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText('left-pad');
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+
   await row.getByRole('checkbox').check();
 
   await expect(page.getByTestId('selection-count')).toHaveText('1 selected');
