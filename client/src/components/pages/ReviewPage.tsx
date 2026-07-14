@@ -207,7 +207,7 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   useEffect(() => {
     if (flow.status !== 'applied' || loggedRef.current || okPaths.length === 0) return;
     loggedRef.current = true;
-    log({ kind: review.kind, summary: commitSummary, at: new Date().toISOString() });
+    log({ kind: review.kind, summary: commitSummary, paths: okPaths, at: new Date().toISOString() });
     // Runs once per successful apply; commitSummary/okPaths/log/review are
     // read at that moment, not re-triggered on their own later changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps

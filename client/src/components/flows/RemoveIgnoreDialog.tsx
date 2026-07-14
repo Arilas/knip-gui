@@ -103,7 +103,18 @@ export function RemoveIgnoreDialog({ entry, onOpenChange }: RemoveIgnoreDialogPr
       const result = await applyMutation.mutateAsync(flow.planId);
       dispatch({ type: 'apply:success', results: result.results });
       if (result.results.some((r) => r.ok)) {
-        log({ kind: 'ignore-remove', summary: `removed ${entryLabel(entry)}`, at: new Date().toISOString() });
+        // joinResults' 3rd/4th params (planItems/issues) only matter for a
+        // compile-failed row's file path, unreachable here — see the
+        // `rows` computation below the reducer for the same rationale.
+        const okPaths = joinResults(flow.diffs, result.results, [], [])
+          .filter((r) => r.status === 'ok')
+          .map((r) => r.filePath);
+        log({
+          kind: 'ignore-remove',
+          summary: `removed ${entryLabel(entry)}`,
+          paths: okPaths,
+          at: new Date().toISOString(),
+        });
         toast.success(`Removed ${entryLabel(entry)}`);
       } else {
         const reason = result.results[0]?.reason ?? 'apply failed';

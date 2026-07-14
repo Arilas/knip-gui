@@ -14,6 +14,16 @@ export interface ActivityEntry {
   kind: ActivityKind;
   summary: string;
   sha?: string;
+  /**
+   * File paths this entry actually touched (Task 5, v0.3 — added for the
+   * sidebar commit affordance's checklist pre-checking). Optional so
+   * existing call sites/entries stay valid without this: not every kind
+   * necessarily has a meaningful file list, and older in-memory entries from
+   * before this field existed (impossible in practice since this store is
+   * session-only, but kept optional regardless — see appliedPaths()) simply
+   * contribute nothing to it.
+   */
+  paths?: string[];
   at: string; // new Date().toISOString(), captured by the caller at log-call time
 }
 
@@ -45,3 +55,21 @@ export const useActivityStore = create<ActivityState>((set) => ({
 
   clear: () => set({ entries: [] }),
 }));
+
+/**
+ * The union of every `paths` entry logged this session (CommitDialog's
+ * pre-check source, via lib/commit-dialog.ts's buildChecklist): a plain
+ * function reading the vanilla store's current getState() rather than a
+ * hook, since the only consumer (CommitDialog) only needs "what's been
+ * applied so far" at the moment its checklist is (re)built, not a live
+ * subscription that re-renders the dialog on every unrelated log() call
+ * elsewhere in the app. Entries with no `paths` (or an empty one) simply
+ * contribute nothing.
+ */
+export function appliedPaths(): Set<string> {
+  const paths = new Set<string>();
+  for (const entry of useActivityStore.getState().entries) {
+    for (const p of entry.paths ?? []) paths.add(p);
+  }
+  return paths;
+}
