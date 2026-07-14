@@ -208,3 +208,18 @@ sidebar badge below).
 
 Trash-instead-of-delete · PR creation via `gh` · watch mode · git-blame age of dead
 code · export-usage heatmap · per-issue fix-mode overrides in the modal.
+
+## v0.3 final-review findings (all minor, post-merge candidates)
+
+- Cancel/Done from Review clears the previously-open Code file (`ui.ts` navigate
+  always overwrites openFile) — restore it on return.
+- Navigating away mid-applying skips the activity-log effect, so CommitDialog
+  later shows those files as "not changed by knip-gui" (tiny window).
+- CommitDialog unmounts abruptly (no Done state) when a commit cleans the whole
+  tree — success toast still shows.
+- `/api/scan` doesn't check the sweeping latch (scan can start during a sweep's
+  child-process phase; client serializes via useBusy).
+- Cancel-after-preview orphans the compiled plan server-side (feeds the existing
+  PlanStore cap/TTL item).
+- Seed-delta TreeView diff logic untested at component level; Production badge
+  lacks tooltip and uses secondary variant (spec said amber).
