@@ -108,16 +108,24 @@ export function useIgnoreApplyMutation() {
   return useMutation({
     mutationKey: ['ignoreApply'],
     mutationFn: (planId: string) => postIgnoreApply(planId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: reportQueryKey });
+      // An ignore apply can write ignore entries into the knip config — the
+      // file useIgnores reads. AppSidebar's Ignored badge consumes that query
+      // and never unmounts, so without this invalidation the badge undercounts
+      // until the user happens to visit the Ignored page (Task 5 review
+      // finding, live-reproduced). Mirrors useIgnoreRemoveApplyMutation.
+      queryClient.invalidateQueries({ queryKey: ignoresQueryKey });
+    },
   });
 }
 
-// Ignored page (Task 5). `useIgnores` invalidates alongside the report query
-// (see useFixApplyMutation/useIgnoreApplyMutation/useIgnoreRemoveApplyMutation
-// below and the rescan the background apply triggers) — but a rescan doesn't
-// itself touch the config file the Ignored page reads, so IgnoredPage also
-// refetches this query directly after a successful remove (see its
-// onSuccess), same as it would after any other config-file-mutating action.
+// Ignored page + AppSidebar badge (Task 5). Invalidated by BOTH config-file-
+// mutating applies — useIgnoreApplyMutation (adds entries) and
+// useIgnoreRemoveApplyMutation (removes them). Deliberately NOT invalidated
+// by useFixApplyMutation or useSweepMutation: a fix/sweep (`knip --fix`)
+// rewrites source files and package.json but never touches the knip config's
+// ignore arrays, so there's nothing new for this query to see.
 export function useIgnores() {
   return useQuery({ queryKey: ignoresQueryKey, queryFn: getIgnores });
 }
