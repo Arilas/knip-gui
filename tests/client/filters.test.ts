@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { Issue } from '../../src/core/types.js';
-import { FACETS, facetCounts, isFixable, isIgnorable, issuesForFacet } from '../../client/src/lib/facets.js';
+import {
+  CODE_TYPES,
+  filterIssues,
+  isActionable,
+  isFixable,
+  isIgnorable,
+  PACKAGE_TYPES,
+  typeLabel,
+} from '../../client/src/lib/filters.js';
 
 function issue(partial: Partial<Issue> & Pick<Issue, 'type' | 'filePath' | 'workspace'>): Issue {
   return {
@@ -62,89 +70,35 @@ const issues: Issue[] = [
     fixable: true,
     fixModes: ['remove-dependency'],
   }),
-  issue({
-    type: 'devDependencies',
-    filePath: 'package.json',
-    workspace: 'packages/a',
-    symbol: 'some-dev-dep',
-    fixable: true,
-    fixModes: ['remove-dependency'],
-  }),
   issue({ type: 'unlisted', filePath: 'src/index.ts', workspace: '.', symbol: 'unlisted-pkg' }),
   issue({ type: 'unresolved', filePath: 'src/index.ts', workspace: '.', symbol: './missing.js' }),
   issue({ type: 'binaries', filePath: 'package.json', workspace: '.', symbol: 'some-bin' }),
 ];
 
-describe('FACETS', () => {
-  it('lists every facet id with a human label, in spec order', () => {
-    expect(FACETS.map((f) => f.id)).toEqual([
-      'overview',
-      'tree',
-      'files',
-      'exports',
-      'types',
-      'enumMembers',
-      'namespaceMembers',
-      'duplicates',
-      'dependencies',
-      'unlisted',
-      'unresolved',
-      'binaries',
-    ]);
-    for (const facet of FACETS) {
-      expect(typeof facet.label).toBe('string');
-      expect(facet.label.length).toBeGreaterThan(0);
-    }
-  });
-});
-
-describe('issuesForFacet', () => {
-  it('tree facet includes every file-bearing type (incl. nsExports) but excludes dependency-shaped types', () => {
-    const tree = issuesForFacet('tree', issues);
-    expect(tree.map((i) => i.type).sort()).toEqual(
-      ['duplicates', 'enumMembers', 'exports', 'files', 'nsExports', 'types'].sort(),
+describe('CODE_TYPES / PACKAGE_TYPES', () => {
+  it('CODE_TYPES lists every file-located type', () => {
+    expect([...CODE_TYPES].sort()).toEqual(
+      ['duplicates', 'enumMembers', 'exports', 'files', 'namespaceMembers', 'types', 'unlisted', 'unresolved'].sort(),
     );
   });
 
-  it('dependencies facet unions the three dependency issue types', () => {
-    const deps = issuesForFacet('dependencies', issues);
-    expect(deps.map((i) => i.type).sort()).toEqual(['dependencies', 'devDependencies']);
-  });
-
-  it('exports facet includes exports and nsExports', () => {
-    const exp = issuesForFacet('exports', issues);
-    expect(exp.map((i) => i.type).sort()).toEqual(['exports', 'nsExports']);
-  });
-
-  it('a plain table facet (binaries) matches only its own type', () => {
-    expect(issuesForFacet('binaries', issues).map((i) => i.type)).toEqual(['binaries']);
-  });
-
-  it('filters by workspace when given', () => {
-    const deps = issuesForFacet('dependencies', issues, 'packages/a');
-    expect(deps.map((i) => i.symbol)).toEqual(['some-dev-dep']);
-  });
-
-  it('overview facet returns every issue (optionally workspace-scoped)', () => {
-    expect(issuesForFacet('overview', issues)).toHaveLength(issues.length);
-    expect(issuesForFacet('overview', issues, '.')).toHaveLength(issues.length - 1);
+  it('PACKAGE_TYPES lists every dependency-shaped type', () => {
+    expect([...PACKAGE_TYPES].sort()).toEqual(
+      ['binaries', 'dependencies', 'devDependencies', 'optionalPeerDependencies'].sort(),
+    );
   });
 });
 
-describe('facetCounts', () => {
-  it('counts issues per real issue type, across all workspaces when none given', () => {
-    const counts = facetCounts(issues);
-    expect(counts.exports).toBe(1);
-    expect(counts.nsExports).toBe(1);
-    expect(counts.dependencies).toBe(1);
-    expect(counts.devDependencies).toBe(1);
-    expect(counts.files).toBe(1);
+describe('typeLabel', () => {
+  it('gives every IssueType a non-empty human label', () => {
+    for (const type of [...CODE_TYPES, ...PACKAGE_TYPES, 'nsExports', 'nsTypes', 'catalog', 'cycles'] as const) {
+      expect(typeLabel(type).length).toBeGreaterThan(0);
+    }
   });
 
-  it('scopes counts to one workspace', () => {
-    const counts = facetCounts(issues, 'packages/a');
-    expect(counts.devDependencies).toBe(1);
-    expect(counts.dependencies).toBeUndefined();
+  it('exports a specific, stable label used by the FilterChips tooltip', () => {
+    expect(typeLabel('exports')).toBe('Unused exports');
+    expect(typeLabel('unlisted')).toBe('Unlisted dependencies');
   });
 });
 
@@ -179,5 +133,50 @@ describe('isIgnorable', () => {
       expect(result.ok).toBe(false);
       expect(result.reason).toBeTruthy();
     }
+  });
+});
+
+describe('isActionable', () => {
+  it('is true when fixable or ignorable', () => {
+    expect(isActionable(issues.find((i) => i.type === 'exports')!)).toBe(true);
+    expect(isActionable(issues.find((i) => i.type === 'binaries')!)).toBe(true);
+  });
+
+  it('is false when neither fixable nor ignorable', () => {
+    expect(isActionable(issues.find((i) => i.type === 'nsExports')!)).toBe(false);
+    expect(isActionable(issues.find((i) => i.type === 'unlisted')!)).toBe(false);
+  });
+});
+
+describe('filterIssues', () => {
+  it('keeps only issues of an enabled type', () => {
+    const enabled = new Set(CODE_TYPES);
+    const result = filterIssues(issues, enabled, '');
+    expect(result.map((i) => i.type).sort()).toEqual(
+      ['duplicates', 'enumMembers', 'exports', 'files', 'types', 'unlisted', 'unresolved'].sort(),
+    );
+  });
+
+  it('excludes a type once it is disabled', () => {
+    const enabled = new Set(CODE_TYPES.filter((t) => t !== 'exports'));
+    const result = filterIssues(issues, enabled, '');
+    expect(result.some((i) => i.type === 'exports')).toBe(false);
+  });
+
+  it('applies a case-insensitive substring match over filePath or symbol', () => {
+    const enabled = new Set(CODE_TYPES);
+    const result = filterIssues(issues, enabled, 'SHAPES');
+    expect(result.map((i) => i.filePath)).toEqual(['src/shapes.ts']);
+  });
+
+  it('matches on symbol as well as filePath', () => {
+    const enabled = new Set(CODE_TYPES);
+    const result = filterIssues(issues, enabled, 'unusedhelper');
+    expect(result.map((i) => i.symbol)).toEqual(['unusedHelper']);
+  });
+
+  it('an empty/whitespace query is a no-op on top of the type filter', () => {
+    const enabled = new Set(CODE_TYPES);
+    expect(filterIssues(issues, enabled, '   ')).toHaveLength(filterIssues(issues, enabled, '').length);
   });
 });

@@ -28,36 +28,39 @@ import type { ComponentType } from 'react';
 import type { IssueType } from '../../../../src/core/types.js';
 import { getSweepCapabilities } from '../../api.js';
 import { filterRows, sortRows, typeTotals, visibleColumns, workspaceRows, type SortKey } from '../../lib/dashboard.js';
+import { CODE_TYPES, PACKAGE_TYPES, typeLabel } from '../../lib/filters.js';
 import { useBusy, useReport, useSweepMutation } from '../../state/queries.js';
-import { CODE_TYPES, PACKAGE_TYPES, useUiStore, type Page } from '../../state/ui.js';
+import { useUiStore, type Page } from '../../state/ui.js';
 import { SweepDialog } from '../flows/SweepDialog.js';
 import { Button } from '../ui/button.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
 import { Input } from '../ui/input.js';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table.js';
 
-// Icon + human label per issue type. nsExports/nsTypes/catalog/cycles have no
-// dedicated Dashboard destination page (see lib/facets.ts's FILE_BEARING_TYPES
-// doc comment — catalog/cycles carry no per-symbol source location at all,
-// and nsExports/nsTypes fold into the exports/types facets everywhere else),
-// so their tiles render but aren't clickable (pageForType returns undefined).
-const TYPE_META: Record<IssueType, { label: string; icon: ComponentType<{ className?: string }> }> = {
-  files: { label: 'Unused files', icon: FileX2 },
-  exports: { label: 'Unused exports', icon: LogOut },
-  nsExports: { label: 'Unused namespace exports', icon: LogOut },
-  types: { label: 'Unused types', icon: Type },
-  nsTypes: { label: 'Unused namespace types', icon: Type },
-  enumMembers: { label: 'Unused enum members', icon: ListOrdered },
-  namespaceMembers: { label: 'Unused namespace members', icon: Braces },
-  duplicates: { label: 'Duplicate exports', icon: Copy },
-  dependencies: { label: 'Unused dependencies', icon: Package },
-  devDependencies: { label: 'Unused dev dependencies', icon: PackageMinus },
-  optionalPeerDependencies: { label: 'Unused peer dependencies', icon: PackageSearch },
-  unlisted: { label: 'Unlisted dependencies', icon: PackagePlus },
-  unresolved: { label: 'Unresolved imports', icon: Unlink },
-  binaries: { label: 'Unused binaries', icon: Binary },
-  catalog: { label: 'Catalog entries', icon: HelpCircle },
-  cycles: { label: 'Import cycles', icon: RefreshCw },
+// Icon per issue type (labels come from lib/filters.ts's typeLabel, the one
+// shared source of human names — Task 3). nsExports/nsTypes/catalog/cycles
+// have no dedicated Dashboard destination page (see lib/filters.ts's
+// CODE_TYPES/PACKAGE_TYPES doc comments — catalog/cycles carry no per-symbol
+// source location at all, and nsExports/nsTypes fold into the exports/types
+// filter chips everywhere else), so their tiles render but aren't clickable
+// (pageForType returns undefined).
+const TYPE_ICONS: Record<IssueType, ComponentType<{ className?: string }>> = {
+  files: FileX2,
+  exports: LogOut,
+  nsExports: LogOut,
+  types: Type,
+  nsTypes: Type,
+  enumMembers: ListOrdered,
+  namespaceMembers: Braces,
+  duplicates: Copy,
+  dependencies: Package,
+  devDependencies: PackageMinus,
+  optionalPeerDependencies: PackageSearch,
+  unlisted: PackagePlus,
+  unresolved: Unlink,
+  binaries: Binary,
+  catalog: HelpCircle,
+  cycles: RefreshCw,
 };
 
 const CODE_TYPE_SET = new Set(CODE_TYPES);
@@ -189,8 +192,7 @@ export function Dashboard() {
             data-testid="stat-tiles"
           >
             {totals.map(({ type, count }) => {
-              const meta = TYPE_META[type];
-              const Icon = meta.icon;
+              const Icon = TYPE_ICONS[type];
               const clickable = pageForType(type) !== undefined;
               return (
                 <button
@@ -203,7 +205,7 @@ export function Dashboard() {
                 >
                   <Icon className="size-4 text-muted-foreground" />
                   <span className="text-lg font-semibold tabular-nums">{count}</span>
-                  <span className="text-xs text-muted-foreground">{meta.label}</span>
+                  <span className="text-xs text-muted-foreground">{typeLabel(type)}</span>
                 </button>
               );
             })}
@@ -258,7 +260,7 @@ export function Dashboard() {
                         className="ml-auto flex items-center gap-1 font-medium"
                         onClick={() => onSort(type)}
                         data-testid={`sort-${type}`}
-                        title={TYPE_META[type].label}
+                        title={typeLabel(type)}
                       >
                         {type} {sortIndicator(type)}
                       </button>

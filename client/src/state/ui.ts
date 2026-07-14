@@ -25,33 +25,14 @@
 // filters above.
 import { create } from 'zustand';
 import type { IssueType } from '../../../src/core/types.js';
+import { CODE_TYPES, PACKAGE_TYPES } from '../lib/filters.js';
 
 export type Page = 'dashboard' | 'code' | 'packages' | 'ignored' | 'activity';
 
-// File-located issue types (mirrors facets.ts's FILE_BEARING_TYPES) plus
-// unresolved/unlisted — dependency-shaped but still resolvable to a source
-// file, so the rebuilt Code page (Task 3) surfaces them there rather than on
-// Packages. Exported so future tasks (FilterChips, Dashboard tile routing)
-// share this single source of truth instead of redeclaring the list.
-export const CODE_TYPES: readonly IssueType[] = [
-  'exports',
-  'types',
-  'enumMembers',
-  'namespaceMembers',
-  'files',
-  'duplicates',
-  'unresolved',
-  'unlisted',
-];
-
-// Dependency/package-shaped issue types — everything that lives in a
-// package.json rather than a source file.
-export const PACKAGE_TYPES: readonly IssueType[] = [
-  'dependencies',
-  'devDependencies',
-  'optionalPeerDependencies',
-  'binaries',
-];
+// Re-exported for existing/older import sites (Dashboard.tsx, tests) — the
+// canonical definitions now live in lib/filters.ts (Task 3), alongside the
+// rest of the filter/type helpers that consume them.
+export { CODE_TYPES, PACKAGE_TYPES };
 
 export interface UiState {
   page: Page;
@@ -62,6 +43,13 @@ export interface UiState {
   navigate: (page: Page, opts?: { filters?: IssueType[]; openFile?: string; search?: string }) => void;
   toggleCodeFilter: (type: IssueType) => void;
   togglePackagesFilter: (type: IssueType) => void;
+  // Narrow setter for the Code page's own search input (Task 3): unlike
+  // `navigate`'s `search` option (a replace-when-navigating-TO-the-page
+  // value, meant for cross-page callers like Dashboard's cell click), this
+  // updates codeSearch in place without touching `page` or `openFile` — a
+  // keystroke in the search box must never clear whatever file is open in
+  // the split's right pane.
+  setCodeSearch: (search: string) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -97,4 +85,6 @@ export const useUiStore = create<UiState>((set) => ({
       else next.add(type);
       return { packagesFilters: next };
     }),
+
+  setCodeSearch: (search) => set({ codeSearch: search }),
 }));

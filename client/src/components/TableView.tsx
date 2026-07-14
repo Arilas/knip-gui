@@ -6,9 +6,9 @@
 // only ever selects/clears the actionable subset.
 import { useMemo, useState } from 'react';
 import type { Issue, IssueType } from '../../../src/core/types.js';
-import { isFixable, isIgnorable } from '../lib/facets.js';
+import { isFixable, isIgnorable } from '../lib/filters.js';
 import { idsToToggleForNode, nodeSelectionState } from '../lib/tree.js';
-import { TriStateCheckbox, unactionableReason } from './TreeNode.js';
+import { TriStateCheckbox, unactionableReason } from './code/TreeNode.js';
 
 export interface TableViewProps {
   issues: Issue[];
@@ -77,6 +77,7 @@ export function TableView({ issues, selected, onToggleIds }: TableViewProps) {
                 state={headerState}
                 disabled={actionableIds.length === 0}
                 title={actionableIds.length === 0 ? 'No fixable or ignorable issues here' : 'Select all'}
+                ariaLabel="Select all issues"
                 onChange={() => onToggleIds(idsToToggleForNode({ actionableIds }, selected))}
               />
             </th>

@@ -96,6 +96,16 @@ describe('navigate', () => {
   });
 });
 
+describe('setCodeSearch', () => {
+  it('updates codeSearch without touching page or openFile', () => {
+    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
+    useUiStore.getState().setCodeSearch('used');
+    expect(useUiStore.getState().codeSearch).toBe('used');
+    expect(useUiStore.getState().openFile).toBe('src/used.ts');
+    expect(useUiStore.getState().page).toBe('code');
+  });
+});
+
 describe('toggleCodeFilter / togglePackagesFilter', () => {
   it('toggleCodeFilter flips a single type off then on again', () => {
     useUiStore.getState().toggleCodeFilter('exports');

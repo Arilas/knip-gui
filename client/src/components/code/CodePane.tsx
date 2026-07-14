@@ -14,11 +14,11 @@
 // working React event handlers) into a raw HTML string.
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { Issue } from '../../../src/core/types.js';
-import { ApiError } from '../api.js';
-import { isFixable, isIgnorable } from '../lib/facets.js';
-import { highlightToHtml, issueLines, langForPath } from '../lib/highlighter.js';
-import { useFile } from '../state/queries.js';
+import type { Issue } from '../../../../src/core/types.js';
+import { ApiError } from '../../api.js';
+import { isFixable, isIgnorable } from '../../lib/filters.js';
+import { highlightToHtml, issueLines, langForPath } from '../../lib/highlighter.js';
+import { useFile } from '../../state/queries.js';
 import { TYPE_BADGE_LABELS, unactionableReason } from './TreeNode.js';
 
 export interface CodePaneProps {

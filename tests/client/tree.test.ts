@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { Issue } from '../../src/core/types.js';
+import type { Issue, IssueType } from '../../src/core/types.js';
 import {
+  autoExpandDepth,
   buildTree,
   collectActionableIds,
+  collectFileIssues,
   collectIds,
+  countFiles,
   idsToToggleForNode,
   nodeSelectionState,
 } from '../../client/src/lib/tree.js';
@@ -128,6 +131,31 @@ describe('buildTree', () => {
     expect(tree.counts).toEqual({ files: 1, exports: 2, types: 1 });
     expect(tree.issueIds).toHaveLength(4);
   });
+
+  it('rolls up totalCount (sum of every per-type count) on every DirNode', () => {
+    const tree = buildTree([
+      issue({ type: 'files', filePath: 'src/orphan.ts' }),
+      issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'a' }),
+      issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'b' }),
+      issue({ type: 'types', filePath: 'src/shapes.ts', symbol: 'T' }),
+    ]);
+    const src = findChild(tree, 'src') as DirNode;
+    expect(src.totalCount).toBe(4);
+    expect(tree.totalCount).toBe(4);
+  });
+
+  it('groups actionableIds by type on both FileNode and DirNode', () => {
+    const a = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'a', fixable: true, fixModes: ['strip-export'] });
+    const b = issue({ type: 'files', filePath: 'src/orphan.ts', fixable: true, fixModes: ['delete-file'] });
+    const unfixable = issue({ type: 'nsExports', filePath: 'src/used.ts', symbol: 'ns', fixable: false, fixModes: [] });
+    const tree = buildTree([a, b, unfixable]);
+    const src = findChild(tree, 'src') as DirNode;
+    const used = findChild(src, 'used.ts') as FileNode;
+    expect(used.actionableIdsByType).toEqual({ exports: [a.id] });
+    expect(src.actionableIdsByType.exports).toEqual([a.id]);
+    expect(src.actionableIdsByType.files).toEqual([b.id]);
+    expect(src.actionableIdsByType.nsExports).toBeUndefined();
+  });
 });
 
 describe('nodeSelectionState', () => {
@@ -178,6 +206,41 @@ describe('nodeSelectionState', () => {
     expect(nodeSelectionState(src, new Set([a.id]))).toBe('some');
     expect(nodeSelectionState(src, new Set())).toBe('none');
   });
+
+  describe('with enabledTypes (Task 3 filter-aware tri-state)', () => {
+    it('counts only issues matching the currently-enabled types', () => {
+      // A tree built from the FULL (unfiltered) issue set — the point of
+      // enabledTypes is that nodeSelectionState still gates correctly even
+      // when the caller didn't pre-filter the tree by type.
+      const exp = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'e', fixable: true, fixModes: ['strip-export'] });
+      const enumM = issue({ type: 'enumMembers', filePath: 'src/used.ts', symbol: 'm', fixable: true, fixModes: ['remove-member'] });
+      const tree = buildTree([exp, enumM]);
+      const used = findChild(findChild(tree, 'src') as DirNode, 'used.ts') as FileNode;
+
+      // Both selected, but 'exports' is disabled: only enumMembers counts.
+      const enabled = new Set<IssueType>(['enumMembers']);
+      expect(nodeSelectionState(used, new Set([exp.id, enumM.id]), enabled)).toBe('all');
+      expect(nodeSelectionState(used, new Set([enumM.id]), enabled)).toBe('all');
+      expect(nodeSelectionState(used, new Set([exp.id]), enabled)).toBe('none');
+    });
+
+    it('reads "none" when every actionable issue at this node is of a disabled type', () => {
+      const exp = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'e', fixable: true, fixModes: ['strip-export'] });
+      const tree = buildTree([exp]);
+      const used = findChild(findChild(tree, 'src') as DirNode, 'used.ts') as FileNode;
+      expect(nodeSelectionState(used, new Set([exp.id]), new Set<IssueType>(['enumMembers']))).toBe('none');
+    });
+
+    it('rolls enabledTypes-scoped tri-state up through directories', () => {
+      const exp = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'e', fixable: true, fixModes: ['strip-export'] });
+      const fileIssue = issue({ type: 'files', filePath: 'src/orphan.ts', fixable: true, fixModes: ['delete-file'] });
+      const tree = buildTree([exp, fileIssue]);
+      const src = findChild(tree, 'src') as DirNode;
+      const enabled = new Set<IssueType>(['files']);
+      expect(nodeSelectionState(src, new Set([fileIssue.id]), enabled)).toBe('all');
+      expect(nodeSelectionState(src, new Set([exp.id]), enabled)).toBe('none');
+    });
+  });
 });
 
 describe('collectIds / collectActionableIds', () => {
@@ -220,5 +283,78 @@ describe('idsToToggleForNode', () => {
 
   it('works against an ad-hoc { actionableIds } holder (TableView select-all use case)', () => {
     expect(idsToToggleForNode({ actionableIds: ['x', 'y'] }, new Set(['x']))).toEqual(['y']);
+  });
+
+  it('restricts to enabled types: selects only the enabled-type ids, ignores a disabled-type id even if unselected', () => {
+    const exp = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'e', fixable: true, fixModes: ['strip-export'] });
+    const enumM = issue({ type: 'enumMembers', filePath: 'src/used.ts', symbol: 'm', fixable: true, fixModes: ['remove-member'] });
+    const tree = buildTree([exp, enumM]);
+    const used = findChild(findChild(tree, 'src') as DirNode, 'used.ts') as FileNode;
+    const enabled = new Set<IssueType>(['enumMembers']);
+    expect(idsToToggleForNode(used, new Set(), enabled)).toEqual([enumM.id]);
+  });
+
+  it('clearing a fully-enabled-selected node never touches a disabled-type id that happens to be selected too (cart survives filter toggles)', () => {
+    const exp = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'e', fixable: true, fixModes: ['strip-export'] });
+    const enumM = issue({ type: 'enumMembers', filePath: 'src/used.ts', symbol: 'm', fixable: true, fixModes: ['remove-member'] });
+    const tree = buildTree([exp, enumM]);
+    const used = findChild(findChild(tree, 'src') as DirNode, 'used.ts') as FileNode;
+    const enabled = new Set<IssueType>(['enumMembers']);
+    // Both exp and enumM are selected; only enumMembers is enabled, so the
+    // node reads 'all' (enumM is the only id that counts) and toggling
+    // clears just that id — exp (the disabled/hidden type) is untouched.
+    expect(idsToToggleForNode(used, new Set([exp.id, enumM.id]), enabled)).toEqual([enumM.id]);
+  });
+});
+
+describe('collectFileIssues', () => {
+  it('returns a file node\'s own fileIssues', () => {
+    const a = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'a' });
+    const tree = buildTree([a]);
+    const used = findChild(findChild(tree, 'src') as DirNode, 'used.ts') as FileNode;
+    expect(collectFileIssues(used)).toEqual(used.fileIssues);
+  });
+
+  it('flattens every descendant file\'s fileIssues for a dir node', () => {
+    const a = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'a' });
+    const b = issue({ type: 'files', filePath: 'src/orphan.ts' });
+    const tree = buildTree([a, b]);
+    const src = findChild(tree, 'src') as DirNode;
+    expect(collectFileIssues(src).map((i) => i.id).sort()).toEqual([a.id, b.id].sort());
+  });
+});
+
+describe('countFiles', () => {
+  it('counts 1 for a single file node', () => {
+    const tree = buildTree([issue({ type: 'files', filePath: 'src/orphan.ts' })]);
+    const src = findChild(tree, 'src') as DirNode;
+    expect(countFiles(findChild(src, 'orphan.ts'))).toBe(1);
+  });
+
+  it('counts every file under a dir, recursively', () => {
+    const tree = buildTree([
+      issue({ type: 'files', filePath: 'src/a.ts' }),
+      issue({ type: 'files', filePath: 'src/nested/b.ts' }),
+      issue({ type: 'files', filePath: 'src/nested/c.ts' }),
+    ]);
+    expect(countFiles(tree)).toBe(3);
+  });
+});
+
+describe('autoExpandDepth', () => {
+  it('returns "all" when the tree has no children', () => {
+    const tree = buildTree([]);
+    expect(autoExpandDepth(tree, 0)).toBe('all');
+  });
+
+  it('returns "all" when visibleFileCount is at or below the 200-file threshold', () => {
+    const tree = buildTree([issue({ type: 'files', filePath: 'src/a.ts' })]);
+    expect(autoExpandDepth(tree, 1)).toBe('all');
+    expect(autoExpandDepth(tree, 200)).toBe('all');
+  });
+
+  it('returns "top" once visibleFileCount exceeds the 200-file threshold', () => {
+    const tree = buildTree([issue({ type: 'files', filePath: 'src/a.ts' })]);
+    expect(autoExpandDepth(tree, 201)).toBe('top');
   });
 });

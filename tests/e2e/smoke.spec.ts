@@ -19,14 +19,21 @@ test('select unused export + unused file, fix, rescan clears them, commit', asyn
   // report.scannedAt is set (i.e. the initial fire-and-forget scan finished).
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
 
-  // Switch to the Code page (sidebar nav, not the old facet rail) and expand
-  // down to src/used.ts.
+  // Switch to the Code page (sidebar nav, not the old facet rail). The
+  // rebuilt tree auto-expands every directory when the project has few
+  // files (see lib/tree.ts's autoExpandDepth — this fixture is well under
+  // the 200-file threshold), so src/ is already open; no expand click needed.
   await page.getByTestId('nav-code').click();
-  await page.getByRole('button', { name: 'Expand src' }).click();
-  await page.getByRole('button', { name: 'Expand used.ts' }).click();
 
-  // Select the unusedHelper export issue row and the orphan.ts file row.
-  await page.getByTestId('tree-issue-exports-unusedHelper').getByRole('checkbox').check();
+  // The rebuilt tree no longer has per-issue child rows (a file row's whole
+  // click opens the file instead of expanding it — see TreeNode.tsx's doc
+  // comment) — select the specific unusedHelper export via the code pane's
+  // gutter badge instead, then check the orphan.ts file row directly.
+  await page.getByTestId('tree-file-src/used.ts').click();
+  const exportBadge = page.getByTestId('code-pane-badge-exports-unusedHelper');
+  await expect(exportBadge).toBeVisible();
+  await exportBadge.getByRole('checkbox').check();
+
   await page.getByTestId('tree-file-src/orphan.ts').getByRole('checkbox').check();
 
   await expect(page.getByTestId('selection-count')).toHaveText('2 selected');

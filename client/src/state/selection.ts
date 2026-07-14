@@ -4,6 +4,7 @@
 // React (see tests/client/selection.test.ts).
 import { create } from 'zustand';
 import type { FixMode, Issue, IssueType } from '../../../src/core/types.js';
+import { isActionable } from '../lib/filters.js';
 
 export interface SelectionState {
   selected: Set<string>;
@@ -14,6 +15,17 @@ export interface SelectionState {
   // Drops ids that no longer exist after a rescan (Plan 3 Task 5's apply flow
   // obligation: the cart prunes ids no longer present in the fresh report).
   pruneMissing: (presentIds: Iterable<string>) => void;
+  // Filter-aware ADD for a file/dir checkbox click (Task 3, UX overhaul):
+  // adds only the issues in `fileIssues` that are both actionable (fixable
+  // or ignorable — see lib/filters.ts's isActionable) AND of a currently-
+  // enabled type. This is a pure add, never a remove — it never touches ids
+  // already in the cart (including ones of a now-disabled type), which is
+  // exactly what makes "the cart survives filter toggles" true: disabling a
+  // chip only hides/gates what a FUTURE checkbox click can add, it never
+  // retroactively drops anything already selected. Clearing a fully-checked
+  // node instead goes through the ordinary `toggle` (see idsToToggleForNode
+  // in lib/tree.ts, called with the same enabledTypes).
+  addFileFiltered: (fileIssues: Issue[], enabled: ReadonlySet<IssueType>) => void;
 }
 
 export const useSelectionStore = create<SelectionState>((set) => ({
@@ -42,6 +54,15 @@ export const useSelectionStore = create<SelectionState>((set) => ({
         Object.entries(state.modeOverrides).filter(([id]) => keep.has(id)),
       );
       return { selected, modeOverrides };
+    }),
+
+  addFileFiltered: (fileIssues, enabled) =>
+    set((state) => {
+      const next = new Set(state.selected);
+      for (const issue of fileIssues) {
+        if (enabled.has(issue.type) && isActionable(issue)) next.add(issue.id);
+      }
+      return { selected: next };
     }),
 }));
 

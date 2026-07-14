@@ -22,12 +22,14 @@ test('code pane open on a file survives a rescan that prunes one of its issues',
   await page.goto('/');
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
 
+  // The rebuilt tree auto-expands every directory for a project this small
+  // (see lib/tree.ts's autoExpandDepth), so src/ is already open on load.
   await page.getByTestId('nav-code').click();
-  await page.getByRole('button', { name: 'Expand src' }).click();
 
-  // Open src/used.ts in the code pane (the file row's name button, not the
-  // "Expand used.ts" toggle — see TreeNode.tsx's onOpenFile wiring).
-  await page.getByTestId('tree-file-src/used.ts').getByRole('button', { name: 'used.ts', exact: true }).click();
+  // Open src/used.ts in the code pane — a file row's whole click opens it
+  // (no separate expand toggle on file rows in the rebuilt tree; see
+  // components/code/TreeNode.tsx's doc comment).
+  await page.getByTestId('tree-file-src/used.ts').click();
 
   const badge = page.getByTestId('code-pane-badge-enumMembers-Blue');
   await expect(badge).toBeVisible();

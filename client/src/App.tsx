@@ -3,16 +3,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { IssueType } from '../../src/core/types.js';
 import { ActionModal } from './components/ActionModal.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
-import { CodePane } from './components/CodePane.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { CodePage } from './components/pages/CodePage.js';
 import { Dashboard } from './components/pages/Dashboard.js';
 import { SelectionBar } from './components/SelectionBar.js';
 import { TableView } from './components/TableView.js';
 import { ToastProvider } from './components/Toast.js';
-import { TreeView } from './components/TreeView.js';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar.js';
 import { TooltipProvider } from './components/ui/tooltip.js';
-import { issuesForFacet } from './lib/facets.js';
 import { useReport } from './state/queries.js';
 import { useSelectionStore } from './state/selection.js';
 import { useUiStore } from './state/ui.js';
@@ -22,8 +20,7 @@ import { useUiStore } from './state/ui.js';
 // Until then this reuses the pre-existing TableView + the same dependency-
 // shaped IssueTypes the old FacetRail's dependencies/unlisted/unresolved/
 // binaries facets covered, purely so the app (and ignore.spec.ts's left-pad
-// flow, which lives here) stay usable — same rationale as keeping the Code
-// page's TreeView/CodePane below.
+// flow, which lives here) stay usable.
 const PACKAGES_PREVIEW_TYPES: ReadonlySet<IssueType> = new Set([
   'dependencies',
   'devDependencies',
@@ -36,7 +33,6 @@ const PACKAGES_PREVIEW_TYPES: ReadonlySet<IssueType> = new Set([
 const queryClient = new QueryClient();
 
 function AppShell() {
-  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [modalMode, setModalMode] = useState<'fix' | 'ignore' | null>(null);
   const { data, isLoading, error } = useReport();
   const page = useUiStore((s) => s.page);
@@ -82,41 +78,7 @@ function AppShell() {
       case 'dashboard':
         return <Dashboard />;
       case 'code':
-        return (
-          <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <TreeView
-                issues={issuesForFacet('tree', issues)}
-                selected={selected}
-                onToggleIds={toggle}
-                onOpenFile={setOpenFilePath}
-              />
-            </div>
-            <aside className="flex w-96 shrink-0 flex-col overflow-hidden border-l border-border">
-              {openFilePath && (
-                <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                  <span className="truncate font-mono text-xs" title={openFilePath}>
-                    {openFilePath}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setOpenFilePath(null)}
-                    aria-label="Close file panel"
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    ✕
-                  </button>
-                </div>
-              )}
-              <CodePane
-                filePath={openFilePath}
-                issues={openFilePath ? issues.filter((i) => i.filePath === openFilePath) : []}
-                selected={selected}
-                onToggleIds={toggle}
-              />
-            </aside>
-          </div>
-        );
+        return <CodePage issues={issues} />;
       case 'packages':
         return (
           <TableView
