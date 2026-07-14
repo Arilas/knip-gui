@@ -7,18 +7,28 @@
 // the entry -> `get()` returns undefined -> the `!` non-null assertion throws
 // -> React unmounts the whole root (no error boundary existed) -> blank page.
 //
-// Reproduces the reviewer's exact repro shape but targets `src/used.ts`'s
-// `Color.Blue` enumMember issue (line 11) rather than the `unusedHelper`
-// export (line 5) smoke.spec.ts already consumes via its Fix flow — this
-// keeps the spec independent of run order/state, same rationale as
-// ignore.spec.ts targeting `left-pad` instead of smoke.spec.ts's issues (see
-// that file's doc comment). File name sorts before both existing specs, so it
+// Task 3 (v0.3) note: the ignore/apply step that used to run in a modal
+// FLOATING OVER the still-mounted code pane now runs on the separate Review
+// page (Code unmounts entirely while Review is up — see App.tsx's page
+// switch). The hazardous transition this spec pins — the SAME mounted
+// CodePane instance living through a rescan that removes one of its flagged
+// lines — still happens, just after returning from Review: `ui.openFile`
+// is page-scoped (state/ui.ts's `navigate` doc comment) and is cleared by the
+// navigation back to Code, so the file is reopened (a fresh CodePane mount)
+// and left mounted while the apply's background rescan (already in flight)
+// lands and prunes the now-ignored issue.
+//
+// Targets src/used.ts's Color.Blue enumMember issue (line 11) rather than the
+// unusedHelper export smoke.spec.ts consumes via its Fix flow — keeps this
+// spec independent of run order/state, same rationale as ignore.spec.ts
+// targeting left-pad instead of smoke.spec.ts's issues. File name sorts
+// before smoke.spec.ts/filters.spec.ts/ignore.spec.ts/review.spec.ts, so it
 // runs first against the fresh fixture regardless.
 import { expect, test } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial' });
 
-test('code pane open on a file survives a rescan that prunes one of its issues', async ({ page }) => {
+test('code pane reopened after an ignore survives the rescan that prunes its issue', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
 
@@ -37,11 +47,11 @@ test('code pane open on a file survives a rescan that prunes one of its issues',
 
   await expect(page.getByTestId('selbar-count')).toHaveText('1 selected');
 
-  await page.getByRole('button', { name: 'Ignore', exact: true }).click();
+  await page.getByTestId('selbar-ignore').click();
+  await expect(page.getByTestId('review-page')).toBeVisible();
+  await expect(page.getByTestId('review-header')).toContainText('Ignore 1 issue');
 
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
-  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByTestId('review-preview').click();
 
   // Ignoring an enumMember inserts an @public JSDoc tag directly into the
   // source file (see src/fix/compiler.ts's compileIgnorePlan enumMembers
@@ -50,12 +60,18 @@ test('code pane open on a file survives a rescan that prunes one of its issues',
   await expect(diff).toBeVisible({ timeout: 10_000 });
   await expect(diff).toContainText('@public');
 
-  await page.getByRole('button', { name: 'Apply' }).click();
-  await expect(page.getByTestId('result-status-src/used.ts')).toHaveText('ok', { timeout: 10_000 });
+  await page.getByTestId('review-apply').click();
+  await expect(page.getByTestId('review-rail-row-src/used.ts')).toContainText('applied ok', { timeout: 10_000 });
 
-  // The code pane is still open BEHIND the modal (App.tsx keeps it mounted)
-  // while the background rescan runs. Wait for the rescan to actually drop
-  // the now-ignored issue's badge — this is the moment the old code crashed.
+  await page.getByTestId('review-skip').click();
+  await expect(page.getByTestId('review-page')).toHaveCount(0);
+
+  // Back on Code — ui.openFile is page-scoped and was cleared by the
+  // navigation back, so reopen src/used.ts explicitly (a fresh CodePane
+  // mount, left mounted from here on). The apply's background rescan may
+  // still be in flight; wait for it to land and actually drop the
+  // now-ignored issue's badge — this is the moment the old code crashed.
+  await page.getByTestId('tree-file-src/used.ts').click();
   await expect(badge).toHaveCount(0, { timeout: 30_000 });
 
   // App did NOT blank: the persistent chrome (sidebar footer's scan stamp,
@@ -68,7 +84,4 @@ test('code pane open on a file survives a rescan that prunes one of its issues',
   // and its badge is still rendered — confirms the overlay re-synced with
   // the fresh report rather than the whole pane going empty/stale.
   await expect(page.getByTestId('code-pane-badge-exports-unusedHelper')).toBeVisible();
-
-  await page.getByRole('button', { name: 'Skip' }).click();
-  await expect(dialog).toHaveCount(0);
 });

@@ -1,10 +1,13 @@
-// Pure state machine + join/summary helpers driving ActionModal's fix/ignore
-// flow (Task 5). No React, no API calls — ActionModal.tsx dispatches events
-// into applyFlowReducer from its mutation callbacks and renders each
-// resulting state as one modal step (options -> preview -> applying ->
-// results). Unit-tested directly in tests/client/apply-flow.test.ts; the
-// modal's actual rendering is verified live (Plan 3's Global Constraints keep
-// heavy rendering tests out of this vitest run).
+// Pure state machine + join/summary helpers driving the fix/ignore apply flow
+// (originally built for ActionModal, Task 5; ActionModal was deleted in
+// Task 3 (v0.3) and its flow moved to the Review page — see
+// components/pages/ReviewPage.tsx, which dispatches events into
+// applyFlowReducer from its mutation callbacks exactly as ActionModal used
+// to, rendering each resulting state as one page step (options -> preview ->
+// applying -> applied) instead of one modal step). No React, no API calls
+// here. Unit-tested directly in tests/client/apply-flow.test.ts; the actual
+// rendering is verified live (Plan 3's Global Constraints keep heavy
+// rendering tests out of this vitest run).
 import type { FixMode, Issue } from '../../../src/core/types.js';
 import type { PlanItem } from '../../../src/fix/compiler.js';
 import type { PatchResult } from '../../../src/fix/patch.js';

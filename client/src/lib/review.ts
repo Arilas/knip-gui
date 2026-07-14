@@ -69,11 +69,25 @@ export interface RailResult {
 export function buildFileRail(diffs: RailDiffEntry[], items: RailPlanItem[], results?: RailResult[]): FileRailRow[] {
   const filePaths = new Set<string>();
   for (const d of diffs) filePaths.add(d.filePath);
-  for (const i of items) filePaths.add(i.filePath);
 
+  // Only ok:false items contribute a filePath of their own (per this
+  // function's doc comment: a successful transform always produces a diff,
+  // so an ok:true item's file is already covered by the `diffs` loop above).
+  // This matters beyond tidiness: for a dependency-shaped issue, the
+  // caller's pre-resolved `filePath` is the ISSUE's own filePath (its
+  // package.json), which is NOT where a fix (workspace package.json) or
+  // ignore (knip config file) patch actually lands — including an ok:true
+  // item's filePath here would fabricate a bogus extra row for that
+  // never-diffed, never-resultable file that a caller's "pick the first row"
+  // UI logic (ReviewPage.tsx) could get stuck showing instead of the real
+  // diffed file. ok:false items don't have this problem: their filePath is
+  // only ever used to surface a compile failure that never made it to a
+  // diff, which is exactly what's needed regardless of whether the
+  // filePath is fully accurate for a dependency-shaped issue.
   const failedReasonsByFile = new Map<string, string[]>();
   for (const item of items) {
     if (item.ok) continue;
+    filePaths.add(item.filePath);
     const reasons = failedReasonsByFile.get(item.filePath) ?? [];
     if (item.reason) reasons.push(item.reason);
     failedReasonsByFile.set(item.filePath, reasons);
@@ -97,4 +111,19 @@ export function buildFileRail(diffs: RailDiffEntry[], items: RailPlanItem[], res
   });
 
   return rows.sort((a, b) => a.filePath.localeCompare(b.filePath));
+}
+
+/**
+ * The Review page's 'options' step (Task 3) shows an affected-file list
+ * derived client-side from the selection, before any plan has been compiled
+ * (no diffs/items/results exist yet) — just the deduped, sorted set of
+ * `filePath`s among the selected issues. This deliberately doesn't account
+ * for dependency-shaped issues actually patching into a workspace's
+ * package.json rather than `issue.filePath` (see apply-flow.ts's
+ * patchFileForIssue) — that reconciliation only matters once a real plan
+ * comes back, which is exactly when the 'preview' step's buildFileRail call
+ * (fed the plan's real diffs) supersedes this list.
+ */
+export function affectedFilePaths(issues: { filePath: string }[]): string[] {
+  return [...new Set(issues.map((i) => i.filePath))].sort();
 }

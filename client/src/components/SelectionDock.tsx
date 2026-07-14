@@ -7,36 +7,50 @@
 // primitives (Button/Badge/Popover) per the design spec's "shadcn tokens/
 // components only" rule.
 //
-// onOpenModal is unchanged from SelectionBar: this task keeps Fix…/Ignore…
-// opening the EXISTING ActionModal (App.tsx still owns `modalMode` state and
-// passes this callback down through CodePage/PackagesPage) — the Review page
-// (state/ui.ts's `startReview`) is Task 3's wiring; swapping this callback
-// for a startReview() call is that task's one-line change, not this one's.
+// Fix…/Ignore… (Task 3, v0.3): this dock now OWNS the hop to the Review page
+// — it freezes a pluralized summary + the current selection count the same
+// way ActionModal's old `summaryRef`/`planIssuesRef` did at "Next" click
+// time (see selection.ts's summaryByType), records the CURRENT page as
+// `returnTo` (Cancel/Done on Review navigates back here), and calls
+// state/ui.ts's `startReview` — which itself navigates to 'review'. No plan
+// is compiled yet at this point; that's ReviewPage's "Preview changes"
+// button, per the design brief's 3-step-single-page simplification.
 import { useMemo } from 'react';
 import { XIcon } from 'lucide-react';
 import type { Issue, IssueType } from '../../../src/core/types.js';
 import { typeLabel } from '../lib/filters.js';
 import { pluralizeType } from '../lib/pluralize.js';
 import { useBusy } from '../state/queries.js';
-import { useSelectionStore } from '../state/selection.js';
+import { summaryByType, useSelectionStore } from '../state/selection.js';
+import { useUiStore } from '../state/ui.js';
 import { Badge } from './ui/badge.js';
 import { Button } from './ui/button.js';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover.js';
 
 export interface SelectionDockProps {
   issues: Issue[];
-  onOpenModal: (mode: 'fix' | 'ignore') => void;
 }
 
 function itemLabel(issue: Issue): string {
   return issue.symbol ? `${issue.filePath}: ${issue.symbol}` : issue.filePath;
 }
 
-export function SelectionDock({ issues, onOpenModal }: SelectionDockProps) {
+export function SelectionDock({ issues }: SelectionDockProps) {
   const selected = useSelectionStore((s) => s.selected);
   const clear = useSelectionStore((s) => s.clear);
   const toggle = useSelectionStore((s) => s.toggle);
   const busy = useBusy();
+  const page = useUiStore((s) => s.page);
+  const startReview = useUiStore((s) => s.startReview);
+
+  function onStartReview(kind: 'fix' | 'ignore') {
+    startReview({
+      kind,
+      summary: summaryByType({ selected }, issues),
+      frozenCount: selected.size,
+      returnTo: page,
+    });
+  }
 
   const selectedIssues = useMemo(() => issues.filter((i) => selected.has(i.id)), [issues, selected]);
 
@@ -113,12 +127,12 @@ export function SelectionDock({ issues, onOpenModal }: SelectionDockProps) {
           variant="outline"
           size="sm"
           disabled={busy}
-          onClick={() => onOpenModal('ignore')}
+          onClick={() => onStartReview('ignore')}
           data-testid="selbar-ignore"
         >
           Ignore
         </Button>
-        <Button type="button" size="sm" disabled={busy} onClick={() => onOpenModal('fix')} data-testid="selbar-fix">
+        <Button type="button" size="sm" disabled={busy} onClick={() => onStartReview('fix')} data-testid="selbar-fix">
           Fix…
         </Button>
       </div>

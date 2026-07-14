@@ -29,19 +29,16 @@
 // unrelated Code visit.
 //
 // `review` (Task 2, v0.3): the pending review-flow request SelectionDock's
-// (eventual, Task 3) Fix…/Ignore… compile step hands off to the 'review'
-// page. `startReview` freezes `summary`/`frozenCount` at the moment it's
-// called (the design spec's "kills the 'Ignore 0 issues' bug" — the count
-// shown on the Review page must reflect what was selected when the plan was
-// compiled, not whatever the live selection is by the time it renders) and
-// records `returnTo` (the page Cancel navigates back to). `clearReview`
-// drops it — called on Cancel/Apply-done, and defensively by App.tsx if
-// 'review' is ever the active page with no pending review (direct nav/reload
-// edge case — Task 3's redirect-to-Code guard). This task only adds the
-// state shape; nothing in the UI calls startReview yet (SelectionDock's
-// Fix/Ignore keep opening the existing ActionModal — see SelectionDock.tsx's
-// doc comment), so 'review' is a reachable Page value but not yet a
-// reachable one in practice.
+// Fix…/Ignore… buttons hand off to the 'review' page (Task 3 wires this —
+// see SelectionDock.tsx's doc comment). `startReview` freezes
+// `summary`/`frozenCount` at the moment it's called (the design spec's
+// "kills the 'Ignore 0 issues' bug" — the count shown on the Review page
+// must reflect what was selected when Fix…/Ignore… was clicked, not whatever
+// the live selection is by the time it renders) and records `returnTo` (the
+// page Cancel/Done navigates back to). `clearReview` drops it — called on
+// Cancel/Done, and defensively by App.tsx if 'review' is ever the active page
+// with no pending review (direct nav/reload edge case — Task 3's
+// redirect-to-Code guard).
 //
 // Tree-expansion lift (Task 2, v0.3): `expandedDirs` used to be TreeView.tsx
 // local state (a `manualExpandedDirs: Set<string> | null` — null meaning

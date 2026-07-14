@@ -41,35 +41,36 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
 
   await expect(page.getByTestId('selbar-count')).toHaveText('1 selected');
 
-  await page.getByRole('button', { name: 'Ignore', exact: true }).click();
+  await page.getByTestId('selbar-ignore').click();
 
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
+  // Review page opened directly (no modal — Task 3, v0.3 replaces the old
+  // ActionModal this spec used to drive).
+  const reviewPage = page.getByTestId('review-page');
+  await expect(reviewPage).toBeVisible();
+  await expect(page.getByTestId('review-header')).toContainText('Ignore 1 issue');
 
-  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByTestId('review-preview').click();
 
   // Preview: the ignore compiler writes an ignoreDependencies entry into the
   // fixture's knip.json (findKnipConfig prefers a dedicated knip.json over
   // package.json#knip when one exists — see src/ignore/config-writer.ts).
   // Assert the diff CONTENT, not just visibility: the added lines must be
   // the ignoreDependencies entry naming left-pad.
+  const knipRow = page.getByTestId('review-rail-row-knip.json');
+  await expect(knipRow).toBeVisible({ timeout: 10_000 });
   const knipJsonDiff = page.getByTestId('diff-view-knip.json');
-  await expect(knipJsonDiff).toBeVisible({ timeout: 10_000 });
+  await expect(knipJsonDiff).toBeVisible();
   await expect(knipJsonDiff).toContainText('ignoreDependencies');
   await expect(knipJsonDiff).toContainText('left-pad');
 
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await page.getByTestId('review-apply').click();
 
-  await expect(page.getByTestId('result-status-knip.json')).toHaveText('ok', { timeout: 10_000 });
+  await expect(knipRow).toContainText('applied ok', { timeout: 10_000 });
 
   // Wait for the background rescan: left-pad's row disappears once the fresh
-  // report no longer reports it as unused (rendered behind the still-open
-  // modal, same as smoke.spec.ts's tree assertions).
+  // report no longer reports it as unused. The Packages page is unmounted
+  // while the Review page is up, so this check happens after leaving.
+  await page.getByTestId('review-skip').click();
+  await expect(reviewPage).toHaveCount(0);
   await expect(row).toHaveCount(0, { timeout: 30_000 });
-
-  // Close out via the commit panel's Skip (git repo is initialized, so
-  // CommitPanel — not a plain Done button — renders here); committing isn't
-  // this spec's concern.
-  await page.getByRole('button', { name: 'Skip' }).click();
-  await expect(dialog).toHaveCount(0);
 });

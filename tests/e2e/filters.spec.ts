@@ -55,19 +55,20 @@ test('disabling a filter chip gates what a file checkbox adds; the cart survives
   await expect(selectionDock).not.toContainText('exports');
 
   // The apply flow still works end-to-end on the rebuilt tree/filters: fix
-  // the 2 selected (filter-gated) issues.
+  // the 2 selected (filter-gated) issues, through the Review page (Task 3,
+  // v0.3 — replaces the old ActionModal this spec used to drive).
   await page.getByTestId('selbar-fix').click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
-  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByTestId('review-page')).toBeVisible();
+  await expect(page.getByTestId('review-header')).toContainText('Fix 2 issues');
+  await page.getByTestId('review-preview').click();
 
   await expect(page.getByTestId('diff-view-src/forms.ts')).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole('button', { name: 'Apply' }).click();
-  await expect(page.getByTestId('result-status-src/forms.ts')).toHaveText('ok', { timeout: 10_000 });
+  await page.getByTestId('review-apply').click();
+  await expect(page.getByTestId('review-rail-row-src/forms.ts')).toContainText('applied ok', { timeout: 10_000 });
 
   // Wait for the background rescan to land, then close out via the commit
-  // panel's Skip (git repo is initialized in the fixture).
-  await page.getByRole('button', { name: 'Skip' }).click();
-  await expect(dialog).toHaveCount(0);
+  // bar's Skip (git repo is initialized in the fixture).
+  await page.getByTestId('review-skip').click();
+  await expect(page.getByTestId('review-page')).toHaveCount(0);
 });

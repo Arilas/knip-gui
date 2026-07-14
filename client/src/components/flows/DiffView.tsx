@@ -1,13 +1,14 @@
-// Per-file collapsible unified-diff block for ActionModal's preview step
-// (Task 5): shiki-highlights the diff text itself (lang 'diff', via
-// highlighter.ts's highlightDiff) rather than re-diffing/tokenizing the
-// before/after source, since the server already rendered a unified diff
-// string (src/fix/diff.ts's renderDiff) and shipped just that.
+// Per-file collapsible unified-diff block, originally built for
+// ActionModal's preview step (Task 5): shiki-highlights the diff text itself
+// (lang 'diff', via highlighter.ts's highlightDiff) rather than re-diffing/
+// tokenizing the before/after source, since the server already rendered a
+// unified diff string (src/fix/diff.ts's renderDiff) and shipped just that.
 //
-// Moved from components/ to components/flows/ (Task 6, UX overhaul) alongside
-// ActionModal/CommitPanel's move onto shadcn Dialog — this component's own
-// markup is unchanged (it's plain content rendered INSIDE a dialog, not a
-// dialog itself), only its file path and relative imports moved.
+// ActionModal + CommitPanel were deleted in Task 3 (v0.3) — their preview
+// step's diff rendering moved to the Review page (components/pages/
+// ReviewPage.tsx), which reuses this component unchanged (still plain
+// content, not a dialog itself) to show whichever single file the FileRail's
+// selected row points at.
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { DiffEntry } from '../../lib/apply-flow.js';

@@ -4,12 +4,12 @@ import { KeyRound } from 'lucide-react';
 import { ApiError, setOnUnauthorized } from './api.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
-import { ActionModal } from './components/flows/ActionModal.js';
 import { ActivityPage } from './components/pages/ActivityPage.js';
 import { CodePage } from './components/pages/CodePage.js';
 import { Dashboard } from './components/pages/Dashboard.js';
 import { IgnoredPage } from './components/pages/IgnoredPage.js';
 import { PackagesPage } from './components/pages/PackagesPage.js';
+import { ReviewPage } from './components/pages/ReviewPage.js';
 import { SetupScreen } from './components/pages/SetupScreen.js';
 import { Button } from './components/ui/button.js';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar.js';
@@ -84,9 +84,10 @@ function SessionExpiredScreen() {
 }
 
 function AppShell() {
-  const [modalMode, setModalMode] = useState<'fix' | 'ignore' | null>(null);
   const { data, isLoading, error } = useReport();
   const page = useUiStore((s) => s.page);
+  const review = useUiStore((s) => s.review);
+  const navigate = useUiStore((s) => s.navigate);
 
   const pruneMissing = useSelectionStore((s) => s.pruneMissing);
 
@@ -106,18 +107,29 @@ function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report?.scannedAt]);
 
-  function onOpenModal(mode: 'fix' | 'ignore') {
-    setModalMode(mode);
-  }
+  // Direct-nav/reload guard (Task 3): 'review' is only ever a meaningful page
+  // alongside a pending review request — SelectionDock's startReview sets
+  // both atomically (state/ui.ts). Landing on page:'review' with
+  // review:undefined (a stray back/forward nav, or a reload that resets
+  // in-memory state while a stale URL/history entry points here) has nothing
+  // to render, so bounce to Code rather than showing an empty page.
+  useEffect(() => {
+    if (page === 'review' && !review) navigate('code');
+  }, [page, review, navigate]);
 
   function renderPage() {
     // Ignored/Activity are never report-dependent (their own server
     // query / session store, respectively — see AppSidebar.tsx's doc
     // comment), so they render normally regardless of report/scan state,
     // including the setup-error state below: the sidebar stays reachable and
-    // useful even while Dashboard/Code/Packages can't show anything.
+    // useful even while Dashboard/Code/Packages can't show anything. Review
+    // is likewise report-adjacent rather than report-gated — it must persist
+    // through a background rescan (status flips to 'scanning' mid-apply)
+    // without disappearing, and the guard effect above already handles the
+    // "no pending review" case.
     if (page === 'ignored') return <IgnoredPage />;
     if (page === 'activity') return <ActivityPage />;
+    if (page === 'review') return review ? <ReviewPage issues={issues} review={review} /> : null;
 
     if (isLoading) return <p className="p-4 text-sm text-muted-foreground">Loading report…</p>;
     if (error) {
@@ -138,9 +150,9 @@ function AppShell() {
       case 'dashboard':
         return <Dashboard />;
       case 'code':
-        return <CodePage issues={issues} onOpenModal={onOpenModal} />;
+        return <CodePage issues={issues} />;
       case 'packages':
-        return <PackagesPage issues={issues} onOpenModal={onOpenModal} />;
+        return <PackagesPage issues={issues} />;
       default:
         return null;
     }
@@ -164,8 +176,6 @@ function AppShell() {
         </header>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{renderPage()}</div>
       </SidebarInset>
-
-      {modalMode && <ActionModal mode={modalMode} issues={issues} onClose={() => setModalMode(null)} />}
     </SidebarProvider>
   );
 }
@@ -190,7 +200,15 @@ export default function App() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <AppShell />
-          <Toaster />
+          {/* top-center (Task 3, v0.3 — sonner's own default is bottom-right):
+              the Review page docks CommitBar's Commit/Skip/Done buttons at
+              the real viewport bottom-right (not a centered modal, unlike
+              the old ActionModal/CommitPanel), the same corner a
+              bottom-right toast would render in — a "Committed <sha>"
+              success toast landing there intercepted pointer events on the
+              Done button underneath it (caught live via the Review e2e
+              flow). top-center never overlaps any docked bar's buttons. */}
+          <Toaster position="top-center" />
         </TooltipProvider>
       </QueryClientProvider>
     </ErrorBoundary>

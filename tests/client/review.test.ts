@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFileRail } from '../../client/src/lib/review.js';
+import { affectedFilePaths, buildFileRail } from '../../client/src/lib/review.js';
 
 describe('buildFileRail', () => {
   it('marks every diffed file pending when no results have landed yet (preview step)', () => {
@@ -89,7 +89,32 @@ describe('buildFileRail', () => {
     expect(rows).toEqual([{ filePath: 'src/a.ts', status: 'pending' }]);
   });
 
+  it('does not fabricate a row for an ok:true item whose filePath differs from any diff (dependency-shaped issues)', () => {
+    // A dependency-shaped issue's pre-resolved filePath is the issue's own
+    // package.json — never where its actual fix/ignore patch lands (a
+    // workspace package.json for fix, the knip config file for ignore). An
+    // ok:true item reporting that filePath must not add a bogus extra row
+    // for a file that was never diffed and will never get an apply result.
+    const rows = buildFileRail(
+      [{ filePath: 'knip.json' }],
+      [{ filePath: 'package.json', ok: true }],
+    );
+    expect(rows).toEqual([{ filePath: 'knip.json', status: 'pending' }]);
+  });
+
   it('returns an empty rail for no diffs and no items', () => {
     expect(buildFileRail([], [])).toEqual([]);
+  });
+});
+
+describe('affectedFilePaths', () => {
+  it('dedupes and sorts filePaths from a list of issues', () => {
+    expect(
+      affectedFilePaths([{ filePath: 'src/b.ts' }, { filePath: 'src/a.ts' }, { filePath: 'src/b.ts' }]),
+    ).toEqual(['src/a.ts', 'src/b.ts']);
+  });
+
+  it('returns an empty array for no issues', () => {
+    expect(affectedFilePaths([])).toEqual([]);
   });
 });

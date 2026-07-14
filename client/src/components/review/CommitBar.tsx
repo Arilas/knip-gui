@@ -1,27 +1,33 @@
-// Post-apply commit step inside ActionModal (Task 5), shown only when
-// gitStatus.isRepo. `paths` are the applied-ok files ONLY (the caller derives
-// these from joinResults' 'ok' rows) — never the full diff list, so a
-// stale/missing/io-error/compile-failed file never gets staged under a
-// message that claims it was fixed.
-//
-// Moved from components/ to components/flows/ (Task 6, UX overhaul), and its
-// toast calls swapped from the hand-rolled Toast.tsx (deleted this task) to
-// sonner's toast.error/success — same call sites, same messages.
+// Post-apply commit bar docked at the bottom of the Review page (Task 3,
+// v0.3 — replaces ActionModal-era CommitPanel, which lived as a footer
+// INSIDE the modal's results step). Same behavior: branch toggle w/ a
+// chore/knip-cleanup-<date> prefill, a reconciled+pluralized default commit
+// message (computed by ReviewPage from apply-flow.ts's appliedOkIssueIds —
+// see that module's doc comment for why the commit message must reflect what
+// ACTUALLY applied ok, not the frozen selection summary), a warning when the
+// working tree has OTHER dirty files beyond what this fix/ignore touched,
+// and a Commit -> sha-inline / Skip -> leave pair. Only rendered when
+// gitStatus.isRepo (ReviewPage's concern, mirroring the old
+// `isRepo ? <CommitPanel/> : <Done button>` branch).
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { apiErrorMessage } from '../../api.js';
 import { defaultBranchName } from '../../lib/apply-flow.js';
 import { useActivityStore } from '../../state/activity.js';
 import { useGitBranchMutation, useGitCommitMutation, useGitStatus } from '../../state/queries.js';
+import { Button } from '../ui/button.js';
+import { Input } from '../ui/input.js';
+import { Textarea } from '../ui/textarea.js';
 
-export interface CommitPanelProps {
+export interface CommitBarProps {
   /** Applied-ok file paths only — see module doc comment. */
   paths: string[];
   defaultMessage: string;
-  onDone: () => void;
+  /** Called by both Skip (before commit) and Done (after) — both just leave the Review page. */
+  onLeave: () => void;
 }
 
-export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps) {
+export function CommitBar({ paths, defaultMessage, onLeave }: CommitBarProps) {
   const gitStatusQuery = useGitStatus();
   const branchMutation = useGitBranchMutation();
   const commitMutation = useGitCommitMutation();
@@ -35,10 +41,9 @@ export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps)
 
   const status = gitStatusQuery.data;
   const busy = branchMutation.isPending || commitMutation.isPending;
-  // Only warn about dirty files that AREN'T part of this fix — the fixed
-  // files themselves are expected to show up as dirty (applyPatches writes
-  // straight to disk, not through git), so `status.dirty` alone would warn on
-  // every single successful fix even when there's nothing else going on.
+  // Only warn about dirty files that AREN'T part of this fix/ignore — the
+  // touched files themselves are expected to show up as dirty (applyPatches
+  // writes straight to disk, not through git).
   const pathSet = new Set(paths);
   const otherDirtyFiles = (status?.dirtyFiles ?? []).filter((f) => !pathSet.has(f));
 
@@ -62,20 +67,18 @@ export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps)
   if (!status?.isRepo) return null;
 
   return (
-    <div className="flex flex-col gap-3 border-t border-gray-200 p-4 dark:border-gray-800">
-      <h3 className="text-sm font-semibold">Commit changes</h3>
-
-      {otherDirtyFiles.length > 0 && (
-        <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-          Your working tree also has {otherDirtyFiles.length} other uncommitted change(s) — only the{' '}
-          {paths.length} file(s) just fixed will be staged and committed.
+    <div data-testid="review-commit-bar" className="flex shrink-0 flex-col gap-3 border-t border-border bg-background p-3">
+      {otherDirtyFiles.length > 0 && !sha && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+          Your working tree also has {otherDirtyFiles.length} other uncommitted change(s) — only the {paths.length}{' '}
+          file(s) just applied will be staged and committed.
         </p>
       )}
 
       {sha ? (
         <div
-          data-testid="commit-sha"
-          className="rounded border border-green-300 bg-green-50 px-2 py-2 text-sm text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+          data-testid="review-commit-sha"
+          className="rounded-md border border-green-300 bg-green-50 px-2 py-2 text-sm text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
         >
           Committed <code className="font-mono">{sha}</code>
           {createBranch && (
@@ -97,62 +100,55 @@ export function CommitPanel({ paths, defaultMessage, onDone }: CommitPanelProps)
             Create a new branch first
           </label>
           {createBranch && (
-            <input
+            <Input
               type="text"
               value={branchName}
               disabled={busy}
               onChange={(e) => setBranchName(e.target.value)}
-              className="rounded border border-gray-300 px-2 py-1 font-mono text-sm dark:border-gray-700 dark:bg-gray-900"
+              className="max-w-sm font-mono text-sm"
               aria-label="New branch name"
             />
           )}
-          <textarea
+          <Textarea
             value={message}
             disabled={busy}
             onChange={(e) => setMessage(e.target.value)}
             rows={2}
-            className="rounded border border-gray-300 px-2 py-1 font-mono text-sm dark:border-gray-700 dark:bg-gray-900"
+            className="max-w-xl font-mono text-sm"
             aria-label="Commit message"
           />
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-muted-foreground">
             {paths.length} file(s): {paths.join(', ')}
           </p>
           {commitError && (
-            <p className="rounded border border-red-300 bg-red-50 px-2 py-1.5 text-xs text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+            <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
               {commitError}
             </p>
           )}
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onDone}
-              className="rounded border border-gray-300 px-3 py-1.5 text-xs dark:border-gray-700"
-            >
-              Skip
-            </button>
-            <button
-              type="button"
-              disabled={busy || !message.trim() || paths.length === 0}
-              onClick={handleCommit}
-              className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-100 dark:text-gray-900"
-            >
-              {busy ? 'Committing…' : 'Commit'}
-            </button>
-          </div>
         </>
       )}
 
-      {sha && (
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={onDone}
-            className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-gray-100 dark:text-gray-900"
-          >
+      <div className="flex justify-end gap-2">
+        {sha ? (
+          <Button type="button" onClick={onLeave} data-testid="review-done">
             Done
-          </button>
-        </div>
-      )}
+          </Button>
+        ) : (
+          <>
+            <Button type="button" variant="outline" onClick={onLeave} data-testid="review-skip">
+              Skip
+            </Button>
+            <Button
+              type="button"
+              disabled={busy || !message.trim() || paths.length === 0}
+              onClick={handleCommit}
+              data-testid="review-commit"
+            >
+              {busy ? 'Committing…' : 'Commit'}
+            </Button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

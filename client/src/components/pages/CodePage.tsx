@@ -30,12 +30,11 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resi
 
 export interface CodePageProps {
   issues: Issue[];
-  onOpenModal: (mode: 'fix' | 'ignore') => void;
 }
 
 const ALL_CODE_TYPES = new Set(CODE_TYPES);
 
-export function CodePage({ issues, onOpenModal }: CodePageProps) {
+export function CodePage({ issues }: CodePageProps) {
   const codeFilters = useUiStore((s) => s.codeFilters);
   const toggleCodeFilter = useUiStore((s) => s.toggleCodeFilter);
   const codeSearch = useUiStore((s) => s.codeSearch);
@@ -126,7 +125,7 @@ export function CodePage({ issues, onOpenModal }: CodePageProps) {
         </ResizablePanel>
       </ResizablePanelGroup>
 
-      <SelectionDock issues={issues} onOpenModal={onOpenModal} />
+      <SelectionDock issues={issues} />
     </div>
   );
 }

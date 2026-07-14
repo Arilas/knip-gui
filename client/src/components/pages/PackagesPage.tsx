@@ -25,7 +25,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js';
 
 export interface PackagesPageProps {
   issues: Issue[];
-  onOpenModal: (mode: 'fix' | 'ignore') => void;
 }
 
 const ALL_PACKAGE_TYPES = new Set(PACKAGE_TYPES);
@@ -52,7 +51,7 @@ function sortIssues(issues: Issue[], key: SortKey, dir: SortDir): Issue[] {
   return [...issues].sort((a, b) => sign * sortValue(a, key).localeCompare(sortValue(b, key)));
 }
 
-export function PackagesPage({ issues, onOpenModal }: PackagesPageProps) {
+export function PackagesPage({ issues }: PackagesPageProps) {
   const packagesFilters = useUiStore((s) => s.packagesFilters);
   const togglePackagesFilter = useUiStore((s) => s.togglePackagesFilter);
   const selected = useSelectionStore((s) => s.selected);
@@ -130,7 +129,7 @@ export function PackagesPage({ issues, onOpenModal }: PackagesPageProps) {
         )}
       </div>
 
-      <SelectionDock issues={issues} onOpenModal={onOpenModal} />
+      <SelectionDock issues={issues} />
 
       <PackageDetailSheet
         issue={detailIssue}
