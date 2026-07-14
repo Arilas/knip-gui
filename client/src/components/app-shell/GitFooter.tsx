@@ -13,6 +13,7 @@ import { GitCommitVertical, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 import { useBusy, useGitStatus, useReport, useScanMutation } from '../../state/queries.js';
 import { CommitDialog } from '../flows/CommitDialog.js';
+import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js';
 
@@ -69,8 +70,18 @@ export function GitFooter() {
       )}
 
       {report?.scannedAt && (
-        <span className="px-1 text-xs text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden">
+        <span className="flex items-center gap-1.5 px-1 text-xs text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden">
           Scanned {new Date(report.scannedAt).toLocaleTimeString()}
+          {/* `report.production` is fixed for the server's whole lifetime (the
+              --production CLI flag), so this never toggles mid-session — it's
+              here so a user who forgot which mode they launched with (or is
+              looking at someone else's screenshot) can tell at a glance that
+              devDependencies/test files were excluded from this scan. */}
+          {report.production && (
+            <Badge variant="secondary" data-testid="production-badge" className="h-4 px-1.5 text-[10px]">
+              Production
+            </Badge>
+          )}
         </span>
       )}
 
