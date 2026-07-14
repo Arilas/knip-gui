@@ -6,6 +6,7 @@ function resetStore() {
     page: 'dashboard',
     codeFilters: new Set(CODE_TYPES),
     packagesFilters: new Set(PACKAGE_TYPES),
+    codeSearch: '',
     openFile: undefined,
   });
 }
@@ -30,6 +31,10 @@ describe('useUiStore defaults', () => {
     expect([...useUiStore.getState().packagesFilters].sort()).toEqual(
       ['binaries', 'dependencies', 'devDependencies', 'optionalPeerDependencies'].sort(),
     );
+  });
+
+  it('defaults codeSearch to empty', () => {
+    expect(useUiStore.getState().codeSearch).toBe('');
   });
 });
 
@@ -71,6 +76,23 @@ describe('navigate', () => {
     useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
     useUiStore.getState().navigate('packages');
     expect(useUiStore.getState().openFile).toBeUndefined();
+  });
+
+  it('sets codeSearch when opts.search is given', () => {
+    useUiStore.getState().navigate('code', { search: 'packages/app/' });
+    expect(useUiStore.getState().codeSearch).toBe('packages/app/');
+  });
+
+  it('clears codeSearch when opts.search is explicitly the empty string', () => {
+    useUiStore.getState().navigate('code', { search: 'packages/app/' });
+    useUiStore.getState().navigate('code', { search: '' });
+    expect(useUiStore.getState().codeSearch).toBe('');
+  });
+
+  it('leaves codeSearch untouched when opts.search is omitted', () => {
+    useUiStore.getState().navigate('code', { search: 'packages/app/' });
+    useUiStore.getState().navigate('code', { filters: ['exports'] });
+    expect(useUiStore.getState().codeSearch).toBe('packages/app/');
   });
 });
 

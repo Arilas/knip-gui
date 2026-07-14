@@ -5,7 +5,7 @@ import { ActionModal } from './components/ActionModal.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { CodePane } from './components/CodePane.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
-import { Overview } from './components/Overview.js';
+import { Dashboard } from './components/pages/Dashboard.js';
 import { SelectionBar } from './components/SelectionBar.js';
 import { TableView } from './components/TableView.js';
 import { ToastProvider } from './components/Toast.js';
@@ -80,7 +80,7 @@ function AppShell() {
 
     switch (page) {
       case 'dashboard':
-        return <Overview issues={issues} workspaces={workspaces} />;
+        return <Dashboard />;
       case 'code':
         return (
           <div className="flex flex-1 overflow-hidden">

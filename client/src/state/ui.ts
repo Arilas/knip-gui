@@ -13,6 +13,16 @@
 // item (no filters) never resets whatever chips the user had toggled on that
 // page. `filters` always apply to the PAGE BEING NAVIGATED TO (`page`
 // argument), not whatever page was previously active.
+//
+// `codeSearch` (Task 2, Dashboard) is a cheap path-prefix scope for the Code
+// page's tree — set by a Dashboard workspace-table cell/row click to
+// `<workspace>/` so the tree shows just that workspace's files without a
+// rescan (the real, rescanning workspace switcher lives in the sidebar).
+// Like `filters`, it's a replace-when-given: `opts.search` (including `''`,
+// which explicitly clears it) is only applied when the key is present in
+// `opts` at all — omitting it (e.g. a plain sidebar nav click) leaves
+// whatever search the Code page already had untouched, same rationale as
+// filters above.
 import { create } from 'zustand';
 import type { IssueType } from '../../../src/core/types.js';
 
@@ -47,8 +57,9 @@ export interface UiState {
   page: Page;
   codeFilters: Set<IssueType>;
   packagesFilters: Set<IssueType>;
+  codeSearch: string;
   openFile?: string;
-  navigate: (page: Page, opts?: { filters?: IssueType[]; openFile?: string }) => void;
+  navigate: (page: Page, opts?: { filters?: IssueType[]; openFile?: string; search?: string }) => void;
   toggleCodeFilter: (type: IssueType) => void;
   togglePackagesFilter: (type: IssueType) => void;
 }
@@ -57,6 +68,7 @@ export const useUiStore = create<UiState>((set) => ({
   page: 'dashboard',
   codeFilters: new Set(CODE_TYPES),
   packagesFilters: new Set(PACKAGE_TYPES),
+  codeSearch: '',
   openFile: undefined,
 
   navigate: (page, opts) =>
@@ -66,6 +78,7 @@ export const useUiStore = create<UiState>((set) => ({
         if (page === 'code') next.codeFilters = new Set(opts.filters);
         else if (page === 'packages') next.packagesFilters = new Set(opts.filters);
       }
+      if (opts?.search !== undefined) next.codeSearch = opts.search;
       return next;
     }),
 
