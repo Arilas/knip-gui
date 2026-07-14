@@ -136,3 +136,32 @@ export function filterIssues(issues: Issue[], enabled: ReadonlySet<IssueType>, q
     return issue.filePath.toLowerCase().includes(needle) || (issue.symbol?.toLowerCase().includes(needle) ?? false);
   });
 }
+
+export interface WorkspaceGroup {
+  workspace: string;
+  issues: Issue[];
+}
+
+// Buckets issues by their `workspace` field for the Packages page (Task 4):
+// one shadcn Table per workspace group. Never fabricates an empty group for a
+// workspace with no issues — only workspaces actually present in `issues`
+// appear. The root workspace ('.') always sorts first (it's the natural
+// "top" of a project, not just another alphabetical entry); every other
+// workspace follows in ascending alphabetical order. Issues within a group
+// keep their original relative order — sorting within a group is the table's
+// own concern (a sortable-column UI layered on top), not this grouping step.
+export function groupByWorkspace(issues: Issue[]): WorkspaceGroup[] {
+  const byWorkspace = new Map<string, Issue[]>();
+  for (const issue of issues) {
+    const existing = byWorkspace.get(issue.workspace);
+    if (existing) existing.push(issue);
+    else byWorkspace.set(issue.workspace, [issue]);
+  }
+  return [...byWorkspace.entries()]
+    .map(([workspace, groupIssues]) => ({ workspace, issues: groupIssues }))
+    .sort((a, b) => {
+      if (a.workspace === '.') return -1;
+      if (b.workspace === '.') return 1;
+      return a.workspace.localeCompare(b.workspace);
+    });
+}

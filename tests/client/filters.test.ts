@@ -3,6 +3,7 @@ import type { Issue } from '../../src/core/types.js';
 import {
   CODE_TYPES,
   filterIssues,
+  groupByWorkspace,
   isActionable,
   isFixable,
   isIgnorable,
@@ -178,5 +179,48 @@ describe('filterIssues', () => {
   it('an empty/whitespace query is a no-op on top of the type filter', () => {
     const enabled = new Set(CODE_TYPES);
     expect(filterIssues(issues, enabled, '   ')).toHaveLength(filterIssues(issues, enabled, '').length);
+  });
+});
+
+describe('groupByWorkspace', () => {
+  const depIssues: Issue[] = [
+    issue({ type: 'dependencies', filePath: 'packages/app/package.json', workspace: 'packages/app', symbol: 'left-pad' }),
+    issue({ type: 'devDependencies', filePath: 'package.json', workspace: '.', symbol: 'eslint' }),
+    issue({ type: 'dependencies', filePath: 'packages/lib/package.json', workspace: 'packages/lib', symbol: 'chalk' }),
+    issue({ type: 'binaries', filePath: 'package.json', workspace: '.', symbol: 'some-bin' }),
+    issue({ type: 'dependencies', filePath: 'packages/app/package.json', workspace: 'packages/app', symbol: 'lodash' }),
+  ];
+
+  it('groups issues by their workspace', () => {
+    const groups = groupByWorkspace(depIssues);
+    expect(groups.map((g) => g.workspace).sort()).toEqual(['.', 'packages/app', 'packages/lib'].sort());
+  });
+
+  it('keeps every issue for a workspace together, in original relative order', () => {
+    const groups = groupByWorkspace(depIssues);
+    const app = groups.find((g) => g.workspace === 'packages/app')!;
+    expect(app.issues.map((i) => i.symbol)).toEqual(['left-pad', 'lodash']);
+  });
+
+  it('sorts the root workspace ("." ) first, then the rest alphabetically', () => {
+    const groups = groupByWorkspace(depIssues);
+    expect(groups.map((g) => g.workspace)).toEqual(['.', 'packages/app', 'packages/lib']);
+  });
+
+  it('never fabricates a group for a workspace with no issues', () => {
+    const groups = groupByWorkspace(depIssues);
+    expect(groups.some((g) => g.workspace === 'packages/nonexistent')).toBe(false);
+  });
+
+  it('returns an empty array for an empty issue list', () => {
+    expect(groupByWorkspace([])).toEqual([]);
+  });
+
+  it('sorts non-root workspaces alphabetically even without a root group present', () => {
+    const noRoot: Issue[] = [
+      issue({ type: 'dependencies', filePath: 'packages/z/package.json', workspace: 'packages/z', symbol: 'z-pkg' }),
+      issue({ type: 'dependencies', filePath: 'packages/a/package.json', workspace: 'packages/a', symbol: 'a-pkg' }),
+    ];
+    expect(groupByWorkspace(noRoot).map((g) => g.workspace)).toEqual(['packages/a', 'packages/z']);
   });
 });

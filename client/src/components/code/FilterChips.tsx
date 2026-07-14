@@ -1,10 +1,11 @@
-// Filter-chip toolbar for the Code page (Task 3, UX overhaul): one
-// Badge-styled toggle per CODE_TYPE, all-on by default, live count computed
-// from the current (search-scoped, NOT type-scoped — see the `issues` prop
-// doc below) issue set, full label in a tooltip. Reflects/writes
-// `ui.codeFilters` — the parent (CodePage) owns the store wiring, this
-// component is pure props in/callback out so it's trivially reusable for a
-// future Packages-page PACKAGE_TYPES variant (Task 4).
+// Filter-chip toolbar, originally built for the Code page (Task 3, UX
+// overhaul) and reused as-is by the Packages page (Task 4) via the `types`
+// prop: one Badge-styled toggle per type (CODE_TYPES by default, PACKAGE_TYPES
+// for Packages), all-on by default, live count computed from the current
+// (search-scoped, NOT type-scoped — see the `issues` prop doc below) issue
+// set, full label in a tooltip. Reflects/writes `ui.codeFilters` or
+// `ui.packagesFilters` — the parent page owns the store wiring, this
+// component is pure props in/callback out.
 import { useMemo } from 'react';
 import type { Issue, IssueType } from '../../../../src/core/types.js';
 import { CODE_TYPES, typeLabel } from '../../lib/filters.js';
@@ -22,9 +23,15 @@ export interface FilterChipsProps {
   issues: Issue[];
   enabled: ReadonlySet<IssueType>;
   onToggle: (type: IssueType) => void;
+  /**
+   * Which types get a chip, in display order — defaults to CODE_TYPES (the
+   * Code page). Pure props-in/callback-out (Task 3's doc comment above), so
+   * the Packages page (Task 4) reuses this unchanged by passing PACKAGE_TYPES.
+   */
+  types?: readonly IssueType[];
 }
 
-export function FilterChips({ issues, enabled, onToggle }: FilterChipsProps) {
+export function FilterChips({ issues, enabled, onToggle, types = CODE_TYPES }: FilterChipsProps) {
   const counts = useMemo(() => {
     const map = new Map<IssueType, number>();
     for (const issue of issues) map.set(issue.type, (map.get(issue.type) ?? 0) + 1);
@@ -33,7 +40,7 @@ export function FilterChips({ issues, enabled, onToggle }: FilterChipsProps) {
 
   return (
     <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Filter tree by issue type">
-      {CODE_TYPES.map((type) => {
+      {types.map((type) => {
         const isOn = enabled.has(type);
         const count = counts.get(type) ?? 0;
         return (

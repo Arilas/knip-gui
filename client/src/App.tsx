@@ -1,34 +1,18 @@
 import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { IssueType } from '../../src/core/types.js';
 import { ActionModal } from './components/ActionModal.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { CodePage } from './components/pages/CodePage.js';
 import { Dashboard } from './components/pages/Dashboard.js';
+import { PackagesPage } from './components/pages/PackagesPage.js';
 import { SelectionBar } from './components/SelectionBar.js';
-import { TableView } from './components/TableView.js';
 import { ToastProvider } from './components/Toast.js';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar.js';
 import { TooltipProvider } from './components/ui/tooltip.js';
 import { useReport } from './state/queries.js';
 import { useSelectionStore } from './state/selection.js';
 import { useUiStore } from './state/ui.js';
-
-// Task 1 (UX overhaul) shim: the "Packages" nav item's real grouped-table
-// rebuild is Task 4's job (see docs/superpowers/plans/2026-07-14-ux-overhaul.md).
-// Until then this reuses the pre-existing TableView + the same dependency-
-// shaped IssueTypes the old FacetRail's dependencies/unlisted/unresolved/
-// binaries facets covered, purely so the app (and ignore.spec.ts's left-pad
-// flow, which lives here) stay usable.
-const PACKAGES_PREVIEW_TYPES: ReadonlySet<IssueType> = new Set([
-  'dependencies',
-  'devDependencies',
-  'optionalPeerDependencies',
-  'unlisted',
-  'binaries',
-  'unresolved',
-]);
 
 const queryClient = new QueryClient();
 
@@ -37,8 +21,6 @@ function AppShell() {
   const { data, isLoading, error } = useReport();
   const page = useUiStore((s) => s.page);
 
-  const selected = useSelectionStore((s) => s.selected);
-  const toggle = useSelectionStore((s) => s.toggle);
   const pruneMissing = useSelectionStore((s) => s.pruneMissing);
 
   const report = data?.report;
@@ -80,13 +62,7 @@ function AppShell() {
       case 'code':
         return <CodePage issues={issues} />;
       case 'packages':
-        return (
-          <TableView
-            issues={issues.filter((i) => PACKAGES_PREVIEW_TYPES.has(i.type))}
-            selected={selected}
-            onToggleIds={toggle}
-          />
-        );
+        return <PackagesPage issues={issues} />;
       case 'ignored':
         return (
           <div className="p-4 text-sm text-muted-foreground">

@@ -252,10 +252,11 @@ export function autoExpandDepth(tree: DirNode, visibleFileCount: number): 'all' 
   return visibleFileCount <= AUTO_EXPAND_FILE_THRESHOLD ? 'all' : 'top';
 }
 
-// Duck-typed rather than TreeNode-specific: TableView's "select all" header
-// checkbox has no real dir/file node, just a flat list of visible rows — it
-// builds an ad-hoc { actionableIds } to reuse this same tri-state/toggle
-// logic instead of re-deriving it. `actionableIdsByType` is optional so that
+// Duck-typed rather than TreeNode-specific: the Packages page's (Task 4)
+// per-workspace-group "select all" header checkbox has no real dir/file
+// node, just a flat list of that group's issues — it builds an ad-hoc
+// { actionableIds } to reuse this same tri-state/toggle logic instead of
+// re-deriving it. `actionableIdsByType` is optional so that
 // ad-hoc holder keeps working unchanged; it's only consulted when a caller
 // passes `enabledTypes` to nodeSelectionState/idsToToggleForNode.
 export interface ActionableIdsHolder {

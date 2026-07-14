@@ -281,7 +281,7 @@ describe('idsToToggleForNode', () => {
     expect(idsToToggleForNode(tree, new Set([a.id, b.id])).sort()).toEqual([a.id, b.id].sort());
   });
 
-  it('works against an ad-hoc { actionableIds } holder (TableView select-all use case)', () => {
+  it('works against an ad-hoc { actionableIds } holder (Packages page select-all use case)', () => {
     expect(idsToToggleForNode({ actionableIds: ['x', 'y'] }, new Set(['x']))).toEqual(['y']);
   });
 

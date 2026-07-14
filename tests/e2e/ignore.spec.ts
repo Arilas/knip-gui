@@ -13,13 +13,13 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
 
   // Packages nav (sidebar) — dependency-shaped issues, including left-pad,
-  // render in a table there (see App.tsx's PACKAGES_PREVIEW_TYPES shim).
+  // render in a per-workspace grouped table there (see PackagesPage.tsx).
   await page.getByTestId('nav-packages').click();
 
   // The exact IssueType (dependencies/devDependencies/optionalPeerDependencies)
   // is an implementation detail of how knip classifies it — match on the
   // symbol suffix rather than assuming which one.
-  const row = page.locator('[data-testid^="table-row-"][data-testid$="-left-pad"]');
+  const row = page.locator('[data-testid^="packages-row-"][data-testid$="-left-pad"]');
   await expect(row).toBeVisible();
   await row.getByRole('checkbox').check();
 

@@ -163,7 +163,8 @@ export function TriStateCheckbox({
 }
 
 // Only present when both isFixable and isIgnorable say no — the disabled
-// checkbox's tooltip explains why. Exported for TableView's per-row tooltip.
+// checkbox's tooltip explains why. Exported for the Packages page's (Task 4)
+// and CodePane's per-row/badge tooltips.
 export function unactionableReason(issue: Issue): string {
   const fix = isFixable(issue);
   const ignore = isIgnorable(issue);
