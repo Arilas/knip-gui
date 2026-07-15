@@ -288,12 +288,36 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
     );
   }
 
+  // Hoisted above the error/loading returns (was previously computed only on
+  // the happy path below) so the 413 branch can render whole-file banners too
+  // — see that branch's comment for why. Cheap regardless of which branch
+  // runs: `issues` is already this-file-only (CodePane's own doc comment),
+  // so this is just an array filter, not a fetch.
+  const wholeFileIssues = issues.filter((i) => i.line === undefined);
+  // Shared between the 413 branch and the normal-path return below, so the
+  // banner markup only lives in one place.
+  const wholeFileBanners = wholeFileIssues.map((issue) => (
+    <WholeFileBanner key={issue.id} issue={issue} filePath={filePath} selected={selected} onToggleIds={onToggleIds} />
+  ));
+
   if (fileQuery.error || content === undefined) {
     const err = fileQuery.error;
     if (err instanceof ApiError && err.status === 413) {
+      // A file too big to fetch/highlight (server-side MAX_FILE_BYTES cap,
+      // src/server/index.ts) is exactly the case where a whole-file 'files'
+      // issue ("this file is unused") is most actionable — a huge dead file
+      // is expensive to keep around. Only the source-preview pane is
+      // skipped; the banner (with its checkbox) still renders. Deliberately
+      // NOT extended to the 404/generic-error branches below: a 404'd file's
+      // issues are stale by definition (the file is gone), and the generic
+      // error branch shouldn't silently grow banners for an unrelated
+      // failure (e.g. a transient fetch error) — see issue #10.
       return (
-        <div className="p-4 text-sm text-amber-700 dark:text-amber-400">
-          {filePath} is too large to preview here.
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {wholeFileBanners}
+          <div className="p-4 text-sm text-amber-700 dark:text-amber-400">
+            {filePath} is too large to preview here.
+          </div>
         </div>
       );
     }
@@ -308,7 +332,6 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
     );
   }
 
-  const wholeFileIssues = issues.filter((i) => i.line === undefined);
   const lineIssues = issueLines(issues, filePath);
 
   let html: string | undefined;
@@ -325,9 +348,7 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {wholeFileIssues.map((issue) => (
-        <WholeFileBanner key={issue.id} issue={issue} filePath={filePath} selected={selected} onToggleIds={onToggleIds} />
-      ))}
+      {wholeFileBanners}
       {highlightNote && (
         <p className="border-b border-border bg-muted px-3 py-1 text-xs text-muted-foreground">
           {highlightNote}
