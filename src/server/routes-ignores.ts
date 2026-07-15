@@ -9,10 +9,10 @@ import { readJsonObject } from './body.js';
 // Reuses FixRoutesCtx as-is (same projectDir/scan/store/planStore shape
 // routes-fix.ts already needs) rather than a bespoke ctx type, so the SAME
 // ctx object server/index.ts builds for registerFixRoutes can be passed here
-// too — and so triggerBackgroundRescan (also reused, not reimplemented) has
-// everything it needs.
+// too — and so applyPlanHandler (reused from routes-fix.ts, not reimplemented)
+// has everything it needs.
 export function registerIgnoresRoutes(app: Hono, ctx: FixRoutesCtx): void {
-  const { projectDir, planStore, store } = ctx;
+  const { projectDir, planStore } = ctx;
 
   app.get('/api/ignores', async (c) => {
     const result = await listIgnores(projectDir);

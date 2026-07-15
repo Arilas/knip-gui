@@ -42,12 +42,13 @@ function performRescan(
 // fire-and-forget initial scan (src/cli.ts) and respecting the shared busy latch:
 // if a scan, sweep, or another apply is already in flight, this is a no-op (the
 // in-flight op's own result — or its own subsequent rescan — will stand) and the
-// route reports rescanning:false. In practice, from this function's only three
-// callers below, that branch can't fire: each releases its own op's latch and
-// calls this synchronously in the same tick (no intervening await), so nothing
-// else can have grabbed the latch by the time tryBeginOp('scan') here runs. Kept
-// as a real guard anyway rather than an assert, since it's cheap insurance
-// against a future caller that isn't as careful about the gap.
+// route reports rescanning:false. In practice, from its single call site in
+// applyPlanHandler below (shared by all three apply routes), that branch can't
+// fire: the handler releases its own op's latch and calls this synchronously in
+// the same tick (no intervening await), so nothing else can have grabbed the latch
+// by the time tryBeginOp('scan') here runs. Kept as a real guard anyway rather
+// than an assert, since it's cheap insurance against a future caller that isn't
+// as careful about the gap.
 // Exported for routes-ignores.ts's remove/apply route, which needs the exact
 // same latch behavior after applying a remove-ignores patch — reused rather
 // than duplicated.
