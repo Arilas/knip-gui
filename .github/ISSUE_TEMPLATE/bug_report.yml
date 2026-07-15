@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in knip-gui doesn't work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Note that issues in the *scan results themselves*
+        (false positives, missing issues) usually belong to [knip](https://github.com/webpro-nl/knip)
+        — knip-gui only visualizes what knip reports. Fix/apply behavior, the UI, and the server are ours.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Ran `npx knip-gui --dir .`
+        2. Selected two unused exports and clicked Fix
+        3. Expected …, but …
+    validations:
+      required: true
+  - type: textarea
+    id: project-shape
+    attributes:
+      label: Project shape
+      description: Anything relevant about the project you ran it against (monorepo? workspaces? bundler? TS/JS?).
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: knip-gui version
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: knip-version
+    attributes:
+      label: knip version
+      description: From your project's node_modules (`npx knip --version`).
+      placeholder: "6.x"
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "macOS 15 / Node 22 / Chrome 138"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal output / browser console errors
+      render: shell
+    validations:
+      required: false

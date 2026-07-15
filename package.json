@@ -4,6 +4,21 @@
   "description": "Web GUI for knip — browse, fix, and commit unused-code cleanups",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Arilas/knip-gui.git"
+  },
+  "bugs": "https://github.com/Arilas/knip-gui/issues",
+  "homepage": "https://github.com/Arilas/knip-gui#readme",
+  "keywords": [
+    "knip",
+    "unused-code",
+    "dead-code",
+    "gui",
+    "cleanup",
+    "lint",
+    "devtools"
+  ],
   "bin": {
     "knip-gui": "./dist/cli.js"
   },
