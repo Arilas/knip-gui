@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import { runScan } from '../core/knip-runner.js';
 import { compileFixPlan, compileIgnorePlan } from '../fix/compiler.js';
 import type { FixMode } from '../core/types.js';
-import { applyPatches } from '../fix/patch.js';
+import { applyPatches, type PatchResult } from '../fix/patch.js';
 import type { PlanStore } from '../fix/plan-store.js';
 import { probeSweepCapabilities, runSweep } from '../fix/sweep.js';
 import { readJsonObject } from './body.js';
@@ -38,28 +38,29 @@ function performRescan(
 }
 
 // Fire-and-forget rescan after a fix/ignore apply, mirroring the CLI's
-// fire-and-forget initial scan (src/cli.ts) and respecting /api/scan's latch:
-// if a scan is already in flight, this is a no-op (the in-flight scan's own
-// result will stand) and the route reports rescanning:false.
+// fire-and-forget initial scan (src/cli.ts) and respecting the shared busy latch:
+// if a scan, sweep, or another apply is already in flight, this is a no-op (the
+// in-flight op's own result — or its own subsequent rescan — will stand) and the
+// route reports rescanning:false. In practice, from this function's only three
+// callers below, that branch can't fire: each releases its own op's latch and
+// calls this synchronously in the same tick (no intervening await), so nothing
+// else can have grabbed the latch by the time tryBeginOp('scan') here runs. Kept
+// as a real guard anyway rather than an assert, since it's cheap insurance
+// against a future caller that isn't as careful about the gap.
 // Exported for routes-ignores.ts's remove/apply route, which needs the exact
 // same latch behavior after applying a remove-ignores patch — reused rather
 // than duplicated.
 export function triggerBackgroundRescan(ctx: FixRoutesCtx): boolean {
-  if (ctx.store.status === 'scanning') return false;
+  if (!ctx.store.tryBeginOp('scan')) return false;
   ctx.store.setScanning();
-  void performRescan(ctx);
+  // Fire-and-forget: nothing awaits this, so the latch can only be released from
+  // inside the promise chain itself, not a surrounding try/finally.
+  void performRescan(ctx).finally(() => ctx.store.endOp());
   return true;
 }
 
 export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   const { store, planStore, projectDir, sweep = runSweep } = ctx;
-  // Synchronous latch for /api/sweep, mirroring /api/scan's check-then-latch
-  // pattern: set before the route's first await, cleared in `finally`, so two
-  // concurrent sweep POSTs can't both pass the guard and both spawn a sweep.
-  // Scoped to this call of registerFixRoutes (i.e. per createServer instance)
-  // rather than module-level, so unrelated server instances in the same
-  // process (e.g. parallel tests) never share this latch.
-  let sweeping = false;
 
   app.post('/api/fix/preview', async (c) => {
     if (store.status !== 'ready' || !store.report) return c.json({ error: 'no report available' }, 409);
@@ -76,10 +77,26 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   });
 
   app.post('/api/fix/apply', async (c) => {
+    // Same synchronous check-and-latch reasoning as /api/scan and /api/sweep: no
+    // await before tryBeginOp, or a concurrent request could slip through.
+    if (!store.tryBeginOp('fix-apply')) {
+      return c.json({ error: `${store.activeOp} in progress`, op: store.activeOp }, 409);
+    }
     const body = await readJsonObject(c);
     const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
-    if (!plan) return c.json({ error: 'unknown or already-applied plan' }, 404);
-    const results = await applyPatches(projectDir, plan.patches);
+    if (!plan) {
+      store.endOp();
+      return c.json({ error: 'unknown or already-applied plan' }, 404);
+    }
+    let results: PatchResult[];
+    try {
+      results = await applyPatches(projectDir, plan.patches);
+    } finally {
+      // Released here — synchronously, with no await before triggerBackgroundRescan
+      // below — so nothing can slip into the gap between this endOp() and the
+      // rescan's own tryBeginOp('scan').
+      store.endOp();
+    }
     const failedItems = plan.items.filter((i) => !i.ok);
     const rescanning = triggerBackgroundRescan(ctx);
     return c.json({ results, failedItems, rescanning });
@@ -95,22 +112,40 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   });
 
   app.post('/api/ignore/apply', async (c) => {
+    // Same synchronous check-and-latch reasoning as /api/fix/apply above.
+    if (!store.tryBeginOp('ignore-apply')) {
+      return c.json({ error: `${store.activeOp} in progress`, op: store.activeOp }, 409);
+    }
     const body = await readJsonObject(c);
     const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
-    if (!plan) return c.json({ error: 'unknown or already-applied plan' }, 404);
-    const results = await applyPatches(projectDir, plan.patches);
+    if (!plan) {
+      store.endOp();
+      return c.json({ error: 'unknown or already-applied plan' }, 404);
+    }
+    let results: PatchResult[];
+    try {
+      results = await applyPatches(projectDir, plan.patches);
+    } finally {
+      // Released synchronously, no await before triggerBackgroundRescan — see
+      // /api/fix/apply above.
+      store.endOp();
+    }
     const failedItems = plan.items.filter((i) => !i.ok);
     const rescanning = triggerBackgroundRescan(ctx);
     return c.json({ results, failedItems, rescanning });
   });
 
   app.post('/api/sweep', async (c) => {
-    // Check-and-latch must be synchronous (no await between the status/latch
-    // check and setting `sweeping`), otherwise two concurrent requests both
-    // pass the guard and both spawn a sweep — same reasoning as /api/scan's
-    // own single-flight guard in server/index.ts.
-    if (store.status === 'scanning' || sweeping) return c.json({ error: 'scan in progress' }, 409);
-    sweeping = true;
+    // Check-and-latch must be synchronous (no await between the tryBeginOp check
+    // and acting on it), otherwise two concurrent requests both pass the guard and
+    // both spawn a sweep — same reasoning as /api/scan's own guard in
+    // server/index.ts. Held through the awaited post-sweep rescan below (not just
+    // the sweep child itself) — the sweep and its rescan are one operation, so a
+    // scan or apply request arriving mid-rescan must still see 'sweep' as the
+    // blocking op, not slip in once the sweep child exits.
+    if (!store.tryBeginOp('sweep')) {
+      return c.json({ error: `${store.activeOp} in progress`, op: store.activeOp }, 409);
+    }
     try {
       const body = await readJsonObject(c);
       // No explicit workspace on the sweep request falls back to the last scan's
@@ -142,7 +177,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
       }
       return c.json({ issueCount: result.issueCount });
     } finally {
-      sweeping = false;
+      store.endOp();
     }
   });
 

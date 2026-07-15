@@ -140,20 +140,29 @@ export function createServer(opts: {
   });
 
   app.post('/api/scan', async (c) => {
-    // Check-and-latch must be synchronous (no await between the status check and
-    // setScanning), otherwise two concurrent requests both pass the guard and both
-    // spawn a scan. readJsonObject can't throw and runScanIntoStore owns the
-    // begin/end-scan lifecycle + error landing, so no path leaves the store stuck.
-    if (store.status === 'scanning') return c.json({ error: 'scan in progress' }, 409);
-    store.setScanning();
-    const body = await readJsonObject(c);
-    const workspace = typeof body.workspace === 'string' ? body.workspace : undefined;
-    // Recorded (and kept even if the scan fails) so a subsequent rescan reuses
-    // this scope instead of widening to the full project — see lastScanScope.
-    store.lastScanScope = workspace;
-    const result = await runScanIntoStore({ store, scan, projectDir, production, workspace });
-    if (!result.ok) return c.json({ status: 'error', error: result.error }, 500);
-    return c.json({ status: 'ready', issueCount: result.issueCount });
+    // Check-and-latch must be synchronous (no await between the tryBeginOp check
+    // and acting on it), otherwise two concurrent requests both pass the guard and
+    // both spawn a scan. tryBeginOp is shared with /api/sweep and every apply
+    // route (see store.ts) so a scan can't run concurrently with any of those
+    // either — all of them mutate the project or this store. readJsonObject can't
+    // throw and runScanIntoStore owns the begin/end-scan lifecycle + error
+    // landing, so the only thing this route itself must guarantee is endOp().
+    if (!store.tryBeginOp('scan')) {
+      return c.json({ error: `${store.activeOp} in progress`, op: store.activeOp }, 409);
+    }
+    try {
+      store.setScanning();
+      const body = await readJsonObject(c);
+      const workspace = typeof body.workspace === 'string' ? body.workspace : undefined;
+      // Recorded (and kept even if the scan fails) so a subsequent rescan reuses
+      // this scope instead of widening to the full project — see lastScanScope.
+      store.lastScanScope = workspace;
+      const result = await runScanIntoStore({ store, scan, projectDir, production, workspace });
+      if (!result.ok) return c.json({ status: 'error', error: result.error }, 500);
+      return c.json({ status: 'ready', issueCount: result.issueCount });
+    } finally {
+      store.endOp();
+    }
   });
 
   app.get('/api/report', (c) =>

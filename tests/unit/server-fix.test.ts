@@ -197,7 +197,12 @@ describe('fix preview/apply', () => {
     expect(body.results).toEqual([{ filePath: 'src/used.ts', ok: false, reason: 'stale' }]);
   });
 
-  it('skips the rescan (rescanning:false) when a scan is already in flight', async () => {
+  it('409s apply when a scan already holds the latch, naming the blocking op', async () => {
+    // Pre-fix, apply checked nothing before mutating files — a concurrent scan
+    // reading the project and an apply rewriting it could race. Now apply itself
+    // takes the shared latch, so it never even reaches applyPatches while a scan
+    // is in flight (and never reaches the "rescan skipped" branch either — that
+    // path is gone; see triggerBackgroundRescan).
     const { app, h, store } = await makeReadyServer();
     const exportIssue = store.report!.issues.find((i) => i.type === 'exports')!;
 
@@ -208,15 +213,57 @@ describe('fix preview/apply', () => {
     });
     const { planId } = await previewRes.json();
 
-    store.setScanning();
+    // Simulates a scan already holding the shared latch — same tryBeginOp the
+    // real /api/scan route calls.
+    expect(store.tryBeginOp('scan')).toBe(true);
     const applyRes = await app.request('/api/fix/apply', {
       method: 'POST',
       headers: h,
       body: JSON.stringify({ planId }),
     });
-    expect(applyRes.status).toBe(200);
-    const body = await applyRes.json();
-    expect(body.rescanning).toBe(false);
+    expect(applyRes.status).toBe(409);
+    expect(await applyRes.json()).toEqual({ error: 'scan in progress', op: 'scan' });
+  });
+
+  it('409s a concurrent apply while a sweep is stalled mid-flight, naming the blocking op', async () => {
+    const dir = await makeProject();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const server = createServer({
+      projectDir: dir,
+      scan: async () => fakeRaw,
+      sweep: async () => {
+        await gate;
+        return { ok: true };
+      },
+    });
+    const h = jsonHeaders(server.token);
+    await server.app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+
+    const exportIssue = server.store.report!.issues.find((i) => i.type === 'exports')!;
+    const previewRes = await server.app.request('/api/fix/preview', {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({ issueIds: [exportIssue.id] }),
+    });
+    const { planId } = await previewRes.json();
+
+    // Sweep's tryBeginOp('sweep') runs synchronously before its first await, so
+    // the latch is already held by the time this line returns control to us —
+    // same reasoning as the sweep-vs-sweep latch test below.
+    const sweepReq = server.app.request('/api/sweep', { method: 'POST', headers: h, body: '{}' });
+    const applyRes = await server.app.request('/api/fix/apply', {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({ planId }),
+    });
+    expect(applyRes.status).toBe(409);
+    expect(await applyRes.json()).toEqual({ error: 'sweep in progress', op: 'sweep' });
+
+    release();
+    await sweepReq;
   });
 });
 
@@ -282,11 +329,31 @@ describe('sweep routes', () => {
     expect(body.error).toBeTruthy();
   });
 
-  it('409s while a scan is already in flight', async () => {
-    const { app, h, store } = await makeReadyServer();
-    store.setScanning();
-    const res = await app.request('/api/sweep', { method: 'POST', headers: h, body: '{}' });
-    expect(res.status).toBe(409);
+  it('409s /api/sweep while a scan is stalled mid-flight, naming the blocking op', async () => {
+    const dir = await makeProject();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const server = createServer({
+      projectDir: dir,
+      scan: async () => {
+        await gate;
+        return fakeRaw;
+      },
+    });
+    const h = jsonHeaders(server.token);
+
+    // /api/scan's tryBeginOp('scan') runs synchronously before its first await
+    // (readJsonObject), so by the time this line returns control to us the latch
+    // is already held — same reasoning as the sweep-vs-sweep latch test below.
+    const scanReq = server.app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+    const sweepRes = await server.app.request('/api/sweep', { method: 'POST', headers: h, body: '{}' });
+    expect(sweepRes.status).toBe(409);
+    expect(await sweepRes.json()).toEqual({ error: 'scan in progress', op: 'scan' });
+
+    release();
+    await scanReq;
   });
 
   it('409s a second concurrent sweep POST while the first is still stalling (synchronous latch)', async () => {

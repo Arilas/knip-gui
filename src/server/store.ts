@@ -2,6 +2,12 @@ import type { Report } from '../core/types.js';
 
 export interface StoreError { code: string; message: string; stderr?: string; exitCode?: number }
 
+// Every route that mutates the project on disk or this store — the initial scan,
+// a sweep (`knip --fix`), or any patch-apply route — must hold this before doing
+// so; see tryBeginOp/endOp below. The apply routes get their own op names rather
+// than sharing one 'apply' so a 409 can name exactly which route is running.
+export type BusyOp = 'scan' | 'sweep' | 'fix-apply' | 'ignore-apply' | 'ignore-remove-apply';
+
 export class ReportStore {
   status: 'idle' | 'scanning' | 'ready' | 'error' = 'idle';
   report?: Report;
@@ -28,6 +34,40 @@ export class ReportStore {
    * reap either an in-flight sweep child or an in-flight scan child on shutdown.
    */
   private activeSweepAbort?: AbortController;
+  /**
+   * Which mutating op currently holds the shared busy latch (undefined when none
+   * does). Scan, sweep, and every apply route funnel through tryBeginOp/endOp
+   * instead of each inventing its own local flag — a sweep rewriting files and a
+   * fix apply rewriting files at the same time is a data race regardless of which
+   * two ops collide, so one latch has to cover all of them, not one per route.
+   */
+  activeOp?: BusyOp;
+
+  /**
+   * Synchronous check-and-set. Returns false without mutating state if another op
+   * already holds the latch (so the caller can read `activeOp` back to report which
+   * one); otherwise claims it for `op` and returns true. Callers MUST NOT `await`
+   * between the guard they use to decide whether to call this and the call itself —
+   * any gap lets two concurrent requests both observe the latch free and both
+   * proceed. Route handlers are single-threaded (Node's event loop), so this plain
+   * field check-and-set is all the synchronization a "no await in between" call
+   * site needs; no actual lock is required.
+   */
+  tryBeginOp(op: BusyOp): boolean {
+    if (this.activeOp) return false;
+    this.activeOp = op;
+    return true;
+  }
+
+  /**
+   * Clears the latch unconditionally. Unlike endScan/endSweep (which compare
+   * controller identity because a stale finally from an older attempt could
+   * otherwise clobber a newer one's state), only one op can ever hold this latch
+   * at a time by construction, so there's nothing to compare against.
+   */
+  endOp(): void {
+    this.activeOp = undefined;
+  }
 
   setScanning() { this.status = 'scanning'; this.error = undefined; }
   setReady(report: Report) { this.status = 'ready'; this.report = report; this.error = undefined; }

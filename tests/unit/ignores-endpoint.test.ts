@@ -168,7 +168,9 @@ describe('remove-ignores preview/apply', () => {
     ]);
   });
 
-  it('skips the rescan (rescanning:false) when a scan is already in flight', async () => {
+  it('409s apply when a scan already holds the latch, naming the blocking op', async () => {
+    // Same reasoning as routes-fix.ts's apply routes: apply now takes the shared
+    // latch itself, so it never reaches applyPatches while a scan is in flight.
     const { app, h, store } = await makeReadyServer({ ignoreDependencies: ['left-pad'] });
     const previewRes = await app.request('/api/ignores/remove/preview', {
       method: 'POST',
@@ -177,14 +179,16 @@ describe('remove-ignores preview/apply', () => {
     });
     const { planId } = await previewRes.json();
 
-    store.setScanning();
+    // Simulates a scan already holding the shared latch — same tryBeginOp the
+    // real /api/scan route calls.
+    expect(store.tryBeginOp('scan')).toBe(true);
     const applyRes = await app.request('/api/ignores/remove/apply', {
       method: 'POST',
       headers: h,
       body: JSON.stringify({ planId }),
     });
-    expect(applyRes.status).toBe(200);
-    expect((await applyRes.json()).rescanning).toBe(false);
+    expect(applyRes.status).toBe(409);
+    expect(await applyRes.json()).toEqual({ error: 'scan in progress', op: 'scan' });
   });
 
   it('reports code-config/no-config reasons when there is no writable config', async () => {
