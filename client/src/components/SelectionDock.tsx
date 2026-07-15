@@ -16,6 +16,7 @@
 // is compiled yet at this point; that's ReviewPage's "Preview changes"
 // button, per the design brief's 3-step-single-page simplification.
 import { useMemo } from 'react';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { XIcon } from 'lucide-react';
 import type { Issue, IssueType } from '../../../src/core/types.js';
 import { typeLabel } from '../lib/filters.js';
@@ -40,16 +41,25 @@ export function SelectionDock({ issues }: SelectionDockProps) {
   const clear = useSelectionStore((s) => s.clear);
   const toggle = useSelectionStore((s) => s.toggle);
   const busy = useBusy();
-  const page = useUiStore((s) => s.page);
   const startReview = useUiStore((s) => s.startReview);
+  const navigate = useNavigate();
+  // Frozen at click time (like summary/count): the path to route back to on
+  // Cancel/Done, and the Code file open right now (the `/code` `file` param,
+  // undefined elsewhere) to restore on exit (#6). openFile is URL state now, so
+  // the caller reads it here rather than startReview pulling it from the store.
+  const returnTo = useRouterState({ select: (s) => s.location.pathname });
+  const returnOpenFile = useRouterState({ select: (s) => (s.location.search as { file?: string }).file });
 
   function onStartReview(kind: 'fix' | 'ignore') {
     startReview({
       kind,
       summary: summaryByType({ selected }, issues),
       frozenCount: selected.size,
-      returnTo: page,
+      returnTo,
+      returnOpenFile,
     });
+    // startReview no longer navigates itself — hop to the Review route here.
+    navigate({ to: '/review' });
   }
 
   const selectedIssues = useMemo(() => issues.filter((i) => selected.has(i.id)), [issues, selected]);

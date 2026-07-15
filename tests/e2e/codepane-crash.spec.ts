@@ -9,14 +9,14 @@
 //
 // Task 3 (v0.3) note: the ignore/apply step that used to run in a modal
 // FLOATING OVER the still-mounted code pane now runs on the separate Review
-// page (Code unmounts entirely while Review is up — see App.tsx's page
-// switch). The hazardous transition this spec pins — the SAME mounted
-// CodePane instance living through a rescan that removes one of its flagged
-// lines — still happens, just after returning from Review: `ui.openFile`
-// is page-scoped (state/ui.ts's `navigate` doc comment) and is cleared by the
-// navigation back to Code, so the file is reopened (a fresh CodePane mount)
-// and left mounted while the apply's background rescan (already in flight)
-// lands and prunes the now-ignored issue.
+// page (Code unmounts entirely while Review is up — see the router's route
+// tree). The hazardous transition this spec pins — the SAME mounted CodePane
+// instance living through a rescan that removes one of its flagged lines —
+// still happens after returning from Review. Post Task R (#14) the open file
+// is the `/code` `file` search param: returning from an ignore restores it
+// (returnOpenFile), so the file reopens automatically; the explicit re-click
+// below re-mounts/re-renders that CodePane and leaves it mounted while the
+// apply's background rescan (already in flight) lands and prunes the issue.
 //
 // Targets src/used.ts's Color.Blue enumMember issue (line 11) rather than the
 // unusedHelper export smoke.spec.ts consumes via its Fix flow — keeps this
@@ -84,11 +84,11 @@ test('code pane reopened after an ignore survives the rescan that prunes its iss
     'scanning',
   );
 
-  // Back on Code — ui.openFile is page-scoped and was cleared by the
-  // navigation back, so reopen src/used.ts explicitly (a fresh CodePane
-  // mount, left mounted from here on). The apply's background rescan is
-  // confirmed still in flight above; wait for it to land and actually drop
-  // the now-ignored issue's badge — this is the moment the old code crashed.
+  // Back on Code — the ignore restored src/used.ts via returnOpenFile (the
+  // `file` param), and this re-click re-fires the CodePane (a mount left in
+  // place from here on). The apply's background rescan is confirmed still in
+  // flight above; wait for it to land and actually drop the now-ignored issue's
+  // badge — this is the moment the old code crashed.
   await page.getByTestId('tree-file-src/used.ts').click();
   await expect(badge).toHaveCount(0, { timeout: 30_000 });
 

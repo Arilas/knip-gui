@@ -11,8 +11,8 @@
 // CommitDialog, which checklists the actual dirty files.
 import { GitCommitVertical, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
+import { useRouterState } from '@tanstack/react-router';
 import { useBusy, useGitStatus, useReport, useScanMutation } from '../../state/queries.js';
-import { useUiStore } from '../../state/ui.js';
 import { CommitDialog } from '../flows/CommitDialog.js';
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
@@ -26,7 +26,7 @@ export function GitFooter() {
   // A rescan while the Review page is open prunes the selection under a frozen
   // review and can invalidate its compiled plan — gate Re-run the same way the
   // workspace switcher is gated.
-  const reviewing = useUiStore((s) => s.page === 'review');
+  const reviewing = useRouterState({ select: (s) => s.location.pathname === '/review' });
   const [commitDialogOpen, setCommitDialogOpen] = useState(false);
   const dirtyCount = gitStatus?.dirtyFiles?.length ?? 0;
 

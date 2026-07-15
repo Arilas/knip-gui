@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CODE_TYPES, PACKAGE_TYPES, useUiStore } from '../../client/src/state/ui.js';
 
+// Navigation (active page + open file) moved to the URL/router in Task R (#14),
+// so the store no longer holds `page`/`openFile`/`navigate` — those behaviors
+// are covered by tests/e2e/routing.spec.ts against the real router now. What
+// remains here is the store's surviving surface: filter sets + their
+// replace/toggle setters, codeSearch, the open-file re-scroll nonce, the
+// review request, and the tree-expansion lift.
 function resetStore() {
   useUiStore.setState({
-    page: 'dashboard',
     codeFilters: new Set(CODE_TYPES),
     packagesFilters: new Set(PACKAGE_TYPES),
     codeSearch: '',
-    openFile: undefined,
     openFileNonce: 0,
     review: undefined,
     expandedDirs: new Set<string>(),
@@ -20,11 +24,6 @@ beforeEach(() => {
 });
 
 describe('useUiStore defaults', () => {
-  it('starts on the dashboard page with no open file', () => {
-    expect(useUiStore.getState().page).toBe('dashboard');
-    expect(useUiStore.getState().openFile).toBeUndefined();
-  });
-
   it('defaults codeFilters to every file-located type, all enabled', () => {
     expect([...useUiStore.getState().codeFilters].sort()).toEqual(
       ['duplicates', 'enumMembers', 'exports', 'files', 'namespaceMembers', 'types', 'unlisted', 'unresolved'].sort(),
@@ -37,103 +36,41 @@ describe('useUiStore defaults', () => {
     );
   });
 
-  it('defaults codeSearch to empty', () => {
+  it('defaults codeSearch to empty and the open-file nonce to 0', () => {
     expect(useUiStore.getState().codeSearch).toBe('');
+    expect(useUiStore.getState().openFileNonce).toBe(0);
   });
 });
 
-describe('navigate', () => {
-  it('switches the active page', () => {
-    useUiStore.getState().navigate('code');
-    expect(useUiStore.getState().page).toBe('code');
-  });
-
-  it('replaces the target page filter set when filters are given', () => {
-    useUiStore.getState().navigate('code', { filters: ['exports'] });
+describe('setCodeFilters / setPackagesFilters (Dashboard tile/cell replace semantics)', () => {
+  it('setCodeFilters replaces the code chip set with exactly the given types', () => {
+    useUiStore.getState().setCodeFilters(['exports']);
     expect([...useUiStore.getState().codeFilters]).toEqual(['exports']);
   });
 
-  it('replaces packagesFilters (not codeFilters) when navigating to packages with filters', () => {
-    useUiStore.getState().navigate('packages', { filters: ['dependencies'] });
+  it('setPackagesFilters replaces packagesFilters and never touches codeFilters', () => {
+    useUiStore.getState().setPackagesFilters(['dependencies']);
     expect([...useUiStore.getState().packagesFilters]).toEqual(['dependencies']);
-    // codeFilters untouched by a packages-page navigation.
     expect([...useUiStore.getState().codeFilters].sort()).toEqual([...CODE_TYPES].sort());
-  });
-
-  it('keeps the current filter set when no filters are given', () => {
-    useUiStore.getState().toggleCodeFilter('exports');
-    const before = new Set(useUiStore.getState().codeFilters);
-    useUiStore.getState().navigate('code');
-    expect(useUiStore.getState().codeFilters).toEqual(before);
-  });
-
-  it('sets openFile when opts.openFile is given', () => {
-    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
-    expect(useUiStore.getState().openFile).toBe('src/used.ts');
-  });
-
-  it('clears openFile on a navigate call that omits opts.openFile', () => {
-    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
-    useUiStore.getState().navigate('code');
-    expect(useUiStore.getState().openFile).toBeUndefined();
-
-    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
-    useUiStore.getState().navigate('packages');
-    expect(useUiStore.getState().openFile).toBeUndefined();
-  });
-
-  it('bumps openFileNonce every time opts.openFile is given, even for the same path (CodePane re-scroll signal)', () => {
-    const start = useUiStore.getState().openFileNonce;
-    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
-    expect(useUiStore.getState().openFileNonce).toBe(start + 1);
-    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
-    expect(useUiStore.getState().openFileNonce).toBe(start + 2);
-  });
-
-  it('does not bump openFileNonce on a navigate call that omits opts.openFile', () => {
-    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
-    const afterOpen = useUiStore.getState().openFileNonce;
-    useUiStore.getState().navigate('code');
-    expect(useUiStore.getState().openFileNonce).toBe(afterOpen);
-  });
-
-  it('sets codeSearch when opts.search is given', () => {
-    useUiStore.getState().navigate('code', { search: 'packages/app/' });
-    expect(useUiStore.getState().codeSearch).toBe('packages/app/');
-  });
-
-  it('clears codeSearch when opts.search is explicitly the empty string', () => {
-    useUiStore.getState().navigate('code', { search: 'packages/app/' });
-    useUiStore.getState().navigate('code', { search: '' });
-    expect(useUiStore.getState().codeSearch).toBe('');
-  });
-
-  it('leaves codeSearch untouched when opts.search is omitted', () => {
-    useUiStore.getState().navigate('code', { search: 'packages/app/' });
-    useUiStore.getState().navigate('code', { filters: ['exports'] });
-    expect(useUiStore.getState().codeSearch).toBe('packages/app/');
-  });
-
-  it('ignores opts.search when navigating to a page other than code (packages has its own local search)', () => {
-    useUiStore.getState().navigate('packages', { filters: ['dependencies'], search: 'packages/app/' });
-    expect(useUiStore.getState().page).toBe('packages');
-    expect(useUiStore.getState().codeSearch).toBe('');
-  });
-
-  it('does not clobber an existing codeSearch when a later non-code navigation also passes opts.search', () => {
-    useUiStore.getState().navigate('code', { search: 'packages/app/' });
-    useUiStore.getState().navigate('packages', { filters: ['dependencies'], search: 'packages/other/' });
-    expect(useUiStore.getState().codeSearch).toBe('packages/app/');
   });
 });
 
 describe('setCodeSearch', () => {
-  it('updates codeSearch without touching page or openFile', () => {
-    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
-    useUiStore.getState().setCodeSearch('used');
-    expect(useUiStore.getState().codeSearch).toBe('used');
-    expect(useUiStore.getState().openFile).toBe('src/used.ts');
-    expect(useUiStore.getState().page).toBe('code');
+  it('updates codeSearch in place', () => {
+    useUiStore.getState().setCodeSearch('packages/app/');
+    expect(useUiStore.getState().codeSearch).toBe('packages/app/');
+    useUiStore.getState().setCodeSearch('');
+    expect(useUiStore.getState().codeSearch).toBe('');
+  });
+});
+
+describe('bumpOpenFileNonce (CodePane re-scroll signal for an identical-URL re-open)', () => {
+  it('increments the nonce on every call — the signal that re-fires the scroll/pulse when the router will not re-navigate', () => {
+    const start = useUiStore.getState().openFileNonce;
+    useUiStore.getState().bumpOpenFileNonce();
+    expect(useUiStore.getState().openFileNonce).toBe(start + 1);
+    useUiStore.getState().bumpOpenFileNonce();
+    expect(useUiStore.getState().openFileNonce).toBe(start + 2);
   });
 });
 
@@ -159,71 +96,44 @@ describe('toggleCodeFilter / togglePackagesFilter', () => {
 });
 
 describe('startReview / clearReview', () => {
-  it('startReview navigates to the review page and freezes the request', () => {
-    useUiStore.getState().navigate('code');
+  it('startReview stores the request verbatim (returnTo/returnOpenFile supplied by the caller — openFile is URL state now)', () => {
     useUiStore.getState().startReview({
       kind: 'fix',
       summary: '2 exports, 1 file',
       frozenCount: 3,
-      returnTo: 'code',
+      returnTo: '/code',
+      returnOpenFile: 'src/used.ts',
     });
-    expect(useUiStore.getState().page).toBe('review');
     expect(useUiStore.getState().review).toEqual({
       kind: 'fix',
       summary: '2 exports, 1 file',
       frozenCount: 3,
-      returnTo: 'code',
+      returnTo: '/code',
+      returnOpenFile: 'src/used.ts',
     });
   });
 
-  it('clearReview drops the pending review without touching page', () => {
-    useUiStore.getState().startReview({ kind: 'ignore', summary: '1 file', frozenCount: 1, returnTo: 'packages' });
+  it('startReview carries returnOpenFile undefined when nothing was open', () => {
+    useUiStore.getState().startReview({ kind: 'fix', summary: '1 export', frozenCount: 1, returnTo: '/code' });
+    expect(useUiStore.getState().review?.returnOpenFile).toBeUndefined();
+  });
+
+  it('clearReview drops the pending review', () => {
+    useUiStore.getState().startReview({ kind: 'ignore', summary: '1 file', frozenCount: 1, returnTo: '/packages' });
     useUiStore.getState().clearReview();
     expect(useUiStore.getState().review).toBeUndefined();
-    // clearReview is a pure state drop (Cancel/Apply-done navigates
-    // explicitly elsewhere) — it must not implicitly bounce the page back.
-    expect(useUiStore.getState().page).toBe('review');
   });
 
   it("a later startReview's frozen fields don't leak from an earlier one", () => {
-    useUiStore.getState().startReview({ kind: 'fix', summary: '1 export', frozenCount: 1, returnTo: 'code' });
+    useUiStore.getState().startReview({ kind: 'fix', summary: '1 export', frozenCount: 1, returnTo: '/code' });
     useUiStore.getState().clearReview();
-    useUiStore.getState().startReview({ kind: 'ignore', summary: '2 files', frozenCount: 2, returnTo: 'packages' });
+    useUiStore.getState().startReview({ kind: 'ignore', summary: '2 files', frozenCount: 2, returnTo: '/packages' });
     expect(useUiStore.getState().review).toEqual({
       kind: 'ignore',
       summary: '2 files',
       frozenCount: 2,
-      returnTo: 'packages',
-      returnOpenFile: undefined,
+      returnTo: '/packages',
     });
-  });
-
-  it('startReview captures the currently open file into returnOpenFile (#6 — restored on Review exit)', () => {
-    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
-    useUiStore.getState().startReview({ kind: 'fix', summary: '1 export', frozenCount: 1, returnTo: 'code' });
-    expect(useUiStore.getState().review?.returnOpenFile).toBe('src/used.ts');
-  });
-
-  it('startReview captures undefined when no file is open', () => {
-    useUiStore.getState().navigate('code');
-    expect(useUiStore.getState().openFile).toBeUndefined();
-    useUiStore.getState().startReview({ kind: 'fix', summary: '1 export', frozenCount: 1, returnTo: 'code' });
-    expect(useUiStore.getState().review?.returnOpenFile).toBeUndefined();
-  });
-
-  it("startReview's captured returnOpenFile ignores any value the caller passed in the request (set-time capture always wins)", () => {
-    useUiStore.getState().navigate('code', { openFile: 'src/actual-open.ts' });
-    // SelectionDock never passes returnOpenFile itself (state/ui.ts's doc
-    // comment); this guards against a future caller trying to pre-set it and
-    // silently overriding the point of capturing it at set-time.
-    useUiStore.getState().startReview({
-      kind: 'fix',
-      summary: '1 export',
-      frozenCount: 1,
-      returnTo: 'code',
-      returnOpenFile: 'src/spoofed.ts',
-    });
-    expect(useUiStore.getState().review?.returnOpenFile).toBe('src/actual-open.ts');
   });
 });
 
@@ -242,9 +152,6 @@ describe('tree expansion lift (expandedDirs/toggleDir/expandAll/collapseAll/init
   it('initExpandedDirs is a no-op once already initialized (never re-seeds over a later choice)', () => {
     useUiStore.getState().initExpandedDirs(['src']);
     useUiStore.getState().collapseAll();
-    // Simulates TreeView's seeding effect re-running with a fresh policy
-    // default after the tree changed (e.g. a filter chip toggle) — must NOT
-    // undo the explicit collapseAll below it.
     useUiStore.getState().initExpandedDirs(['src', 'src/lib', 'src/new-dir']);
     expect(useUiStore.getState().expandedDirs.size).toBe(0);
   });
@@ -272,32 +179,11 @@ describe('tree expansion lift (expandedDirs/toggleDir/expandAll/collapseAll/init
     expect(useUiStore.getState().expandedDirs.size).toBe(0);
   });
 
-  it('expandedDirs persists across a navigate call (survives a Code -> Packages -> Code round trip)', () => {
-    useUiStore.getState().navigate('code');
-    useUiStore.getState().expandAll(['src', 'src/lib']);
-    useUiStore.getState().navigate('packages');
-    useUiStore.getState().navigate('code');
-    expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['src', 'src/lib']);
-  });
-
   describe('expandDirs (seed-delta for dirs a rescan introduces post-seed)', () => {
     it('adds paths not already present, without touching existing ones', () => {
       useUiStore.getState().expandAll(['src']);
       useUiStore.getState().expandDirs(['src', 'src/new-dir']);
       expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['src', 'src/new-dir']);
-    });
-
-    it('leaves an unrelated already-collapsed dir alone — only the given paths are added', () => {
-      useUiStore.getState().expandAll(['a', 'b']);
-      useUiStore.getState().collapseAll();
-      // 'a' was collapsed by the user; only 'c' is the "genuinely new" path
-      // TreeView.tsx would diff out and pass here (see its tree-change
-      // effect) — expandDirs itself is a plain unconditional merge with no
-      // memory of collapseAll, so this only demonstrates the safe case:
-      // 'a' stays out because it's simply not in the call's argument list,
-      // not because the action itself protects it.
-      useUiStore.getState().expandDirs(['c']);
-      expect([...useUiStore.getState().expandedDirs].sort()).toEqual(['c']);
     });
 
     it('is a no-op (same Set reference) when every path is already present', () => {

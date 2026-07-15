@@ -58,9 +58,9 @@ test('dragging the Code split handle persists panel sizes across a reload', asyn
 
   await page.reload();
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
-  // Code isn't the app's persisted landing page (only ui.ts's per-page
-  // `openFile` survives a reload's fresh store) — re-select it, same as any
-  // real reload would require.
+  // Post Task R (#14) the page lives in the URL, so a reload of /code lands
+  // back on Code directly; the nav click is now a harmless no-op re-nav to the
+  // current route, kept only so this spec doesn't assume the reload URL.
   await page.getByTestId('nav-code').click();
 
   const afterReloadBox = (await page.getByTestId('code-tree').boundingBox())!;

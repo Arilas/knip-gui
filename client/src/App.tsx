@@ -1,39 +1,13 @@
 import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { KeyRound, Loader2 } from 'lucide-react';
+import { RouterProvider } from '@tanstack/react-router';
+import { KeyRound } from 'lucide-react';
 import { ApiError, setOnUnauthorized } from './api.js';
-import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
-import { ActivityPage } from './components/pages/ActivityPage.js';
-import { CodePage } from './components/pages/CodePage.js';
-import { Dashboard } from './components/pages/Dashboard.js';
-import { IgnoredPage } from './components/pages/IgnoredPage.js';
-import { PackagesPage } from './components/pages/PackagesPage.js';
-import { ReviewPage } from './components/pages/ReviewPage.js';
-import { SetupScreen } from './components/pages/SetupScreen.js';
 import { Button } from './components/ui/button.js';
-import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar.js';
 import { Toaster } from './components/ui/sonner.js';
 import { TooltipProvider } from './components/ui/tooltip.js';
-import { useReport } from './state/queries.js';
-import { useSelectionStore } from './state/selection.js';
-import { useUiStore } from './state/ui.js';
-
-// A knip-not-found error means knip can't even be resolved from this project;
-// a knip-failed error with exitCode >= 2 means knip itself exited fatally
-// (bad/missing config, or some other non-"issues found" failure — see
-// src/core/knip-runner.ts's runScan, which only rejects at exitCode >= 2).
-// Either way there's no report to show and no amount of retrying without
-// fixing the project will help — SetupScreen replaces the page body instead.
-// A `bad-json`/`internal` error, or a knip-failed with exitCode < 2 (there
-// isn't one today, but nothing rules it out), falls through to the plain
-// error message below instead — those aren't "go fix your knip setup"
-// problems in the same way.
-function isSetupError(error: { code: string; exitCode?: number } | undefined): boolean {
-  if (!error) return false;
-  if (error.code === 'knip-not-found') return true;
-  return error.code === 'knip-failed' && (error.exitCode ?? 0) >= 2;
-}
+import { router } from './router.js';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -83,118 +57,6 @@ function SessionExpiredScreen() {
   );
 }
 
-function AppShell() {
-  const { data, isLoading, error } = useReport();
-  const page = useUiStore((s) => s.page);
-  const review = useUiStore((s) => s.review);
-  const navigate = useUiStore((s) => s.navigate);
-
-  const pruneMissing = useSelectionStore((s) => s.pruneMissing);
-
-  const report = data?.report;
-  const issues = report?.issues ?? [];
-  const workspaces = report?.workspaces ?? ['.'];
-
-  // Task 5's apply-flow obligation: whenever a fresh report lands (the
-  // post-apply background rescan, a manual re-run, a sweep — any of them),
-  // drop any selected/mode-overridden ids the new report no longer contains,
-  // so the cart never shows a stale count for an issue that's already gone.
-  // Keyed on scannedAt (not the `report` object reference, which changes on
-  // every poll) so this only runs once per actual new scan.
-  useEffect(() => {
-    if (!report) return;
-    pruneMissing(report.issues.map((i) => i.id));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [report?.scannedAt]);
-
-  // Direct-nav/reload guard (Task 3): 'review' is only ever a meaningful page
-  // alongside a pending review request — SelectionDock's startReview sets
-  // both atomically (state/ui.ts). Landing on page:'review' with
-  // review:undefined (a stray back/forward nav, or a reload that resets
-  // in-memory state while a stale URL/history entry points here) has nothing
-  // to render, so bounce to Code rather than showing an empty page.
-  useEffect(() => {
-    if (page === 'review' && !review) navigate('code');
-  }, [page, review, navigate]);
-
-  function renderPage() {
-    // Ignored/Activity are never report-dependent (their own server
-    // query / session store, respectively — see AppSidebar.tsx's doc
-    // comment), so they render normally regardless of report/scan state,
-    // including the setup-error state below: the sidebar stays reachable and
-    // useful even while Dashboard/Code/Packages can't show anything. Review
-    // is likewise report-adjacent rather than report-gated — it must persist
-    // through a background rescan (status flips to 'scanning' mid-apply)
-    // without disappearing, and the guard effect above already handles the
-    // "no pending review" case.
-    if (page === 'ignored') return <IgnoredPage />;
-    if (page === 'activity') return <ActivityPage />;
-    if (page === 'review') return review ? <ReviewPage issues={issues} review={review} /> : null;
-
-    if (isLoading) return <p className="p-4 text-sm text-muted-foreground" role="status">Loading report…</p>;
-    if (error) {
-      return (
-        <p className="p-4 text-sm text-destructive" role="status">
-          Failed to load the report: {error instanceof Error ? error.message : String(error)}
-        </p>
-      );
-    }
-    if (data?.status === 'error' && isSetupError(data.error)) {
-      return <SetupScreen error={data.error!} />;
-    }
-    if (data?.status === 'error') {
-      return <p className="p-4 text-sm text-destructive" role="status">{data.error?.message ?? 'The last scan failed.'}</p>;
-    }
-    // The very first scan hasn't produced a report yet (status 'idle' before it
-    // starts, 'scanning' while it runs, both with no report). Without this the
-    // pages fall through to their "no issues — knip is happy" empty states and
-    // falsely tell the user their project is clean mid-scan. A rescan is exempt:
-    // it keeps status 'scanning' but data.report still holds the previous report,
-    // so the pages stay visible.
-    if (!data?.report && (data?.status === 'scanning' || data?.status === 'idle')) {
-      return (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center" role="status">
-          <Loader2 className="size-6 animate-spin text-muted-foreground" />
-          <p className="text-sm font-medium">Scanning your project…</p>
-          <p className="max-w-sm text-xs text-muted-foreground">Running knip. This can take a moment on a large project.</p>
-        </div>
-      );
-    }
-
-    switch (page) {
-      case 'dashboard':
-        return <Dashboard />;
-      case 'code':
-        return <CodePage issues={issues} />;
-      case 'packages':
-        return <PackagesPage issues={issues} />;
-      default:
-        return null;
-    }
-  }
-
-  return (
-    // h-svh + overflow-hidden cap the shell at the viewport. sidebar.tsx's own
-    // wrapper class is only min-h-svh — a floor, not a cap — so without this
-    // the wrapper grows to fit content, the PAGE becomes the scroller, and
-    // every inner overflow-auto / sticky-header / virtualized container
-    // silently stops working because its clientHeight === scrollHeight. With
-    // the cap, each page's content area is the real scroll container; the
-    // min-h-0s keep the flex chain shrinkable below content height so that
-    // actually happens (flex children default to min-height:auto).
-    <SidebarProvider className="h-svh overflow-hidden">
-      <AppSidebar issues={issues} workspaces={workspaces} />
-      <SidebarInset className="min-h-0 overflow-hidden">
-        <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-          <SidebarTrigger data-testid="sidebar-trigger" />
-          <h1 className="text-sm font-semibold capitalize">{page}</h1>
-        </header>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{renderPage()}</div>
-      </SidebarInset>
-    </SidebarProvider>
-  );
-}
-
 export default function App() {
   const [sessionExpired, setSessionExpired] = useState(false);
 
@@ -207,22 +69,22 @@ export default function App() {
 
   // Early return BEFORE the providers: unmounting QueryClientProvider's whole
   // subtree drops every query observer, so nothing keeps polling the dead
-  // session — the only remaining action is the Reload button.
+  // session — the only remaining action is the Reload button. The router lives
+  // INSIDE the providers below, so this (and ErrorBoundary) can replace the
+  // entire routed tree, chrome included.
   if (sessionExpired) return <SessionExpiredScreen />;
 
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <AppShell />
+          <RouterProvider router={router} />
           {/* top-center (Task 3, v0.3 — sonner's own default is bottom-right):
-              the Review page docks CommitBar's Commit/Skip/Done buttons at
-              the real viewport bottom-right (not a centered modal, unlike
-              the old ActionModal/CommitPanel), the same corner a
-              bottom-right toast would render in — a "Committed <sha>"
-              success toast landing there intercepted pointer events on the
-              Done button underneath it (caught live via the Review e2e
-              flow). top-center never overlaps any docked bar's buttons. */}
+              the Review page docks CommitBar's Commit/Skip/Done buttons at the
+              real viewport bottom-right, the same corner a bottom-right toast
+              would render in — a success toast landing there intercepted
+              pointer events on the Done button underneath it. top-center never
+              overlaps any docked bar's buttons. */}
           <Toaster position="top-center" />
         </TooltipProvider>
       </QueryClientProvider>

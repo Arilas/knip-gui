@@ -7,11 +7,12 @@
 // is scan-report-derived: Ignored counts the project's current knip-config
 // ignore entries, Activity counts this session's logged actions.
 import type { ComponentType } from 'react';
+import { Link, useRouterState } from '@tanstack/react-router';
 import { EyeOff, FileCode2, History, LayoutDashboard, Package } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
 import { useActivityStore } from '../../state/activity.js';
 import { useIgnores } from '../../state/queries.js';
-import { CODE_TYPES, PACKAGE_TYPES, useUiStore, type Page } from '../../state/ui.js';
+import { CODE_TYPES, PACKAGE_TYPES } from '../../state/ui.js';
 import {
   Sidebar,
   SidebarContent,
@@ -34,27 +35,30 @@ const CODE_TYPE_SET = new Set(CODE_TYPES);
 const PACKAGE_TYPE_SET = new Set(PACKAGE_TYPES);
 
 interface NavItem {
-  page: Page;
+  to: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
   count?: number;
 }
 
 export function AppSidebar({ issues, workspaces }: AppSidebarProps) {
-  const page = useUiStore((s) => s.page);
-  const navigate = useUiStore((s) => s.navigate);
   const { data: ignoresData } = useIgnores();
   const activityCount = useActivityStore((s) => s.entries.length);
+  // First path segment of the current location — the sidebar's active item.
+  // Plain <Link>s (no filters/search) drive nav here, so toggled filter chips
+  // survive navigating away and back (nothing resets them). `ws` rides along
+  // automatically via the root's retainSearchParams middleware.
+  const activePath = useRouterState({ select: (s) => `/${s.location.pathname.replace(/^\//, '').split('/')[0]}` });
 
   const codeCount = issues.filter((i) => CODE_TYPE_SET.has(i.type)).length;
   const packagesCount = issues.filter((i) => PACKAGE_TYPE_SET.has(i.type)).length;
 
   const items: NavItem[] = [
-    { page: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, count: issues.length },
-    { page: 'code', label: 'Code', icon: FileCode2, count: codeCount },
-    { page: 'packages', label: 'Packages', icon: Package, count: packagesCount },
-    { page: 'ignored', label: 'Ignored', icon: EyeOff, count: ignoresData?.entries.length },
-    { page: 'activity', label: 'Activity', icon: History, count: activityCount },
+    { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, count: issues.length },
+    { to: '/code', label: 'Code', icon: FileCode2, count: codeCount },
+    { to: '/packages', label: 'Packages', icon: Package, count: packagesCount },
+    { to: '/ignored', label: 'Ignored', icon: EyeOff, count: ignoresData?.entries.length },
+    { to: '/activity', label: 'Activity', icon: History, count: activityCount },
   ];
 
   return (
@@ -64,21 +68,24 @@ export function AppSidebar({ issues, workspaces }: AppSidebarProps) {
       </SidebarHeader>
       <SidebarContent>
         <SidebarMenu>
-          {items.map((item) => (
-            <SidebarMenuItem key={item.page}>
-              <SidebarMenuButton
-                data-testid={`nav-${item.page}`}
-                isActive={page === item.page}
-                aria-current={page === item.page ? 'page' : undefined}
-                tooltip={item.label}
-                onClick={() => navigate(item.page)}
-              >
-                <item.icon className="size-4" />
-                <span>{item.label}</span>
-              </SidebarMenuButton>
-              {item.count !== undefined && <SidebarMenuBadge>{item.count}</SidebarMenuBadge>}
-            </SidebarMenuItem>
-          ))}
+          {items.map((item) => {
+            const isActive = activePath === item.to;
+            return (
+              <SidebarMenuItem key={item.to}>
+                <SidebarMenuButton asChild isActive={isActive} tooltip={item.label}>
+                  <Link
+                    to={item.to}
+                    data-testid={`nav-${item.to.slice(1)}`}
+                    aria-current={isActive ? 'page' : undefined}
+                  >
+                    <item.icon className="size-4" />
+                    <span>{item.label}</span>
+                  </Link>
+                </SidebarMenuButton>
+                {item.count !== undefined && <SidebarMenuBadge>{item.count}</SidebarMenuBadge>}
+              </SidebarMenuItem>
+            );
+          })}
         </SidebarMenu>
       </SidebarContent>
       <SidebarFooter>

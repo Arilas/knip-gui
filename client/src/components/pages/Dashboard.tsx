@@ -6,6 +6,7 @@
 // `⋯` menu (SweepDialog.tsx, extracted out of Overview.tsx).
 import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Binary,
@@ -32,7 +33,7 @@ import { filterRows, sortRows, typeTotals, visibleColumns, workspaceRows, type S
 import { CODE_TYPES, PACKAGE_TYPES, typeLabel } from '../../lib/filters.js';
 import { useActivityStore } from '../../state/activity.js';
 import { useBusy, useReport, useSweepMutation } from '../../state/queries.js';
-import { useUiStore, type Page } from '../../state/ui.js';
+import { useUiStore } from '../../state/ui.js';
 import { SweepDialog } from '../flows/SweepDialog.js';
 import { Button } from '../ui/button.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
@@ -69,11 +70,12 @@ const CODE_TYPE_SET = new Set(CODE_TYPES);
 const PACKAGE_TYPE_SET = new Set(PACKAGE_TYPES);
 
 // Dep-shaped types route to Packages, file-located types route to Code (see
-// ui.ts's CODE_TYPES/PACKAGE_TYPES doc comments); catalog/cycles have no page
-// of their own, so they route nowhere.
-function pageForType(type: IssueType): Page | undefined {
-  if (CODE_TYPE_SET.has(type)) return 'code';
-  if (PACKAGE_TYPE_SET.has(type)) return 'packages';
+// lib/filters.ts's CODE_TYPES/PACKAGE_TYPES doc comments); catalog/cycles have
+// no page of their own, so they route nowhere. Returns the router path.
+type RoutePath = '/code' | '/packages';
+function pageForType(type: IssueType): RoutePath | undefined {
+  if (CODE_TYPE_SET.has(type)) return '/code';
+  if (PACKAGE_TYPE_SET.has(type)) return '/packages';
   return undefined;
 }
 
@@ -82,7 +84,10 @@ const VIRTUALIZE_THRESHOLD = 50;
 
 export function Dashboard() {
   const { data } = useReport();
-  const navigate = useUiStore((s) => s.navigate);
+  const navigate = useNavigate();
+  const setCodeFilters = useUiStore((s) => s.setCodeFilters);
+  const setPackagesFilters = useUiStore((s) => s.setPackagesFilters);
+  const setCodeSearch = useUiStore((s) => s.setCodeSearch);
   const busy = useBusy();
   const sweepMutation = useSweepMutation();
   const log = useActivityStore((s) => s.log);
@@ -125,10 +130,17 @@ export function Dashboard() {
     return sortDir === 'asc' ? 'ascending' : 'descending';
   }
 
+  // Replace the target page's chip set (the old navigate's replace-when-given
+  // semantics) THEN route to it. Navigating to /code with no `file` search drops
+  // any open file, matching the old navigate clearing openFile; `ws` rides along
+  // via the root's retainSearchParams. Filters are set on the store, not the
+  // URL, so they apply to the destination page regardless of the current one.
   function onTileClick(type: IssueType) {
-    const page = pageForType(type);
-    if (!page) return;
-    navigate(page, { filters: [type] });
+    const to = pageForType(type);
+    if (!to) return;
+    if (to === '/code') setCodeFilters([type]);
+    else setPackagesFilters([type]);
+    navigate({ to });
   }
 
   // Cheap workspace scoping without a rescan: a workspace cell/row click sets
@@ -141,16 +153,23 @@ export function Dashboard() {
   }
 
   function onCellClick(type: IssueType, workspace: string) {
-    const page = pageForType(type);
-    if (!page) return;
-    // Only the Code page reads codeSearch (PackagesPage has its own local
-    // search state) — passing `search` for a packages-page cell would just
-    // silently pollute the Code tree's scope for a later, unrelated visit.
-    navigate(page, { filters: [type], ...(page === 'code' ? { search: searchPrefixFor(workspace) } : {}) });
+    const to = pageForType(type);
+    if (!to) return;
+    // Only the Code page reads codeSearch (PackagesPage has its own local search
+    // state) — setting it for a packages-page cell would just silently pollute
+    // the Code tree's scope for a later, unrelated visit.
+    if (to === '/code') {
+      setCodeFilters([type]);
+      setCodeSearch(searchPrefixFor(workspace));
+    } else {
+      setPackagesFilters([type]);
+    }
+    navigate({ to });
   }
 
   function onRowOpen(workspace: string) {
-    navigate('code', { search: searchPrefixFor(workspace) });
+    setCodeSearch(searchPrefixFor(workspace));
+    navigate({ to: '/code' });
   }
 
   const parentRef = useRef<HTMLDivElement>(null);

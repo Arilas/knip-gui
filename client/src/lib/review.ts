@@ -161,7 +161,7 @@ export function affectedFilePaths(issues: { filePath: string }[]): string[] {
  * plan/apply data, not the live selection store).
  */
 export interface ShouldRestoreOpenFileArgs {
-  /** The page Cancel/Done navigates back to — restoring only ever makes sense returning to Code, the one page with a file pane. */
+  /** The route path Cancel/Done navigates back to — restoring only ever makes sense returning to `/code`, the one page with a file pane. */
   returnTo: string;
   /** What was open before the review started (state/ui.ts's ReviewRequest.returnOpenFile) — undefined means nothing was. */
   returnOpenFile?: string;
@@ -199,7 +199,7 @@ export function shouldRestoreOpenFile({
   applied,
   deletedOkPaths,
 }: ShouldRestoreOpenFileArgs): boolean {
-  if (returnTo !== 'code') return false;
+  if (returnTo !== '/code') return false;
   if (!returnOpenFile) return false;
   if (applied && deletedOkPaths.includes(returnOpenFile)) return false;
   return true;

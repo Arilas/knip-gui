@@ -134,7 +134,7 @@ describe('shouldRestoreOpenFile (#6 — restore the pre-review open file on Revi
   it('restores on Cancel from idle (never even previewed, so nothing could have been deleted)', () => {
     expect(
       shouldRestoreOpenFile({
-        returnTo: 'code',
+        returnTo: '/code',
         returnOpenFile: 'src/used.ts',
         applied: false,
         deletedOkPaths: [],
@@ -145,7 +145,7 @@ describe('shouldRestoreOpenFile (#6 — restore the pre-review open file on Revi
   it('restores after an applied fix that left the open file untouched (not among deletedOkPaths)', () => {
     expect(
       shouldRestoreOpenFile({
-        returnTo: 'code',
+        returnTo: '/code',
         returnOpenFile: 'src/used.ts',
         applied: true,
         deletedOkPaths: ['src/other-deleted.ts'],
@@ -156,7 +156,7 @@ describe('shouldRestoreOpenFile (#6 — restore the pre-review open file on Revi
   it('does NOT restore when the open file was delete-applied ok', () => {
     expect(
       shouldRestoreOpenFile({
-        returnTo: 'code',
+        returnTo: '/code',
         returnOpenFile: 'src/used.ts',
         applied: true,
         deletedOkPaths: ['src/used.ts'],
@@ -167,7 +167,7 @@ describe('shouldRestoreOpenFile (#6 — restore the pre-review open file on Revi
   it('does NOT restore when returnTo is not code (the file pane is page-scoped — restoring here would leak it onto an unrelated page)', () => {
     expect(
       shouldRestoreOpenFile({
-        returnTo: 'packages',
+        returnTo: '/packages',
         returnOpenFile: 'src/used.ts',
         applied: false,
         deletedOkPaths: [],
@@ -178,7 +178,7 @@ describe('shouldRestoreOpenFile (#6 — restore the pre-review open file on Revi
   it('does NOT restore when nothing was open before the review started', () => {
     expect(
       shouldRestoreOpenFile({
-        returnTo: 'code',
+        returnTo: '/code',
         returnOpenFile: undefined,
         applied: false,
         deletedOkPaths: [],
@@ -192,7 +192,7 @@ describe('shouldRestoreOpenFile (#6 — restore the pre-review open file on Revi
     // non-empty when applied is true, but this pins the precedence anyway.
     expect(
       shouldRestoreOpenFile({
-        returnTo: 'code',
+        returnTo: '/code',
         returnOpenFile: 'src/used.ts',
         applied: false,
         deletedOkPaths: ['src/used.ts'],

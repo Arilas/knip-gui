@@ -18,6 +18,7 @@
 // Cancel does nothing while `applying` (a patch write in flight shouldn't be
 // abandoned mid-request).
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import type { FixMode, Issue } from '../../api.js';
 import { apiErrorMessage, deleteFixPlan } from '../../api.js';
@@ -74,7 +75,7 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   const modeOverrides = useSelectionStore((s) => s.modeOverrides);
   const setModeOverride = useSelectionStore((s) => s.setMode);
 
-  const navigate = useUiStore((s) => s.navigate);
+  const navigate = useNavigate();
   const clearReview = useUiStore((s) => s.clearReview);
 
   const [flow, dispatch] = useReducer(applyFlowReducer, initialApplyFlowState);
@@ -218,16 +219,20 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
     // #6: restore whatever file was open on the Code page before this review
     // started, unless the fix/ignore run just deleted it out from under us —
     // see lib/review.ts's shouldRestoreOpenFile and deletedOkPaths above for
-    // the full "why". `navigate` itself always clears openFile when opts (or
-    // opts.openFile) is omitted (state/ui.ts), so passing `undefined` here
-    // reproduces the pre-#6 behavior exactly.
+    // the full "why". Route back to the recorded returnTo PATH, setting the
+    // `file` search param to the file to restore (or clearing it when not
+    // restoring — the pre-#6 behavior). `ws` is preserved via the ...prev
+    // spread + the root's retainSearchParams.
     const restore = shouldRestoreOpenFile({
       returnTo: review.returnTo,
       returnOpenFile: review.returnOpenFile,
       applied: flow.status === 'applied',
       deletedOkPaths,
     });
-    navigate(review.returnTo, restore ? { openFile: review.returnOpenFile } : undefined);
+    navigate({
+      to: review.returnTo,
+      search: (prev) => ({ ...prev, file: restore ? review.returnOpenFile : undefined }),
+    });
   }
 
   function handleCancel() {

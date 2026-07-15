@@ -8,13 +8,13 @@
 // the sidebar is in icon-rail mode (`group-data-[collapsible=icon]:` — same
 // pattern the rest of the shadcn sidebar chrome uses to hide its own labels).
 import { useMemo, useState } from 'react';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { Check, ChevronsUpDown, FolderGit2 } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
 import { cn } from '../../lib/utils.js';
 import { pluralizeWord } from '../../lib/pluralize.js';
 import { useBusy, useReport, useScanMutation } from '../../state/queries.js';
 import { useSelectionStore } from '../../state/selection.js';
-import { useUiStore } from '../../state/ui.js';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -51,12 +51,13 @@ export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps
   const [pendingScope, setPendingScope] = useState<string | null>(null);
   const { data } = useReport();
   const scanMutation = useScanMutation();
+  const navigate = useNavigate();
   const busy = useBusy();
   const selectionCount = useSelectionStore((s) => s.selected.size);
   // Never let a scoped rescan land while the Review page is open — it prunes the
   // selection under a frozen "Fix N issues" title and can leave a compiled plan
   // pointing at a report that no longer matches.
-  const reviewing = useUiStore((s) => s.page === 'review');
+  const reviewing = useRouterState({ select: (s) => s.location.pathname === '/review' });
 
   const currentScope = data?.report?.scope ?? ALL_WORKSPACES;
 
@@ -73,7 +74,14 @@ export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps
   const current = entries.find((e) => e.value === currentScope) ?? entries[0];
 
   function runSwitch(value: string) {
-    scanMutation.mutate(value === ALL_WORKSPACES ? undefined : value);
+    const ws = value === ALL_WORKSPACES ? undefined : value;
+    // Mirror the new scope into the URL (All/'.' removes the param) so a
+    // reload/bookmark restores it via the root's boot hydration. `replace` (not
+    // push): `ws` is derived state mirrored to the URL, not a distinct history
+    // stop — the root's reconcile effect keeps the two in sync one way per
+    // phase (see router.tsx), so a pushed entry would only get snapped back.
+    navigate({ to: '.', search: (prev) => ({ ...prev, ws }), replace: true });
+    scanMutation.mutate(ws);
   }
 
   function select(value: string) {

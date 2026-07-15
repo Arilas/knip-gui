@@ -16,6 +16,7 @@
 // callback (fires on mount too, so a layout persisted as collapsed from a
 // previous session is reflected immediately) and threaded down as a prop.
 import { useMemo, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { X } from 'lucide-react';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import type { Issue } from '../../../../src/core/types.js';
@@ -30,18 +31,21 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resi
 
 export interface CodePageProps {
   issues: Issue[];
+  /** The open file — `/code`'s `file` search param, threaded in by the route (router.tsx). */
+  file?: string;
 }
 
 const ALL_CODE_TYPES = new Set(CODE_TYPES);
 
-export function CodePage({ issues }: CodePageProps) {
+export function CodePage({ issues, file }: CodePageProps) {
   const codeFilters = useUiStore((s) => s.codeFilters);
   const toggleCodeFilter = useUiStore((s) => s.toggleCodeFilter);
   const codeSearch = useUiStore((s) => s.codeSearch);
   const setCodeSearch = useUiStore((s) => s.setCodeSearch);
-  const openFile = useUiStore((s) => s.openFile);
   const openFileNonce = useUiStore((s) => s.openFileNonce);
-  const navigate = useUiStore((s) => s.navigate);
+  const bumpOpenFileNonce = useUiStore((s) => s.bumpOpenFileNonce);
+  const navigate = useNavigate();
+  const openFile = file;
 
   const selected = useSelectionStore((s) => s.selected);
   const toggle = useSelectionStore((s) => s.toggle);
@@ -61,12 +65,17 @@ export function CodePage({ issues }: CodePageProps) {
   );
 
   function onOpenFile(path: string) {
-    navigate('code', { openFile: path });
+    // Bump the nonce on EVERY explicit open, even re-clicking the already-open
+    // row: the router won't re-render on a navigation to an identical URL, so
+    // the nonce (a store write) is what re-fires CodePane's scroll/pulse. `ws`
+    // rides along via retainSearchParams; other search params are untouched.
+    bumpOpenFileNonce();
+    navigate({ to: '/code', search: (prev) => ({ ...prev, file: path }) });
     codePanelRef.current?.expand();
   }
 
   function closeFile() {
-    navigate('code');
+    navigate({ to: '/code', search: (prev) => ({ ...prev, file: undefined }) });
   }
 
   function toggleCodePanel() {

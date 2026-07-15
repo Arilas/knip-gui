@@ -1,87 +1,63 @@
-// Navigation + per-page filter state for the shadcn app shell (Task 1, UX
-// overhaul). Zustand's vanilla store API (getState/setState) makes this
-// directly unit-testable without rendering React — same pattern as
-// selection.ts (see tests/client/ui-store.test.ts).
+// Per-page filter/search/review/tree state for the shadcn app shell. Zustand's
+// vanilla store API (getState/setState) makes this directly unit-testable
+// without rendering React — same pattern as selection.ts (see
+// tests/client/ui-store.test.ts).
 //
-// `navigate` is the single entry point pages/sidebar/dashboard tiles use to
-// move around: it always sets `page` and always touches `openFile` (set when
-// `opts.openFile` is given, cleared otherwise — a file pane is page-scoped, so
-// leaving it stale across a navigation would show the wrong file's pane).
-// Filters behave differently on purpose: they're a *replace*, not a toggle,
-// and only when explicitly supplied — omitting `opts.filters` leaves the
-// target page's current filter set untouched, so e.g. clicking a sidebar nav
-// item (no filters) never resets whatever chips the user had toggled on that
-// page. `filters` always apply to the PAGE BEING NAVIGATED TO (`page`
-// argument), not whatever page was previously active.
+// NAVIGATION LIVES IN THE URL now (Task R, #14): the active page and the
+// currently-open Code file are TanStack Router state (the pathname and
+// `/code`'s `file` search param), not store fields — see client/src/router.tsx.
+// What stays here is the state the router has no natural home for: the per-page
+// filter chip sets, the Code tree's path-prefix search, the pending review
+// request, the tree-expansion set, and the open-file re-scroll nonce below.
 //
-// `codeSearch` (Task 2, Dashboard) is a cheap path-prefix scope for the Code
-// page's tree — set by a Dashboard workspace-table cell/row click to
-// `<workspace>/` so the tree shows just that workspace's files without a
-// rescan (the real, rescanning workspace switcher lives in the sidebar).
-// Like `filters`, it's a replace-when-given: `opts.search` (including `''`,
-// which explicitly clears it) is only applied when the key is present in
-// `opts` at all — omitting it (e.g. a plain sidebar nav click) leaves
-// whatever search the Code page already had untouched, same rationale as
-// filters above. It's also only ever applied when navigating TO the Code
-// page: PackagesPage keeps its own local search state and never reads
-// codeSearch, so a Dashboard packages-cell click passing `search` alongside
-// a non-'code' page would otherwise silently pollute codeSearch for a later,
-// unrelated Code visit.
+// Filters are a *replace*, not a toggle, and the `setCodeFilters`/
+// `setPackagesFilters` setters exist for the Dashboard tile/cell handoff: a
+// tile click sets the target page's chip set THEN routes to it (router.navigate
+// in Dashboard.tsx), reproducing the old `navigate(page, {filters})` replace
+// semantics. A plain sidebar nav (a `<Link>` with no filters) never touches the
+// chip sets, so whatever the user toggled on a page survives navigating away
+// and back — the behavior the old omit-`opts.filters` branch protected.
 //
-// `review` (Task 2, v0.3): the pending review-flow request SelectionDock's
-// Fix…/Ignore… buttons hand off to the 'review' page (Task 3 wires this —
-// see SelectionDock.tsx's doc comment). `startReview` freezes
-// `summary`/`frozenCount` at the moment it's called (the design spec's
-// "kills the 'Ignore 0 issues' bug" — the count shown on the Review page
-// must reflect what was selected when Fix…/Ignore… was clicked, not whatever
-// the live selection is by the time it renders) and records `returnTo` (the
-// page Cancel/Done navigates back to). `clearReview` drops it — called on
-// Cancel/Done, and defensively by App.tsx if 'review' is ever the active page
-// with no pending review (direct nav/reload edge case — Task 3's
-// redirect-to-Code guard).
+// `codeSearch` is a cheap path-prefix scope for the Code page's tree — set by a
+// Dashboard workspace-table cell/row click to `<workspace>/` so the tree shows
+// just that workspace's files without a rescan (the real, rescanning workspace
+// switcher lives in the sidebar). Code-page-only: PackagesPage keeps its own
+// local search and never reads codeSearch.
 //
-// `returnOpenFile` (#6): also captured by `startReview`, from `state.openFile`
-// at the SAME set-time as `summary`/`frozenCount` — same rationale, a
-// different bug. Without this, `navigate`'s unconditional
-// "opts.openFile given ? set it : clear it" (see its own doc comment above)
-// wipes whatever file the user had open on the Code page the moment Cancel/
-// Done calls `navigate(review.returnTo)`, even though the user never asked to
-// close it — they asked to review a fix/ignore plan. Capturing it here rather
-// than reading `state.openFile` from inside ReviewPage keeps SelectionDock
-// (the only caller) untouched: it already builds a plain `ReviewRequest`
-// object literal with no `returnOpenFile` field, and `startReview` ignores
-// any value a caller DOES pass for it (see the reducer below) — this is a
-// pull, not a field callers are expected to fill in. Whether it's actually
-// safe to restore on exit (e.g. the file may have been deleted by the
-// applied fix) is ReviewPage's/lib/review.ts's `shouldRestoreOpenFile`'s
-// call, not this store's — this field only ever remembers what to restore
-// TO.
+// `review` (v0.3): the pending review-flow request SelectionDock's Fix…/Ignore…
+// buttons hand off to the `/review` route. `startReview` freezes
+// `summary`/`frozenCount` at click time (the design spec's "kills the 'Ignore 0
+// issues' bug" — the count shown on Review must reflect what was selected when
+// Fix…/Ignore… was clicked, not the live selection by the time it renders) and
+// records `returnTo` (the PATH Cancel/Done routes back to) plus `returnOpenFile`
+// (#6 — the Code file that was open, restored on exit as `/code`'s `file`
+// param). Both are supplied by the caller now: openFile is a URL param, not a
+// store field, so SelectionDock reads the current location/`file` param and
+// passes them in — startReview no longer pulls openFile from the store (there
+// is none). `clearReview` drops the request (Cancel/Done); the `/review` route's
+// `beforeLoad` guard redirects to `/code` when it's absent (direct nav/reload).
 //
-// Tree-expansion lift (Task 2, v0.3): `expandedDirs` used to be TreeView.tsx
-// local state (a `manualExpandedDirs: Set<string> | null` — null meaning
-// "untouched, use the auto-expand policy"). Lifting it here is what makes
-// expansion survive a Code -> Packages -> Code round trip (the old state
-// died with the component on unmount). The null-sentinel doesn't translate
-// directly to a *store* value, though: a plain empty Set can't distinguish
-// "never seeded" from "user clicked Collapse all" — collapsing to empty must
-// NOT look identical to "not seeded yet" or TreeView's seeding effect would
-// immediately re-expand it right back on the next render, making Collapse
-// all a no-op. `expandedDirsInitialized` is the explicit flag that resolves
-// that ambiguity: `initExpandedDirs` (called once, by TreeView's mount/tree-
-// change effect) only ever applies while `false`, and every other mutator
-// (`toggleDir`/`expandAll`/`collapseAll`) sets it `true` — once true, it
-// stays true for the rest of the session, so the auto-expand policy only
-// ever runs once, and never again re-seeds over a user's explicit choice
-// (including an explicit collapse-to-empty).
+// Tree-expansion lift (v0.3): `expandedDirs` used to be TreeView.tsx local
+// state (a `manualExpandedDirs: Set<string> | null` — null meaning "untouched,
+// use the auto-expand policy"). Lifting it here is what makes expansion survive
+// a Code -> Packages -> Code round trip (the old state died with the component
+// on unmount). The null-sentinel doesn't translate to a *store* value, though:
+// a plain empty Set can't distinguish "never seeded" from "user clicked Collapse
+// all" — collapsing to empty must NOT look identical to "not seeded yet" or
+// TreeView's seeding effect would immediately re-expand it on the next render,
+// making Collapse all a no-op. `expandedDirsInitialized` resolves that:
+// `initExpandedDirs` (called once, by TreeView's mount/tree-change effect) only
+// applies while `false`, and every other mutator (`toggleDir`/`expandAll`/
+// `collapseAll`) sets it `true` — once true it stays true, so the auto-expand
+// policy runs once and never re-seeds over a user's explicit choice (including
+// an explicit collapse-to-empty).
 import { create } from 'zustand';
 import type { IssueType } from '../../../src/core/types.js';
 import { CODE_TYPES, PACKAGE_TYPES } from '../lib/filters.js';
 
-export type Page = 'dashboard' | 'code' | 'packages' | 'ignored' | 'activity' | 'review';
-
 // Re-exported for existing/older import sites (Dashboard.tsx, tests) — the
-// canonical definitions now live in lib/filters.ts (Task 3), alongside the
-// rest of the filter/type helpers that consume them.
+// canonical definitions now live in lib/filters.ts, alongside the rest of the
+// filter/type helpers that consume them.
 export { CODE_TYPES, PACKAGE_TYPES };
 
 export interface ReviewRequest {
@@ -90,96 +66,74 @@ export interface ReviewRequest {
   summary: string;
   /** Frozen selection count at startReview time — the count actually shown, immune to the live selection changing under the Review page. */
   frozenCount: number;
-  /** Page Cancel/Done navigates back to. */
-  returnTo: Page;
+  /** Router path Cancel/Done routes back to (e.g. "/code"), captured by the caller at click time. */
+  returnTo: string;
   /**
-   * Captured by `startReview` from `state.openFile` at set-time (any value
-   * passed in here by a caller is overwritten — see this file's `review`
-   * doc comment above). `undefined` when nothing was open.
+   * The Code file that was open when review started (the `/code` `file` search
+   * param, read by SelectionDock at click time). Restored as that param on exit
+   * unless the fix/ignore run deleted it — see ReviewPage's handleLeave /
+   * lib/review.ts's shouldRestoreOpenFile. `undefined` when nothing was open.
    */
   returnOpenFile?: string;
 }
 
 export interface UiState {
-  page: Page;
   codeFilters: Set<IssueType>;
   packagesFilters: Set<IssueType>;
   codeSearch: string;
-  openFile?: string;
-  // Bumped by `navigate` on every call that OPENS a file (`opts.openFile !==
-  // undefined`), even when it's the same path as the one already open —
-  // CodePane's auto-scroll-to-first-issue effect (Task 4, v0.3) keys off
-  // `${openFile}#${openFileNonce}` rather than `openFile` alone. Reason: a
-  // zustand selector hook (`useUiStore((s) => s.openFile)`) bails out with no
-  // re-render when the selected value is unchanged (`Object.is` comparison)
-  // — clicking the SAME already-open tree row re-sets `openFile` to an
-  // identical string, a no-op from every consumer's point of view unless
-  // something else in its selected slice also changed. The nonce is that
-  // "something else": it always changes on an explicit open, giving CodePane
-  // a distinct key to re-trigger the scroll/pulse even when the path didn't
-  // change.
+  // Bumped by `bumpOpenFileNonce` on every explicit file OPEN (a tree-row
+  // click), even when it re-opens the file that's already open. CodePane's
+  // auto-scroll-to-first-issue effect (v0.3) keys off `${file}#${openFileNonce}`
+  // rather than the file path alone: the router will NOT re-render on a
+  // navigation to an identical URL (re-clicking the already-open row is a no-op
+  // route change), so without a separately-changing signal the scroll/pulse
+  // would never re-fire. The nonce is that signal — a store write always
+  // re-renders CodePage's subscriber even when the URL didn't move.
   openFileNonce: number;
   review?: ReviewRequest;
   expandedDirs: Set<string>;
   expandedDirsInitialized: boolean;
-  navigate: (page: Page, opts?: { filters?: IssueType[]; openFile?: string; search?: string }) => void;
+  // Replace-style setters for the Dashboard tile/cell handoff (see the file's
+  // filters doc comment): set the target page's chip set, then Dashboard routes
+  // to that page. Not toggles — a fresh, single-type set every time.
+  setCodeFilters: (types: IssueType[]) => void;
+  setPackagesFilters: (types: IssueType[]) => void;
   toggleCodeFilter: (type: IssueType) => void;
   togglePackagesFilter: (type: IssueType) => void;
-  // Narrow setter for the Code page's own search input (Task 3): unlike
-  // `navigate`'s `search` option (a replace-when-navigating-TO-the-page
-  // value, meant for cross-page callers like Dashboard's cell click), this
-  // updates codeSearch in place without touching `page` or `openFile` — a
-  // keystroke in the search box must never clear whatever file is open in
-  // the split's right pane.
+  // Narrow setter for the Code page's own search input: updates codeSearch in
+  // place. A keystroke in the search box must never affect anything else.
   setCodeSearch: (search: string) => void;
+  // See openFileNonce above — CodePage's tree-row click calls this so
+  // re-clicking the already-open file still re-fires CodePane's scroll/pulse.
+  bumpOpenFileNonce: () => void;
   startReview: (request: ReviewRequest) => void;
   clearReview: () => void;
   toggleDir: (path: string) => void;
   expandAll: (paths: Iterable<string>) => void;
   collapseAll: () => void;
-  // Seeds expandedDirs from the auto-expand policy exactly once per session
-  // — a no-op once expandedDirsInitialized is already true. Not meant to be
-  // called from a button; TreeView.tsx's mount/tree-change effect is the one
-  // caller (see this file's tree-expansion doc comment above).
+  // Seeds expandedDirs from the auto-expand policy exactly once per session — a
+  // no-op once expandedDirsInitialized is already true. Not meant to be called
+  // from a button; TreeView.tsx's mount/tree-change effect is the one caller.
   initExpandedDirs: (paths: Iterable<string>) => void;
-  // Seed-delta (Task 6, v0.3): additive-only merge, called AFTER
-  // expandedDirsInitialized is already true, for directory paths a rescan
-  // introduces that didn't exist at seed (or any prior rescan) time — e.g. a
-  // fix/ignore round trip that happens to add a brand-new top-level dir.
-  // Deliberately does NOT touch expandedDirsInitialized or remove/collapse
-  // anything: only ever adds paths, never overrides an explicit Collapse
-  // all/manual collapse of a dir that already existed. See TreeView.tsx's
-  // tree-change effect, the one caller, for how "genuinely new" is computed.
+  // Seed-delta (v0.3): additive-only merge, called AFTER expandedDirsInitialized
+  // is already true, for directory paths a rescan introduces that didn't exist
+  // at seed (or any prior rescan) time. Deliberately does NOT touch
+  // expandedDirsInitialized or remove/collapse anything: only ever adds paths,
+  // never overrides an explicit Collapse all/manual collapse of an existing dir.
   expandDirs: (paths: Iterable<string>) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
-  page: 'dashboard',
   codeFilters: new Set(CODE_TYPES),
   packagesFilters: new Set(PACKAGE_TYPES),
   codeSearch: '',
-  openFile: undefined,
   openFileNonce: 0,
   review: undefined,
   expandedDirs: new Set<string>(),
   expandedDirsInitialized: false,
 
-  navigate: (page, opts) =>
-    set((state) => {
-      const next: Partial<UiState> = { page, openFile: opts?.openFile };
-      // See openFileNonce's doc comment above: bump on every explicit open,
-      // including re-opening the file that's already open.
-      if (opts?.openFile !== undefined) next.openFileNonce = state.openFileNonce + 1;
-      if (opts?.filters) {
-        if (page === 'code') next.codeFilters = new Set(opts.filters);
-        else if (page === 'packages') next.packagesFilters = new Set(opts.filters);
-      }
-      // codeSearch is Code-page-only state (PackagesPage keeps its own local
-      // search) — guard here too, defense-in-depth against any future caller
-      // that navigates elsewhere while still passing `search`.
-      if (opts?.search !== undefined && page === 'code') next.codeSearch = opts.search;
-      return next;
-    }),
+  setCodeFilters: (types) => set({ codeFilters: new Set(types) }),
+  setPackagesFilters: (types) => set({ packagesFilters: new Set(types) }),
 
   toggleCodeFilter: (type) =>
     set((state) => {
@@ -199,8 +153,9 @@ export const useUiStore = create<UiState>((set) => ({
 
   setCodeSearch: (search) => set({ codeSearch: search }),
 
-  startReview: (request) =>
-    set((state) => ({ page: 'review', review: { ...request, returnOpenFile: state.openFile } })),
+  bumpOpenFileNonce: () => set((state) => ({ openFileNonce: state.openFileNonce + 1 })),
+
+  startReview: (request) => set({ review: request }),
 
   clearReview: () => set({ review: undefined }),
 

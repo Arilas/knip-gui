@@ -139,6 +139,9 @@ test('workspace switcher scopes the scan and narrows both the report and the tre
   await expect(page.getByTestId('rerun-button')).toBeEnabled({ timeout: 15_000 });
   await expect(switcher).toHaveAttribute('title', 'packages/app');
 
+  // The scope is mirrored into the URL (#14) so a reload/bookmark restores it.
+  await expect(page).toHaveURL(/[?&]ws=packages(%2F|\/)app/);
+
   // Tree narrowed to nothing: the fixture's one real issue lives in
   // packages/lib, outside this scope.
   await expect(page.getByTestId('tree-file-packages/lib/extra.ts')).toHaveCount(0);
@@ -158,6 +161,18 @@ test('workspace switcher scopes the scan and narrows both the report and the tre
   const scopedToLib = await readReport();
   expect(scopedToLib.report.scope).toBe('packages/lib');
   expect(scopedToLib.report.issues).toHaveLength(1);
+  await expect(page).toHaveURL(/[?&]ws=packages(%2F|\/)lib/);
+
+  // Boot hydration (#14): reloading a scoped URL restores the scope — the
+  // root's one-shot ws effect reconciles the report to the URL's `ws` on a
+  // fresh load, so the tree stays narrowed and the switcher still reads the
+  // scoped workspace rather than snapping back to All.
+  await page.reload();
+  await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
+  await expect(page).toHaveURL(/[?&]ws=packages(%2F|\/)lib/);
+  await expect(switcher).toHaveAttribute('title', 'packages/lib', { timeout: 15_000 });
+  await expect(page.getByTestId('tree-file-packages/lib/extra.ts')).toBeVisible();
+  expect((await readReport()).report.scope).toBe('packages/lib');
 
   // Back to All workspaces — full report + tree restored.
   await switcher.click();
@@ -165,6 +180,8 @@ test('workspace switcher scopes the scan and narrows both the report and the tre
   await expect(page.getByTestId('rerun-button')).toBeEnabled({ timeout: 15_000 });
   await expect(switcher).toHaveAttribute('title', 'All workspaces');
   await expect(page.getByTestId('tree-file-packages/lib/extra.ts')).toBeVisible();
+  // All/'.' removes the param entirely rather than serializing `ws=.`.
+  await expect(page).toHaveURL(/^(?!.*[?&]ws=).*$/);
 
   const scopedToAll = await readReport();
   expect(scopedToAll.report.scope).toBeUndefined();
