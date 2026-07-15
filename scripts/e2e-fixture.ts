@@ -1,6 +1,6 @@
 // Prepares a throwaway, git-initialized copy of tests/fixtures/single for the
 // Playwright e2e run. Chained into playwright.config.ts's `webServer.command`
-// (via `npm run e2e:fixture && ...`) rather than wired up as
+// (via `pnpm run e2e:fixture && ...`) rather than wired up as
 // `config.globalSetup` — Playwright starts the `webServer` process BEFORE
 // running `globalSetup` (see its own tests/playwright-test/web-server.spec.ts,
 // which proves `globalSetup` can already fetch from a running webServer), so
@@ -9,7 +9,7 @@
 // that would run too late.
 //
 // Recreated FRESH (rm -rf, then re-copy + re-init) on every invocation so
-// repeated `npm run test:e2e` runs are deterministic: both e2e specs mutate
+// repeated `pnpm run test:e2e` runs are deterministic: both e2e specs mutate
 // this copy (the fix-loop spec removes `unusedHelper`/`orphan.ts`, the
 // ignore-loop spec adds a knip.json entry for `left-pad`) and must each start
 // from the same known-good state, never from whatever a previous run left

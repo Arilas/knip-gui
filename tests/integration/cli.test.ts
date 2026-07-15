@@ -134,7 +134,7 @@ describe('cli', () => {
     // `knip-gui`. Node realpath-resolves import.meta.url but leaves argv[1] as the
     // symlink path, so a naive URL comparison never matches and the CLI exits 0
     // silently. Pin the regression by executing the built cli.js through a symlink.
-    execFileSync('npm', ['run', 'build'], { cwd: root, stdio: 'pipe' });
+    execFileSync('pnpm', ['run', 'build'], { cwd: root, stdio: 'pipe' });
     const tmp = mkdtempSync(join(tmpdir(), 'knip-gui-bin-'));
     const link = join(tmp, 'knip-gui'); // deliberately not named cli.js
     symlinkSync(join(root, 'dist/cli.js'), link);
@@ -173,7 +173,7 @@ describe('cli', () => {
   });
 
   it('rejects an invalid --port before starting anything, with no stack trace', async () => {
-    execFileSync('npm', ['run', 'build'], { cwd: root, stdio: 'pipe' });
+    execFileSync('pnpm', ['run', 'build'], { cwd: root, stdio: 'pipe' });
 
     for (const badPort of ['abc', '-1', '99999', '3.5', '']) {
       // `--port=<value>` (rather than `--port <value>`) sidesteps node's own

@@ -27,7 +27,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    // Dev-only: `npm run dev:client` runs the Vite dev server against a
+    // Dev-only: `pnpm run dev:client` runs the Vite dev server against a
     // separately-running `node dist/cli.js`/`tsx src/cli.ts` instance. The dev
     // server never sees the real session token (index.html isn't served
     // through the token-injecting GET / route in dev), so client/src/api.ts

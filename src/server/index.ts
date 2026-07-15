@@ -130,7 +130,7 @@ export function createServer(opts: {
   // for the `__KNIP_GUI_TOKEN__` placeholder baked into the build (see
   // client/index.html); falls back to the Plan 1 inline shell when the client
   // hasn't been built (dist/client absent), e.g. in unit tests or a source
-  // checkout that hasn't run `npm run build` yet. Shared by `GET /` and the
+  // checkout that hasn't run `pnpm run build` yet. Shared by `GET /` and the
   // SPA fallback below: every client-side route (/code, /review, …) must boot
   // the SAME token-bearing shell so the client-side router can resolve the
   // path itself — a deep-link or reload of an in-app URL would otherwise 404.

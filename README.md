@@ -79,12 +79,16 @@ feature requests welcome.
 
 ## Development
 
+This repo is developed with [pnpm](https://pnpm.io) (pinned via
+`packageManager` in `package.json`); enable it once via corepack:
+
 ```bash
-npm install
-npm test          # vitest (unit + integration against fixture projects, and
+corepack enable
+pnpm install
+pnpm test          # vitest (unit + integration against fixture projects, and
                    # client-logic tests under a jsdom project) — 560+ tests
-npm run typecheck  # server tsc + client tsc + tests/scripts tsc, no emit
-npm run build      # emits dist/ (server) and dist/client/ (Vite SPA build);
+pnpm run typecheck  # server tsc + client tsc + tests/scripts tsc, no emit
+pnpm run build      # emits dist/ (server) and dist/client/ (Vite SPA build);
                    # this is what `files: ["dist"]` publishes and what
                    # `npx knip-gui` serves
 ```
@@ -99,13 +103,13 @@ runs the build so a stale `dist/` can't be published.
 ### End-to-end tests (Playwright)
 
 ```bash
-npx playwright install chromium   # one-time, ~260MB download
-npm run test:e2e                  # builds (if dist/client is missing), then
+pnpm exec playwright install chromium   # one-time, ~260MB download
+pnpm run test:e2e                  # builds (if dist/client is missing), then
                                    # runs the e2e specs against a real
                                    # Chromium browser
 ```
 
-`npm run test:e2e` drives the real built client + server (no mocking) against
+`pnpm run test:e2e` drives the real built client + server (no mocking) against
 a throwaway git-initialized copy of `tests/fixtures/single` (recreated fresh
 on every run by `scripts/e2e-fixture.ts`, gitignored under `.tmp-tests/`):
 
@@ -183,9 +187,9 @@ file>` before trusting the result.
 
 ### Gotcha: `build:client` forces `NODE_ENV=production`
 
-`npm run build:client` explicitly runs as `NODE_ENV=production vite build ...`
+`pnpm run build:client` explicitly runs as `NODE_ENV=production vite build ...`
 rather than relying on Vite's own default. `tests/integration/cli.test.ts`
-shells out to `npm run build` (to get a real `dist/cli.js` for its
+shells out to `pnpm run build` (to get a real `dist/cli.js` for its
 bin-symlink regression test), and Vitest sets `NODE_ENV=test` on itself —
 which that child process inherits. Without the explicit override, the
 inherited `NODE_ENV=test` caused `vite build` to ship react-dom's
@@ -196,7 +200,7 @@ cleanup called `dialog.close()`, whose `close` event fired asynchronously
 have stayed open) — a genuinely broken production artifact that only
 reproduced when a build was triggered from inside a process with
 `NODE_ENV` already set to something other than `production`. If you add
-another spot that shells out to `npm run build`, keep this in mind.
+another spot that shells out to `pnpm run build`, keep this in mind.
 
 Design docs live in `docs/superpowers/specs/`, implementation plans in
 `docs/superpowers/plans/`.

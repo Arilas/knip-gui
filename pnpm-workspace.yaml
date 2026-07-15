@@ -1,0 +1,6 @@
+# esbuild (a transitive dep of vite/vitest) ships a postinstall script that
+# downloads its platform-native binary; pnpm's default ignores build scripts
+# from dependencies, so without this it silently falls back to a stub and
+# vite/vitest fail at runtime. Nothing else in the tree needs a build script.
+allowBuilds:
+  esbuild: true

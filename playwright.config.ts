@@ -44,12 +44,12 @@ export default defineConfig({
     // `&&` (rather than done in `globalSetup`) precisely because Playwright
     // starts this process before `globalSetup` would run — see
     // scripts/e2e-fixture.ts's doc comment for the full explanation. `test -d
-    // dist/client` skips the build when a previous `npm run build` already
+    // dist/client` skips the build when a previous `pnpm run build` already
     // produced it, since a from-scratch build (server tsc + vite) is the slow
     // part of this command.
     command:
-      'npm run e2e:fixture && ' +
-      '(test -d dist/client || npm run build) && ' +
+      'pnpm run e2e:fixture && ' +
+      '(test -d dist/client || pnpm run build) && ' +
       `node dist/cli.js --dir ${FIXTURE_DIR} --no-open --port ${PORT}`,
     port: PORT,
     reuseExistingServer: false,

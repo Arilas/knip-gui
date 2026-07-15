@@ -5,11 +5,11 @@
 // good state — see e.g. ignore.spec.ts's doc comment on why specs stay
 // independent of each other). A broken-config server needs a life of its own:
 // no existing spec spins one up, and adding a second entry to the shared
-// webServer config risks two `(test -d dist/client || npm run build)` guards
+// webServer config risks two `(test -d dist/client || pnpm run build)` guards
 // racing each other. Spawning `dist/cli.js` directly sidesteps that — by the
 // time ANY spec file's tests run, Playwright has already waited for the
 // shared webServer's port to come up, which only happens after that same
-// `npm run build` has finished, so dist/cli.js is guaranteed to exist here
+// `pnpm run build` has finished, so dist/cli.js is guaranteed to exist here
 // too, and this spec's server just points it at a different --dir/--port.
 //
 // The fixture is intentionally NOT missing knip.json: verified manually
