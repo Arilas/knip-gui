@@ -56,13 +56,13 @@ export async function startCli(opts: { dir: string; port: number; open: boolean;
     })
       .then(async (res) => {
         if (res.ok) return;
+        // Flat ErrorBody (api-types.ts): `error` is always the human-readable
+        // string (a knip-failed KnipError's message already reads "knip
+        // exited with N" — see classifyExecError — so there's no need to
+        // special-case that code here the way the old structured body did).
         const body = await res.json().catch(() => undefined);
-        const err = body?.error as { code?: string; message?: string; exitCode?: number } | undefined;
-        if (err?.code === 'knip-failed' && typeof err.exitCode === 'number') {
-          console.error(`knip exited with ${err.exitCode} — open the UI for details and setup help`);
-        } else if (err?.message) {
-          console.error(`${err.message} — open the UI for details and setup help`);
-        }
+        const message = body?.error as string | undefined;
+        if (message) console.error(`${message} — open the UI for details and setup help`);
       })
       .catch(() => {});
   }

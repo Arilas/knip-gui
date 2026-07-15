@@ -14,11 +14,19 @@
 import type { Issue, Report } from '../../src/core/types.js';
 import type { FixMode } from '../../src/core/types.js';
 import type { StoreError } from '../../src/server/store.js';
-import type { FixPlan, PlanItem } from '../../src/fix/compiler.js';
+import type { PlanItem } from '../../src/fix/compiler.js';
 import type { PatchResult } from '../../src/fix/patch.js';
 import type { SweepCapabilities } from '../../src/fix/sweep.js';
 import type { GitStatus } from '../../src/git/git.js';
 import type { IgnoreEntry, ListIgnoresResult } from '../../src/ignore/config-writer.js';
+import type {
+  ApplyResponse,
+  PreviewResponse,
+  ReportResponse,
+  ScanResponse,
+  StatusResponse,
+  SweepResponse,
+} from '../../src/server/api-types.js';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -99,19 +107,8 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
   return apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) });
 }
 
-export interface ReportResponse {
-  status: 'idle' | 'scanning' | 'ready' | 'error';
-  report?: Report;
-  error?: StoreError;
-}
-
 export function getReport(): Promise<ReportResponse> {
   return apiFetch<ReportResponse>('/api/report');
-}
-
-export interface ScanResponse {
-  status: 'ready';
-  issueCount: number;
 }
 
 export function postScan(workspace?: string): Promise<ScanResponse> {
@@ -132,20 +129,8 @@ export interface FixSelection {
   modeOverrides?: Record<string, FixMode>;
 }
 
-export interface PreviewResponse {
-  planId: string;
-  diffs: FixPlan['diffs'];
-  items: PlanItem[];
-}
-
 export function postFixPreview(selection: FixSelection): Promise<PreviewResponse> {
   return postJson<PreviewResponse>('/api/fix/preview', selection);
-}
-
-export interface ApplyResponse {
-  results: PatchResult[];
-  failedItems: PlanItem[];
-  rescanning: boolean;
 }
 
 export function postFixApply(planId: string): Promise<ApplyResponse> {
@@ -173,10 +158,6 @@ export interface SweepOptions {
   workspace?: string;
   fixTypes?: string[];
   allowRemoveFiles?: boolean;
-}
-
-export interface SweepResponse {
-  issueCount: number;
 }
 
 export function postSweep(opts: SweepOptions = {}): Promise<SweepResponse> {
@@ -218,3 +199,4 @@ export function postIgnoreRemoveApply(planId: string): Promise<ApplyResponse> {
 }
 
 export type { Issue, Report, FixMode, StoreError, PlanItem, PatchResult, SweepCapabilities, GitStatus, IgnoreEntry };
+export type { ReportResponse, ScanResponse, PreviewResponse, ApplyResponse, SweepResponse, StatusResponse };

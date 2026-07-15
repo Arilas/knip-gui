@@ -281,6 +281,20 @@ describe('scan + report + file', () => {
     expect(rep.error.exitCode).toBe(7);
   });
 
+  it('a failed POST /api/scan returns the flat error envelope (string error, code, stderr)', async () => {
+    const { app, token } = makeServer(async () => {
+      const { KnipError } = await import('../../src/core/knip-runner.js');
+      throw new KnipError('knip exited 7', { code: 'knip-failed', stderr: 'stack...', exitCode: 7 });
+    });
+    const h = { 'x-knip-gui-token': token };
+    const res = await app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toBe('knip exited 7'); // string, not an object
+    expect(body.code).toBe('knip-failed');
+    expect(body.stderr).toBe('stack...');
+  });
+
   it('serves file content within the project only', async () => {
     const { app, token } = makeServer();
     const h = { 'x-knip-gui-token': token };
