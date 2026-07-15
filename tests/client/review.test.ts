@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { affectedFilePaths, buildFileRail } from '../../client/src/lib/review.js';
+import { affectedFilePaths, buildFileRail, shouldRestoreOpenFile } from '../../client/src/lib/review.js';
 
 describe('buildFileRail', () => {
   it('marks every diffed file pending when no results have landed yet (preview step)', () => {
@@ -116,5 +116,76 @@ describe('affectedFilePaths', () => {
 
   it('returns an empty array for no issues', () => {
     expect(affectedFilePaths([])).toEqual([]);
+  });
+});
+
+describe('shouldRestoreOpenFile (#6 — restore the pre-review open file on Review exit)', () => {
+  it('restores on Cancel from idle (never even previewed, so nothing could have been deleted)', () => {
+    expect(
+      shouldRestoreOpenFile({
+        returnTo: 'code',
+        returnOpenFile: 'src/used.ts',
+        applied: false,
+        deletedOkPaths: [],
+      }),
+    ).toBe(true);
+  });
+
+  it('restores after an applied fix that left the open file untouched (not among deletedOkPaths)', () => {
+    expect(
+      shouldRestoreOpenFile({
+        returnTo: 'code',
+        returnOpenFile: 'src/used.ts',
+        applied: true,
+        deletedOkPaths: ['src/other-deleted.ts'],
+      }),
+    ).toBe(true);
+  });
+
+  it('does NOT restore when the open file was delete-applied ok', () => {
+    expect(
+      shouldRestoreOpenFile({
+        returnTo: 'code',
+        returnOpenFile: 'src/used.ts',
+        applied: true,
+        deletedOkPaths: ['src/used.ts'],
+      }),
+    ).toBe(false);
+  });
+
+  it('does NOT restore when returnTo is not code (the file pane is page-scoped — restoring here would leak it onto an unrelated page)', () => {
+    expect(
+      shouldRestoreOpenFile({
+        returnTo: 'packages',
+        returnOpenFile: 'src/used.ts',
+        applied: false,
+        deletedOkPaths: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('does NOT restore when nothing was open before the review started', () => {
+    expect(
+      shouldRestoreOpenFile({
+        returnTo: 'code',
+        returnOpenFile: undefined,
+        applied: false,
+        deletedOkPaths: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('still restores a file the deletion check merely coincides with in name when applied is false (e.g. Cancel mid-preview, before any real apply outcome exists)', () => {
+    // Guards against a sloppy implementation that checks deletedOkPaths.includes(...)
+    // without gating on `applied` first — deletedOkPaths should only ever be
+    // non-empty when applied is true, but this pins the precedence anyway.
+    expect(
+      shouldRestoreOpenFile({
+        returnTo: 'code',
+        returnOpenFile: 'src/used.ts',
+        applied: false,
+        deletedOkPaths: ['src/used.ts'],
+      }),
+    ).toBe(true);
   });
 });

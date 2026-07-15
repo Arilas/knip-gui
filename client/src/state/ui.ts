@@ -40,6 +40,23 @@
 // with no pending review (direct nav/reload edge case — Task 3's
 // redirect-to-Code guard).
 //
+// `returnOpenFile` (#6): also captured by `startReview`, from `state.openFile`
+// at the SAME set-time as `summary`/`frozenCount` — same rationale, a
+// different bug. Without this, `navigate`'s unconditional
+// "opts.openFile given ? set it : clear it" (see its own doc comment above)
+// wipes whatever file the user had open on the Code page the moment Cancel/
+// Done calls `navigate(review.returnTo)`, even though the user never asked to
+// close it — they asked to review a fix/ignore plan. Capturing it here rather
+// than reading `state.openFile` from inside ReviewPage keeps SelectionDock
+// (the only caller) untouched: it already builds a plain `ReviewRequest`
+// object literal with no `returnOpenFile` field, and `startReview` ignores
+// any value a caller DOES pass for it (see the reducer below) — this is a
+// pull, not a field callers are expected to fill in. Whether it's actually
+// safe to restore on exit (e.g. the file may have been deleted by the
+// applied fix) is ReviewPage's/lib/review.ts's `shouldRestoreOpenFile`'s
+// call, not this store's — this field only ever remembers what to restore
+// TO.
+//
 // Tree-expansion lift (Task 2, v0.3): `expandedDirs` used to be TreeView.tsx
 // local state (a `manualExpandedDirs: Set<string> | null` — null meaning
 // "untouched, use the auto-expand policy"). Lifting it here is what makes
@@ -75,6 +92,12 @@ export interface ReviewRequest {
   frozenCount: number;
   /** Page Cancel/Done navigates back to. */
   returnTo: Page;
+  /**
+   * Captured by `startReview` from `state.openFile` at set-time (any value
+   * passed in here by a caller is overwritten — see this file's `review`
+   * doc comment above). `undefined` when nothing was open.
+   */
+  returnOpenFile?: string;
 }
 
 export interface UiState {
@@ -176,7 +199,8 @@ export const useUiStore = create<UiState>((set) => ({
 
   setCodeSearch: (search) => set({ codeSearch: search }),
 
-  startReview: (request) => set({ page: 'review', review: request }),
+  startReview: (request) =>
+    set((state) => ({ page: 'review', review: { ...request, returnOpenFile: state.openFile } })),
 
   clearReview: () => set({ review: undefined }),
 

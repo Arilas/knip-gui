@@ -127,3 +127,61 @@ export function buildFileRail(diffs: RailDiffEntry[], items: RailPlanItem[], res
 export function affectedFilePaths(issues: { filePath: string }[]): string[] {
   return [...new Set(issues.map((i) => i.filePath))].sort();
 }
+
+/**
+ * Inputs to `shouldRestoreOpenFile` (#6): deliberately a narrower, flatter
+ * shape than "whatever ReviewPage has lying around" — `returnTo`/
+ * `returnOpenFile` come straight off the frozen `ReviewRequest`
+ * (state/ui.ts), `applied` collapses ReviewPage's five-state `flow.status`
+ * down to the one distinction that matters here (did an apply actually run,
+ * as opposed to Cancel from idle/previewing/failed), and `deletedOkPaths` is
+ * pre-computed by the caller rather than re-derived from issues/selection
+ * here — this module stays free of PlanItem/PatchResult/Issue shapes, and the
+ * caller is the one with access to plan-vs-live staleness concerns (see
+ * ReviewPage.tsx's own comment on why it sources deletedOkPaths from frozen
+ * plan/apply data, not the live selection store).
+ */
+export interface ShouldRestoreOpenFileArgs {
+  /** The page Cancel/Done navigates back to — restoring only ever makes sense returning to Code, the one page with a file pane. */
+  returnTo: string;
+  /** What was open before the review started (state/ui.ts's ReviewRequest.returnOpenFile) — undefined means nothing was. */
+  returnOpenFile?: string;
+  /** Whether an apply actually completed (flow.status === 'applied') — false for Cancel from idle/previewing/failed, where nothing could have been deleted yet. */
+  applied: boolean;
+  /** Paths that were both slated for deletion AND applied ok — see filesToDelete/joinResults (lib/apply-flow.ts). Only meaningful when `applied` is true; ignored otherwise. */
+  deletedOkPaths: string[];
+}
+
+/**
+ * Whether ReviewPage's Cancel/Skip/Done should hand `returnOpenFile` back to
+ * `navigate` (restoring the Code page's file pane) or leave it out (letting
+ * `navigate`'s default clear it — see state/ui.ts's doc comment). Three ways
+ * to say no:
+ *  1. Not returning to Code at all — a file pane is Code-page-only state
+ *     (state/ui.ts's `navigate` doc comment), so restoring it while landing
+ *     on another page would be meaningless.
+ *  2. Nothing was open before the review started (`returnOpenFile` unset).
+ *  3. The file was genuinely deleted by what just ran: an apply completed
+ *     AND the file is in `deletedOkPaths`. Gated on `applied` first and not
+ *     merely `deletedOkPaths.includes(...)` on its own, since a caller could
+ *     otherwise (harmlessly, but incorrectly) compute deletedOkPaths ahead of
+ *     an apply that hasn't happened yet — e.g. an ignore-mode plan never
+ *     deletes anything (compileIgnorePlan, src/fix/compiler.ts, has no
+ *     delete-file branch), so an 'ignore' review can always restore even
+ *     though issue.fixModes (a fix-mode concept) might coincidentally still
+ *     say 'delete-file' for a files-type issue — ReviewPage.tsx accounts for
+ *     that by only ever populating deletedOkPaths for 'fix' reviews, but this
+ *     function doesn't need to know why the caller's list is empty, only
+ *     that it is.
+ */
+export function shouldRestoreOpenFile({
+  returnTo,
+  returnOpenFile,
+  applied,
+  deletedOkPaths,
+}: ShouldRestoreOpenFileArgs): boolean {
+  if (returnTo !== 'code') return false;
+  if (!returnOpenFile) return false;
+  if (applied && deletedOkPaths.includes(returnOpenFile)) return false;
+  return true;
+}

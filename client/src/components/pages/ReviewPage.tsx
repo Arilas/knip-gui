@@ -29,7 +29,13 @@ import {
   initialApplyFlowState,
   joinResults,
 } from '../../lib/apply-flow.js';
-import { affectedFilePaths, buildFileRail, type RailPlanItem, type RailResult } from '../../lib/review.js';
+import {
+  affectedFilePaths,
+  buildFileRail,
+  shouldRestoreOpenFile,
+  type RailPlanItem,
+  type RailResult,
+} from '../../lib/review.js';
 import { useActivityStore } from '../../state/activity.js';
 import {
   useFixApplyMutation,
@@ -140,7 +146,19 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
 
   function handleLeave() {
     clearReview();
-    navigate(review.returnTo);
+    // #6: restore whatever file was open on the Code page before this review
+    // started, unless the fix/ignore run just deleted it out from under us —
+    // see lib/review.ts's shouldRestoreOpenFile and deletedOkPaths above for
+    // the full "why". `navigate` itself always clears openFile when opts (or
+    // opts.openFile) is omitted (state/ui.ts), so passing `undefined` here
+    // reproduces the pre-#6 behavior exactly.
+    const restore = shouldRestoreOpenFile({
+      returnTo: review.returnTo,
+      returnOpenFile: review.returnOpenFile,
+      applied: flow.status === 'applied',
+      deletedOkPaths,
+    });
+    navigate(review.returnTo, restore ? { openFile: review.returnOpenFile } : undefined);
   }
 
   function handleCancel() {
@@ -193,6 +211,32 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   const joinedRows =
     flow.status === 'applied' ? joinResults(flow.diffs, flow.results, flow.items, planIssuesRef.current) : [];
   const okPaths = useMemo(() => joinedRows.filter((r) => r.status === 'ok').map((r) => r.filePath), [joinedRows]);
+
+  // Deletion signal for handleLeave's shouldRestoreOpenFile call (#6):
+  // deliberately built from FROZEN sources — planIssuesRef.current (the
+  // issue list captured at "Preview changes" time) and flow.items' issueIds
+  // (the exact PlanItem set that was actually compiled/applied) — rather
+  // than the live `selected`/`issues` this page also has in scope. Those
+  // live values can legitimately drift out from under an already-applied
+  // plan (e.g. the applied step's background rescan changes `issues`, or the
+  // selection store gets cleared/changed elsewhere while the applied step is
+  // still on screen for the commit step) and would make this computation
+  // agree with what's on screen right now instead of with what the apply
+  // that just ran actually did. `modeOverrides` is the one live read left in
+  // here; that's fine in practice — nothing in the applied step re-exposes
+  // fix-mode controls, so it can't change out from under a plan that already
+  // ran. Only computed for 'fix' reviews: filesToDelete's delete-file signal
+  // comes from an issue's fixModes, which is meaningless for an 'ignore'
+  // review (compileIgnorePlan, src/fix/compiler.ts, never deletes a file) —
+  // a files-type issue's fixModes[0] can still be 'delete-file' even when
+  // this review is an ignore, which would otherwise falsely flag its file as
+  // deleted and block the restore that ignore should always allow.
+  const deletedOkPaths = useMemo(() => {
+    if (review.kind !== 'fix' || flow.status !== 'applied') return [];
+    const appliedIds = new Set(flow.items.map((item) => item.issueId));
+    const deleted = new Set(filesToDelete(planIssuesRef.current, appliedIds, modeOverrides));
+    return okPaths.filter((path) => deleted.has(path));
+  }, [review.kind, flow, modeOverrides, okPaths]);
   const commitSummary = useMemo(() => {
     if (flow.status !== 'applied') return review.summary;
     const okIds = appliedOkIssueIds(flow.items, joinedRows, planIssuesRef.current);

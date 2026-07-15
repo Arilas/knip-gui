@@ -194,7 +194,36 @@ describe('startReview / clearReview', () => {
       summary: '2 files',
       frozenCount: 2,
       returnTo: 'packages',
+      returnOpenFile: undefined,
     });
+  });
+
+  it('startReview captures the currently open file into returnOpenFile (#6 — restored on Review exit)', () => {
+    useUiStore.getState().navigate('code', { openFile: 'src/used.ts' });
+    useUiStore.getState().startReview({ kind: 'fix', summary: '1 export', frozenCount: 1, returnTo: 'code' });
+    expect(useUiStore.getState().review?.returnOpenFile).toBe('src/used.ts');
+  });
+
+  it('startReview captures undefined when no file is open', () => {
+    useUiStore.getState().navigate('code');
+    expect(useUiStore.getState().openFile).toBeUndefined();
+    useUiStore.getState().startReview({ kind: 'fix', summary: '1 export', frozenCount: 1, returnTo: 'code' });
+    expect(useUiStore.getState().review?.returnOpenFile).toBeUndefined();
+  });
+
+  it("startReview's captured returnOpenFile ignores any value the caller passed in the request (set-time capture always wins)", () => {
+    useUiStore.getState().navigate('code', { openFile: 'src/actual-open.ts' });
+    // SelectionDock never passes returnOpenFile itself (state/ui.ts's doc
+    // comment); this guards against a future caller trying to pre-set it and
+    // silently overriding the point of capturing it at set-time.
+    useUiStore.getState().startReview({
+      kind: 'fix',
+      summary: '1 export',
+      frozenCount: 1,
+      returnTo: 'code',
+      returnOpenFile: 'src/spoofed.ts',
+    });
+    expect(useUiStore.getState().review?.returnOpenFile).toBe('src/actual-open.ts');
   });
 });
 
