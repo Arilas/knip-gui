@@ -96,9 +96,26 @@ export function createServer(opts: {
 
   app.use('/api/*', async (c, next) => {
     if (c.req.header('x-knip-gui-token') !== token) return c.json({ error: 'unauthorized' }, 401);
+    // Pinned to the exact request origin, not just "any loopback port": the SPA is
+    // always served from this server's own origin, so a legitimate same-origin
+    // request's Origin (when the browser sends one) is exactly `http://<Host>`. The
+    // old `/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/` regex accepted ANY
+    // loopback port, so a malicious page merely running on a different local port
+    // (e.g. another dev server on 127.0.0.1:9999) sailed through it. The `*`
+    // middleware above has already rejected non-loopback Host by this point
+    // (isLoopbackHost), so Host is known-loopback here — this check reuses that
+    // trusted Host to pin the comparison to this exact port rather than
+    // re-verifying loopback-ness itself. Host is required whenever Origin is
+    // present (real browsers that send Origin always send Host too); its hostname
+    // is compared case-insensitively (DNS hostnames are case-insensitive) while the
+    // port is compared exactly. No https allowance: this server only ever serves
+    // plain http on loopback.
     const origin = c.req.header('origin');
-    if (origin && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) {
-      return c.json({ error: 'forbidden origin' }, 403);
+    if (origin) {
+      const host = c.req.header('host');
+      if (!host || origin.toLowerCase() !== `http://${host}`.toLowerCase()) {
+        return c.json({ error: 'forbidden origin' }, 403);
+      }
     }
     await next();
   });

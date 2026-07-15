@@ -31,6 +31,54 @@ describe('server security', () => {
     expect(res.status).toBe(403);
   });
 
+  it('rejects a non-loopback origin even when Host matches a legit loopback port', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/api/report', {
+      headers: { 'x-knip-gui-token': token, origin: 'https://evil.example', host: '127.0.0.1:6173' },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('allows an Origin that matches the request Host exactly (same host:port)', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/api/report', {
+      headers: { 'x-knip-gui-token': token, origin: 'http://127.0.0.1:6173', host: '127.0.0.1:6173' },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects an Origin from a different loopback port than the request Host', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/api/report', {
+      headers: { 'x-knip-gui-token': token, origin: 'http://127.0.0.1:9999', host: '127.0.0.1:6173' },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('allows a localhost Origin that matches the request Host exactly', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/api/report', {
+      headers: { 'x-knip-gui-token': token, origin: 'http://localhost:6173', host: 'localhost:6173' },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects an Origin when Host is absent, even for a loopback-looking origin', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/api/report', {
+      headers: { 'x-knip-gui-token': token, origin: 'http://127.0.0.1:6173' },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('compares the Origin hostname to Host case-insensitively', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/api/report', {
+      headers: { 'x-knip-gui-token': token, origin: 'http://LOCALHOST:6173', host: 'localhost:6173' },
+    });
+    expect(res.status).toBe(200);
+  });
+
   it('serves the shell with the token embedded', async () => {
     const { app, token } = makeServer();
     const res = await app.request('/');
