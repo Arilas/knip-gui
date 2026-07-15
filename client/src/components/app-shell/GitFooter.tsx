@@ -56,23 +56,29 @@ export function GitFooter() {
       )}
 
       {gitStatus?.isRepo && gitStatus.dirty && (
-        <>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-testid="git-commit-button"
-            onClick={() => setCommitDialogOpen(true)}
-            className="w-full justify-center group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0"
-          >
-            <GitCommitVertical className="size-4" />
-            <span className="group-data-[collapsible=icon]:hidden">
-              {dirtyCount} uncommitted file{dirtyCount === 1 ? '' : 's'}
-            </span>
-          </Button>
-          <CommitDialog open={commitDialogOpen} onOpenChange={setCommitDialogOpen} />
-        </>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-testid="git-commit-button"
+          onClick={() => setCommitDialogOpen(true)}
+          className="w-full justify-center group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0"
+        >
+          <GitCommitVertical className="size-4" />
+          <span className="group-data-[collapsible=icon]:hidden">
+            {dirtyCount} uncommitted file{dirtyCount === 1 ? '' : 's'}
+          </span>
+        </Button>
       )}
+
+      {/* Must live OUTSIDE the `gitStatus.dirty` guard above: a commit that
+          cleans the whole working tree flips `dirty` to false via the same
+          gitStatus query CommitDialog just invalidated, which would unmount
+          this dialog mid-interaction — before the user ever sees its
+          internal success state ("Committed <sha>" + Done button). Gating on
+          `isRepo` only is free: Dialog renders nothing when `open` is
+          false. */}
+      {gitStatus?.isRepo && <CommitDialog open={commitDialogOpen} onOpenChange={setCommitDialogOpen} />}
 
       {report?.scannedAt && (
         <span className="flex items-center gap-1.5 px-1 text-xs text-sidebar-foreground/60 group-data-[collapsible=icon]:hidden">
