@@ -89,6 +89,13 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   // steps must stay stable even if `issues` changes underneath this page from
   // the post-apply background rescan while the applied step is still up.
   const planIssuesRef = useRef<Issue[]>(issues);
+  // Frozen alongside planIssuesRef at "Preview changes" time (#6 review):
+  // the mode overrides the plan was actually compiled with. The live
+  // selection-store value is NOT stable during the applied step — App.tsx's
+  // pruneMissing effect prunes overrides for issue ids the post-apply
+  // background rescan made vanish — so deletedOkPaths below must read this
+  // snapshot, not the live store, to keep agreeing with the plan that ran.
+  const planModeOverridesRef = useRef<Record<string, FixMode>>(modeOverrides);
 
   const selectedIssues = useMemo(() => issues.filter((i) => selected.has(i.id)), [issues, selected]);
   const affectedFiles = useMemo(() => affectedFilePaths(selectedIssues), [selectedIssues]);
@@ -107,6 +114,7 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
 
   async function handlePreview() {
     planIssuesRef.current = issues;
+    planModeOverridesRef.current = modeOverrides;
     const issueIds = [...selected];
     dispatch({ type: 'preview:start' });
     try {
@@ -212,31 +220,31 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
     flow.status === 'applied' ? joinResults(flow.diffs, flow.results, flow.items, planIssuesRef.current) : [];
   const okPaths = useMemo(() => joinedRows.filter((r) => r.status === 'ok').map((r) => r.filePath), [joinedRows]);
 
-  // Deletion signal for handleLeave's shouldRestoreOpenFile call (#6):
-  // deliberately built from FROZEN sources — planIssuesRef.current (the
-  // issue list captured at "Preview changes" time) and flow.items' issueIds
-  // (the exact PlanItem set that was actually compiled/applied) — rather
-  // than the live `selected`/`issues` this page also has in scope. Those
-  // live values can legitimately drift out from under an already-applied
-  // plan (e.g. the applied step's background rescan changes `issues`, or the
-  // selection store gets cleared/changed elsewhere while the applied step is
-  // still on screen for the commit step) and would make this computation
-  // agree with what's on screen right now instead of with what the apply
-  // that just ran actually did. `modeOverrides` is the one live read left in
-  // here; that's fine in practice — nothing in the applied step re-exposes
-  // fix-mode controls, so it can't change out from under a plan that already
-  // ran. Only computed for 'fix' reviews: filesToDelete's delete-file signal
-  // comes from an issue's fixModes, which is meaningless for an 'ignore'
-  // review (compileIgnorePlan, src/fix/compiler.ts, never deletes a file) —
-  // a files-type issue's fixModes[0] can still be 'delete-file' even when
-  // this review is an ignore, which would otherwise falsely flag its file as
-  // deleted and block the restore that ignore should always allow.
+  // Deletion signal for handleLeave's shouldRestoreOpenFile call (#6): every
+  // input is FROZEN at "Preview changes" time — planIssuesRef.current (the
+  // issue list the plan was compiled from), planModeOverridesRef.current
+  // (the overrides it was compiled with), and flow.items' issueIds (the
+  // exact PlanItem set that was applied) — never the live `issues`/
+  // `selected`/`modeOverrides` this page also has in scope. All three live
+  // values can legitimately drift out from under an already-applied plan
+  // while the applied/commit step is still on screen: the post-apply
+  // background rescan changes `issues`, App.tsx's pruneMissing effect then
+  // prunes both `selected` AND `modeOverrides` entries for the ids that
+  // rescan made vanish — so a live read would make this computation agree
+  // with what's on screen right now instead of with what the apply that just
+  // ran actually did. Only computed for 'fix' reviews: filesToDelete's
+  // delete-file signal comes from an issue's fixModes, which is meaningless
+  // for an 'ignore' review (compileIgnorePlan, src/fix/compiler.ts, never
+  // deletes a file) — a files-type issue's fixModes[0] can still be
+  // 'delete-file' even when this review is an ignore, which would otherwise
+  // falsely flag its file as deleted and block the restore that ignore
+  // should always allow.
   const deletedOkPaths = useMemo(() => {
     if (review.kind !== 'fix' || flow.status !== 'applied') return [];
     const appliedIds = new Set(flow.items.map((item) => item.issueId));
-    const deleted = new Set(filesToDelete(planIssuesRef.current, appliedIds, modeOverrides));
+    const deleted = new Set(filesToDelete(planIssuesRef.current, appliedIds, planModeOverridesRef.current));
     return okPaths.filter((path) => deleted.has(path));
-  }, [review.kind, flow, modeOverrides, okPaths]);
+  }, [review.kind, flow, okPaths]);
   const commitSummary = useMemo(() => {
     if (flow.status !== 'applied') return review.summary;
     const okIds = appliedOkIssueIds(flow.items, joinedRows, planIssuesRef.current);
