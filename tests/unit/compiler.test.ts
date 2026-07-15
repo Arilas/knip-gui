@@ -393,6 +393,22 @@ describe('compileFixPlan: selection edge cases', () => {
       });
     });
   });
+
+  it('a dependencies issue with missing target package.json produces ok:false, reason:file-not-found, with filePath set to the package.json path', async () => {
+    await withTmpDir(async (dir) => {
+      // Do NOT seed package.json - it doesn't exist
+      const issues: Issue[] = [
+        makeIssue('i1', 'dependencies', 'package.json', { symbol: 'left-pad', workspace: '.' }),
+      ];
+      const plan = await compileFixPlan(dir, issues, { issueIds: ['i1'] });
+      expect(itemFor(plan.items, 'i1')).toEqual({
+        issueId: 'i1',
+        ok: false,
+        reason: 'file-not-found',
+        filePath: 'package.json',
+      });
+    });
+  });
 });
 
 describe('compileIgnorePlan', () => {
