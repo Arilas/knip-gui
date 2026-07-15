@@ -238,10 +238,20 @@ export function TriStateCheckbox({
       onChange={onChange}
       // Rows are whole-row clickable (dir toggles expansion, file opens the
       // file) — the checkbox must swallow both the click AND the keyboard
-      // activation (Space bubbles as a keydown to the row's own handler
-      // otherwise) so checking a box never also fires the row's action.
+      // ACTIVATION keys, so checking a box never also fires the row's/tree's
+      // own action: Space is the checkbox's native toggle (letting it bubble
+      // would ALSO toggle-select whatever row is tree-active — possibly a
+      // different row than this checkbox's, double-mutating the cart), and
+      // Enter bubbling to TreeView's handler would open/expand the active
+      // row as a surprise side effect of interacting with a checkbox. Only
+      // those two, though (#13 review — this used to swallow EVERY key):
+      // arrows/Home/End pressed while a checkbox has focus must keep
+      // bubbling to the tree's keydown handler so keyboard navigation
+      // resumes from a focused checkbox instead of dying until Tab.
       onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === ' ' || e.key === 'Enter') e.stopPropagation();
+      }}
       className="shrink-0 disabled:cursor-not-allowed"
     />
   );
@@ -283,14 +293,19 @@ export function TreeNodeRow({
     toggleNodeSelection(node, selected, enabledTypes, onToggleIds, onAddFileFiltered);
   }
 
-  // Roving tabindex (ARIA tree pattern, Task K/#13): exactly the active row
-  // is in the Tab order (tabIndex 0); every other row is -1 so Tab skips the
-  // whole tree in one stop and TreeView's own keydown handler — not the
-  // browser's default Tab-through-everything — owns in-tree movement. Enter/
-  // Space no longer have their own onKeyDown here (that used to treat both
-  // identically): TreeView's container-level handler now decides via
-  // treeKeyAction, since Space's meaning changed (toggles the row's own
-  // checkbox, not "same as Enter") and needs the full row list to do so.
+  // Roving tabindex (ARIA tree pattern, Task K/#13): exactly the active ROW
+  // is in the Tab order (tabIndex 0); every other row is -1, so the rows
+  // themselves contribute one Tab stop and TreeView's own keydown handler —
+  // not the browser's default Tab-through-everything — owns row-to-row
+  // movement. NOTE (#13 review): this is rows-only, not "the whole tree is
+  // one Tab stop" — each mounted row's TriStateCheckbox keeps its native tab
+  // stop by design (it's an independent accessible control, see the
+  // ARIA-choice comment above TriStateCheckbox), so Tab still visits every
+  // visible checkbox. Enter/Space no longer have their own onKeyDown here
+  // (that used to treat both identically): TreeView's container-level
+  // handler now decides via treeKeyAction, since Space's meaning changed
+  // (toggles the row's own checkbox, not "same as Enter") and needs the full
+  // row list to do so.
   const roving = {
     ref: (el: HTMLDivElement | null) => registerRowRef(index, el),
     tabIndex: active ? 0 : -1,

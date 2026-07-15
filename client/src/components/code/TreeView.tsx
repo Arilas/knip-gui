@@ -281,11 +281,25 @@ export function TreeView({
   // retryFocusUntilMounted, for the same "wait for React to commit, but stop
   // as soon as it has" reason) waits for that render instead of a fixed
   // guessed timeout.
+  //
+  // Generation guard (#13 review): each call starts its OWN retry chain
+  // closed over its own target index, and chains from rapid successive moves
+  // (held-arrow auto-repeat, Home immediately followed by End) can overlap —
+  // an EARLIER chain whose off-screen target mounts LATE would otherwise
+  // .focus() it AFTER a later chain already focused the right row, snapping
+  // real DOM focus back to a stale row while activeIndex/tabIndex correctly
+  // point at the newer one. Bumping the generation on every call and bailing
+  // out of any tick whose captured generation is no longer current means
+  // only the newest chain can ever reach .focus().
+  const focusGenerationRef = useRef(0);
+
   function moveActive(index: number) {
     setActiveIndex(index);
     virtualizer.scrollToIndex(index, { align: 'auto' });
+    const generation = ++focusGenerationRef.current;
     let attempts = 0;
     const tryFocus = () => {
+      if (generation !== focusGenerationRef.current) return; // superseded by a newer move — die silently
       const el = rowRefs.current.get(index);
       if (el) {
         el.focus();

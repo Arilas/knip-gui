@@ -194,4 +194,24 @@ test('ArrowDown/Right/Left traverse and (de)expand the tree; Enter opens a file;
   await page.keyboard.press(' ');
   await expect(page.getByTestId('selbar-count')).toHaveCount(0);
   await expect(shapesRow.getByRole('checkbox')).not.toBeChecked();
+
+  // Rapid successive moves: only the LATEST target may end up focused (#13
+  // review — TreeView's moveActive cancels a superseded focus-retry chain
+  // via a generation counter). Both keydowns are dispatched in one evaluate
+  // tick so the two chains genuinely overlap (sequential keyboard.press
+  // calls each await a round-trip, leaving frames between them). Honest
+  // scope note: with this 6-row fixture every row is already mounted, so
+  // even the FIRST chain succeeds on its first rAF tick — the pathological
+  // ordering the generation guard exists for (an earlier chain's off-screen
+  // target mounting AFTER a later chain already focused) needs a
+  // taller-than-viewport tree that this fixture can't produce; what this
+  // pins is the user-visible contract (last key wins) under the fastest
+  // key cadence reachable from a test.
+  await page.evaluate(() => {
+    const active = document.activeElement;
+    for (const key of ['End', 'Home']) {
+      active?.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    }
+  });
+  await expectActiveRow(page, 'tree-dir-src'); // Home's target (row 0), not End's
 });
