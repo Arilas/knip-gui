@@ -12,6 +12,7 @@ function resetStore() {
     codeFilters: new Set(CODE_TYPES),
     packagesFilters: new Set(PACKAGE_TYPES),
     codeSearch: '',
+    codeScope: undefined,
     openFileNonce: 0,
     review: undefined,
     expandedDirs: new Set<string>(),
@@ -61,6 +62,38 @@ describe('setCodeSearch', () => {
     expect(useUiStore.getState().codeSearch).toBe('packages/app/');
     useUiStore.getState().setCodeSearch('');
     expect(useUiStore.getState().codeSearch).toBe('');
+  });
+});
+
+// Task W (#29): the workspace path-scope chip on the Code page — a separate
+// axis from codeSearch (see ui.ts's doc comment for why the two compose
+// instead of one replacing the other).
+describe('setCodeScope', () => {
+  it('defaults to undefined (no chip)', () => {
+    expect(useUiStore.getState().codeScope).toBeUndefined();
+  });
+
+  it('sets codeScope to the given workspace', () => {
+    useUiStore.getState().setCodeScope('packages/app');
+    expect(useUiStore.getState().codeScope).toBe('packages/app');
+  });
+
+  it('normalizes the root workspace "." to undefined — root never produces a chip', () => {
+    useUiStore.getState().setCodeScope('packages/app');
+    useUiStore.getState().setCodeScope('.');
+    expect(useUiStore.getState().codeScope).toBeUndefined();
+  });
+
+  it('setCodeScope(undefined) clears an existing scope (the chip\'s X button)', () => {
+    useUiStore.getState().setCodeScope('packages/app');
+    useUiStore.getState().setCodeScope(undefined);
+    expect(useUiStore.getState().codeScope).toBeUndefined();
+  });
+
+  it('never touches codeSearch — scope and search are independent, composable axes', () => {
+    useUiStore.getState().setCodeSearch('needle');
+    useUiStore.getState().setCodeScope('packages/app');
+    expect(useUiStore.getState().codeSearch).toBe('needle');
   });
 });
 

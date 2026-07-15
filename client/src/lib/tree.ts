@@ -202,6 +202,25 @@ function finalizeDir(mdir: MutableDir): DirNode {
   };
 }
 
+// Path-prefix scope filter for the Code page's workspace chip (Task W, #29):
+// narrows the issue set to one workspace BEFORE buildTree runs, the same way
+// TreeView already narrows by search — the two compose rather than one
+// replacing the other (search then filters WITHIN whatever the chip already
+// scoped). Boundary-aware on purpose, unlike a bare substring/startsWith
+// check on the raw workspace string: scope 'packages/app' must never match
+// 'packages/app-2/x.ts' (a different, sibling workspace that merely shares a
+// prefix) — checking against `${scope}/` closes that gap. The equality arm
+// covers the (unusual but cheap) case of a file literally named after the
+// scope path itself. `scope` of '.'/undefined — ALL_WORKSPACES, the same
+// whole-project convention `report.scope` and hooks/use-workspace-switch.ts
+// use — is a no-op: nothing is filtered out, matching "root never produces a
+// chip" (ui.ts's `codeScope` doc comment).
+export function filterByScope(issues: Issue[], scope: string | undefined): Issue[] {
+  if (!scope || scope === '.') return issues;
+  const prefix = `${scope}/`;
+  return issues.filter((issue) => issue.filePath === scope || issue.filePath.startsWith(prefix));
+}
+
 /**
  * Builds the nested dir/file tree from a flat list of file-bearing issues.
  * The returned node is a synthetic, unnamed root at path '' — render

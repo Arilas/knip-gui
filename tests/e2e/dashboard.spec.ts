@@ -120,16 +120,24 @@ test('60-workspace table virtualizes: bounded row count, pinned header, no page 
   expect(await scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 });
 
-// Cell-scoping pin (review finding): Dashboard.tsx's onCellClick used to pass
-// `search: '<ws>/'` to navigate() for EVERY cell type, including
-// packages-routed ones — but PackagesPage keeps its own local search state
-// and never reads the ui store's codeSearch, so a packages-cell click both
-// opened Packages unscoped AND silently pre-filled the Code page's tree
-// search for whenever it was next visited. Fixed by only forwarding `search`
-// when routing to 'code' (Dashboard.tsx) and by guarding navigate() itself to
-// only apply opts.search when page === 'code' (state/ui.ts), so this stays
-// pinned even if a future caller repeats the mistake.
-test('workspace cell click scopes Code to that workspace; a packages cell click never touches Code search', async ({
+// Cell-scoping pin (review finding, updated for Task W #29): Dashboard.tsx's
+// onCellClick used to pass `search: '<ws>/'` to navigate() for EVERY cell
+// type, including packages-routed ones — but PackagesPage keeps its own
+// local search state and never reads the ui store's codeSearch, so a
+// packages-cell click both opened Packages unscoped AND silently pre-filled
+// the Code page's tree search for whenever it was next visited. Fixed by
+// only forwarding the scope when routing to 'code' (Dashboard.tsx) and by
+// PackagesPage simply never reading codeScope, so this stays pinned even if
+// a future caller repeats the mistake.
+//
+// #29 itself then replaced the "stuffed into codeSearch" mechanism with a
+// first-class scope CHIP (state/ui.ts's `codeScope`) — a workspace click no
+// longer touches the free-text search box at all, so this test now also pins
+// that the tree search stays genuinely empty (typeable) after a code-routed
+// cell click, with the workspace surfaced as a chip instead. See
+// scope-chip.spec.ts for the chip's own dedicated coverage (compose with
+// search, clear, promote).
+test('workspace cell click scopes Code via the chip (not the search box); a packages cell click never touches Code scope', async ({
   page,
 }) => {
   await page.route('**/api/report', (route) =>
@@ -139,17 +147,19 @@ test('workspace cell click scopes Code to that workspace; a packages cell click 
   await page.goto('/');
   await expect(page.getByTestId('workspace-row-packages/ws-01')).toBeVisible();
 
-  // Packages cell first, on a clean codeSearch (the '' default) — clicking
-  // it must land on Packages and must NOT populate codeSearch for later.
+  // Packages cell first, on a clean codeScope (the undefined default) —
+  // clicking it must land on Packages and must NOT populate codeScope for
+  // later.
   await page.getByTestId('cell-packages/ws-01-dependencies').locator('button').click();
   await expect(page.getByTestId('packages-search')).toBeVisible();
   await expect(page.getByTestId('workspace-group-packages/ws-01')).toBeVisible();
 
   // Hop to Code via the sidebar (a plain nav click — opts.search omitted —
-  // so this alone wouldn't prove anything either way); the tree search must
-  // still be empty, proving the packages-cell click never wrote codeSearch.
+  // so this alone wouldn't prove anything either way); no chip and an empty
+  // tree search, proving the packages-cell click never wrote codeScope.
   await page.getByTestId('nav-code').click();
   await expect(page.getByTestId('tree-search')).toHaveValue('');
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
 
   // Back to the dashboard for the file-type (Code-routed) cell click.
   await page.getByTestId('nav-dashboard').click();
@@ -158,6 +168,8 @@ test('workspace cell click scopes Code to that workspace; a packages cell click 
   // Landed on Code, scoped to just the 'exports' type...
   await expect(page.getByTestId('filter-chip-exports')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('filter-chip-files')).toHaveAttribute('aria-pressed', 'false');
-  // ...and the tree search holds the workspace path-prefix scope.
-  await expect(page.getByTestId('tree-search')).toHaveValue('packages/ws-01/');
+  // ...the workspace shows up as a chip, not text in the search box...
+  await expect(page.getByTestId('scope-chip')).toContainText('packages/ws-01');
+  // ...and the search box stays empty and typeable — the #29 bug this fixes.
+  await expect(page.getByTestId('tree-search')).toHaveValue('');
 });

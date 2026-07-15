@@ -20,12 +20,16 @@ import { useNavigate } from '@tanstack/react-router';
 import { X } from 'lucide-react';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import type { Issue } from '../../../../src/core/types.js';
+import { ALL_WORKSPACES, useWorkspaceSwitch } from '../../hooks/use-workspace-switch.js';
 import { CODE_TYPES, filterIssues } from '../../lib/filters.js';
+import { useReport } from '../../state/queries.js';
 import { useSelectionStore } from '../../state/selection.js';
 import { useUiStore } from '../../state/ui.js';
+import { WorkspaceSwitchConfirmDialog } from '../app-shell/WorkspaceSwitchConfirmDialog.js';
 import { SelectionDock } from '../SelectionDock.js';
 import { CodePane } from '../code/CodePane.js';
 import { TreeView } from '../code/TreeView.js';
+import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable.js';
 
@@ -42,6 +46,8 @@ export function CodePage({ issues, file }: CodePageProps) {
   const toggleCodeFilter = useUiStore((s) => s.toggleCodeFilter);
   const codeSearch = useUiStore((s) => s.codeSearch);
   const setCodeSearch = useUiStore((s) => s.setCodeSearch);
+  const codeScope = useUiStore((s) => s.codeScope);
+  const setCodeScope = useUiStore((s) => s.setCodeScope);
   const openFileNonce = useUiStore((s) => s.openFileNonce);
   const bumpOpenFileNonce = useUiStore((s) => s.bumpOpenFileNonce);
   const navigate = useNavigate();
@@ -50,6 +56,23 @@ export function CodePage({ issues, file }: CodePageProps) {
   const selected = useSelectionStore((s) => s.selected);
   const toggle = useSelectionStore((s) => s.toggle);
   const addFileFiltered = useSelectionStore((s) => s.addFileFiltered);
+
+  // The chip's "Scan only this workspace" promote button (Task W, #29) hands
+  // off to the SAME select/confirm/runSwitch flow the sidebar switcher and
+  // command palette use — see hooks/use-workspace-switch.ts's doc comment for
+  // why each call site owns its own pendingScope while sharing that flow
+  // (and WorkspaceSwitchConfirmDialog's markup) rather than duplicating it.
+  // `workspaces` mirrors the pattern router.tsx/CommandPalette already use to
+  // feed this hook; the chip itself never renders the picker list, only calls
+  // `.select(scope)` directly, so entries/currentScope beyond `currentScope`
+  // (below) are unused here but harmless to compute.
+  const { data } = useReport();
+  const workspaces = data?.report?.workspaces ?? [ALL_WORKSPACES];
+  const workspaceSwitch = useWorkspaceSwitch(workspaces, issues, () => setCodeScope(undefined));
+  // Hidden once the real scan scope already matches the chip — promoting an
+  // already-scoped view would be a same-scope no-op (select() also guards
+  // this, but hiding avoids showing a dead-looking enabled button).
+  const canPromote = codeScope !== undefined && workspaceSwitch.currentScope !== codeScope;
 
   const codePanelRef = usePanelRef();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: 'knip-code-split' });
@@ -87,6 +110,48 @@ export function CodePage({ issues, file }: CodePageProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/*
+        The workspace scope chip (Task W, #29): a page-level bar, not part of
+        TreeView's own toolbar, because clearing/promoting it needs the report
+        (for currentScope/workspaces) and the shared workspace-switch flow —
+        concerns TreeView deliberately doesn't have (it stays pure props-in/
+        callback-out). Only rendered once a Dashboard cell/row click (or a
+        promote-pending confirm) has actually set codeScope; root ('.') never
+        reaches here since setCodeScope normalizes it away.
+      */}
+      {codeScope && (
+        <div
+          className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2"
+          data-testid="scope-chip"
+        >
+          <span className="text-xs text-muted-foreground">Scoped to</span>
+          <Badge variant="secondary" className="max-w-full gap-1 pr-1">
+            <span className="truncate font-mono">{codeScope}</span>
+            <button
+              type="button"
+              aria-label={`Clear ${codeScope} scope`}
+              data-testid="scope-chip-clear"
+              className="rounded-full p-0.5 hover:bg-muted-foreground/20"
+              onClick={() => setCodeScope(undefined)}
+            >
+              <X className="size-3" />
+            </button>
+          </Badge>
+          {canPromote && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="scope-chip-promote"
+              disabled={workspaceSwitch.busy || workspaceSwitch.reviewing}
+              title={workspaceSwitch.reviewing ? 'Finish or cancel the review first' : undefined}
+              onClick={() => workspaceSwitch.select(codeScope)}
+            >
+              Scan only this workspace
+            </Button>
+          )}
+        </div>
+      )}
       <ResizablePanelGroup
         orientation="horizontal"
         className="min-h-0 flex-1"
@@ -100,6 +165,7 @@ export function CodePage({ issues, file }: CodePageProps) {
             onToggleFilter={toggleCodeFilter}
             search={codeSearch}
             onSearchChange={setCodeSearch}
+            scope={codeScope}
             selected={selected}
             onToggleIds={toggle}
             onAddFileFiltered={addFileFiltered}
@@ -142,6 +208,18 @@ export function CodePage({ issues, file }: CodePageProps) {
       </ResizablePanelGroup>
 
       <SelectionDock issues={issues} />
+
+      {/* Shared discard-selection confirm for the chip's promote button — same
+          dialog WorkspaceSwitcher/CommandPalette render, bound to THIS page's
+          own pendingScope (see use-workspace-switch.ts's doc comment for why
+          every call site owns its own pendingScope while sharing this one
+          AlertDialog definition). */}
+      <WorkspaceSwitchConfirmDialog
+        pendingScope={workspaceSwitch.pendingScope}
+        selectionCount={workspaceSwitch.selectionCount}
+        onCancel={workspaceSwitch.cancelSwitch}
+        onConfirm={workspaceSwitch.confirmSwitch}
+      />
     </div>
   );
 }

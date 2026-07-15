@@ -43,7 +43,19 @@ export interface UseWorkspaceSwitchResult {
   cancelSwitch: () => void;
 }
 
-export function useWorkspaceSwitch(workspaces: string[], issues: Issue[]): UseWorkspaceSwitchResult {
+export function useWorkspaceSwitch(
+  workspaces: string[],
+  issues: Issue[],
+  // Task W (#29): fired after a switch this hook initiated actually LANDS
+  // (scanMutation's onSuccess, not just on click) — the Code page's scope
+  // chip uses this to clear itself on a successful promote, since a real,
+  // rescanned `report.scope` supersedes the client-side view filter the chip
+  // stood in for. Deliberately onSuccess, not onSettled: a failed rescan never
+  // actually adopted the scope, so the chip (and the option to retry the
+  // promote) should stay. Optional and unused by WorkspaceSwitcher/
+  // CommandPalette, whose behavior is unchanged.
+  onSwitched?: () => void,
+): UseWorkspaceSwitchResult {
   const [pendingScope, setPendingScope] = useState<string | null>(null);
   const { data } = useReport();
   const scanMutation = useScanMutation();
@@ -76,7 +88,7 @@ export function useWorkspaceSwitch(workspaces: string[], issues: Issue[]): UseWo
     // way per phase (see router.tsx), so a pushed entry would only get
     // snapped back.
     navigate({ to: '.', search: (prev) => ({ ...prev, ws }), replace: true });
-    scanMutation.mutate(ws);
+    scanMutation.mutate(ws, { onSuccess: () => onSwitched?.() });
   }
 
   function select(value: string) {

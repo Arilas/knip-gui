@@ -87,7 +87,7 @@ export function Dashboard() {
   const navigate = useNavigate();
   const setCodeFilters = useUiStore((s) => s.setCodeFilters);
   const setPackagesFilters = useUiStore((s) => s.setPackagesFilters);
-  const setCodeSearch = useUiStore((s) => s.setCodeSearch);
+  const setCodeScope = useUiStore((s) => s.setCodeScope);
   const busy = useBusy();
   const sweepMutation = useSweepMutation();
   const log = useActivityStore((s) => s.log);
@@ -144,23 +144,22 @@ export function Dashboard() {
   }
 
   // Cheap workspace scoping without a rescan: a workspace cell/row click sets
-  // the type filter AND the Code page's tree path-prefix search to
-  // `<workspace>/` (empty for the root workspace, '.', which has no
-  // meaningful prefix) — see state/ui.ts's `codeSearch` doc comment. The real
-  // rescanning workspace switcher stays in the sidebar.
-  function searchPrefixFor(workspace: string): string {
-    return workspace === '.' ? '' : `${workspace}/`;
-  }
-
+  // the Code page's scope CHIP (state/ui.ts's `codeScope`) to the workspace,
+  // rather than the old #29-reported behavior of stuffing a path prefix into
+  // the free-text search box — that conflated "narrow the view" with "type a
+  // search", and made typing impossible once a click had pre-filled the box.
+  // setCodeScope itself normalizes root ('.') to "no chip", so this needs no
+  // special-casing here. The real rescanning workspace switcher stays in the
+  // sidebar; the Code page's chip offers a one-click promote to it.
   function onCellClick(type: IssueType, workspace: string) {
     const to = pageForType(type);
     if (!to) return;
-    // Only the Code page reads codeSearch (PackagesPage has its own local search
+    // Only the Code page reads codeScope (PackagesPage has its own local search
     // state) — setting it for a packages-page cell would just silently pollute
     // the Code tree's scope for a later, unrelated visit.
     if (to === '/code') {
       setCodeFilters([type]);
-      setCodeSearch(searchPrefixFor(workspace));
+      setCodeScope(workspace);
     } else {
       setPackagesFilters([type]);
     }
@@ -168,7 +167,7 @@ export function Dashboard() {
   }
 
   function onRowOpen(workspace: string) {
-    setCodeSearch(searchPrefixFor(workspace));
+    setCodeScope(workspace);
     navigate({ to: '/code' });
   }
 

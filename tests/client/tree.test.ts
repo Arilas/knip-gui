@@ -7,6 +7,7 @@ import {
   collectFileIssues,
   collectIds,
   countFiles,
+  filterByScope,
   idsToToggleForNode,
   nodeSelectionState,
 } from '../../client/src/lib/tree.js';
@@ -338,6 +339,46 @@ describe('countFiles', () => {
       issue({ type: 'files', filePath: 'src/nested/c.ts' }),
     ]);
     expect(countFiles(tree)).toBe(3);
+  });
+});
+
+// Task W (#29): the Code page's workspace path-scope chip narrows the tree to
+// one workspace before buildTree runs, composing with (not replacing)
+// codeSearch's own filterIssues pass — see TreeView.tsx's wiring.
+describe('filterByScope', () => {
+  const inScope = issue({ type: 'exports', filePath: 'packages/app/index.ts', symbol: 'a' });
+  const nested = issue({ type: 'files', filePath: 'packages/app/src/deep/orphan.ts' });
+  const sibling = issue({ type: 'files', filePath: 'packages/app-2/orphan.ts' });
+  const outOfScope = issue({ type: 'files', filePath: 'packages/lib/orphan.ts' });
+  const root = issue({ type: 'files', filePath: 'root.ts' });
+
+  it('returns every issue unchanged when scope is undefined (no chip)', () => {
+    const all = [inScope, nested, sibling, outOfScope, root];
+    expect(filterByScope(all, undefined)).toEqual(all);
+  });
+
+  it('returns every issue unchanged when scope is "." (the whole-project convention)', () => {
+    const all = [inScope, nested, sibling, outOfScope, root];
+    expect(filterByScope(all, '.')).toEqual(all);
+  });
+
+  it('keeps only issues under the scope prefix, at any depth', () => {
+    const result = filterByScope([inScope, nested, sibling, outOfScope, root], 'packages/app');
+    expect(result.map((i) => i.filePath).sort()).toEqual(['packages/app/index.ts', 'packages/app/src/deep/orphan.ts']);
+  });
+
+  it('never matches a sibling workspace whose name merely starts with the scope (packages/app vs packages/app-2)', () => {
+    const result = filterByScope([sibling], 'packages/app');
+    expect(result).toEqual([]);
+  });
+
+  it('matches a file path exactly equal to the scope', () => {
+    const weirdFile = issue({ type: 'files', filePath: 'packages/app' });
+    expect(filterByScope([weirdFile], 'packages/app')).toEqual([weirdFile]);
+  });
+
+  it('excludes files outside the scope entirely', () => {
+    expect(filterByScope([outOfScope, root], 'packages/app')).toEqual([]);
   });
 });
 

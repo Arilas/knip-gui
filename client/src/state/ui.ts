@@ -18,11 +18,46 @@
 // chip sets, so whatever the user toggled on a page survives navigating away
 // and back — the behavior the old omit-`opts.filters` branch protected.
 //
-// `codeSearch` is a cheap path-prefix scope for the Code page's tree — set by a
-// Dashboard workspace-table cell/row click to `<workspace>/` so the tree shows
-// just that workspace's files without a rescan (the real, rescanning workspace
-// switcher lives in the sidebar). Code-page-only: PackagesPage keeps its own
-// local search and never reads codeSearch.
+// `codeSearch` is the Code page's own free-text search box: a case-insensitive
+// substring match over path or symbol (lib/filters.ts's filterIssues), owned
+// entirely by what the user types into the tree's search input. Code-page-only:
+// PackagesPage keeps its own local search and never reads codeSearch.
+//
+// `codeScope` (Task W, #29) is a SEPARATE axis: a path-prefix VIEW filter set
+// by a Dashboard workspace-table cell/row click, rendered on the Code page as
+// a removable chip (CodePage.tsx) rather than stuffed into the search box —
+// the bug #29 reports is exactly that conflation, which made codeSearch
+// unusable for actual searching once a workspace click pre-filled it with a
+// path prefix. The two now compose: lib/tree.ts's `filterByScope` narrows to
+// the scoped workspace's files BEFORE buildTree runs, and codeSearch then
+// filters WITHIN that already-narrowed subset (TreeView.tsx's wiring) — so a
+// workspace click no longer forecloses typing a real search.
+//
+// codeScope is a CHEAP, CLIENT-SIDE narrowing over whatever the current report
+// already contains — it never triggers a rescan. That's the real distinction
+// from the sidebar WorkspaceSwitcher / command palette's workspace group
+// (hooks/use-workspace-switch.ts), which perform a genuine server-side scoped
+// scan mirrored in `report.scope` and the `?ws=` URL param (#14): those change
+// what the SERVER computed; codeScope only changes what the CLIENT displays
+// from the report it already has. CodePage's chip offers a one-click "Scan
+// only this workspace" PROMOTE action that hands off to that real hook
+// (`useWorkspaceSwitch().select(scope)`, reusing its discard-selection
+// confirm rather than duplicating it) — a successful promote clears codeScope
+// via the hook's optional `onSwitched` callback, since a real, rescanned scope
+// makes the view filter redundant (see use-workspace-switch.ts).
+//
+// Deliberately NOT mirrored to the URL, unlike `ws`/`report.scope`: `ws` is
+// worth bookmarking because reloading it replays a real scan that reproduces
+// the exact same state from nothing. codeScope has no such replay value — it's
+// a pure narrowing of the CURRENT client-side issue list, superseded instantly
+// by a promote, and reset to "no chip" the moment a plain nav or filter click
+// would reasonably expect a full tree. It's session-only, same as
+// codeFilters/packagesFilters/codeSearch above.
+//
+// Root '.' (ALL_WORKSPACES, hooks/use-workspace-switch.ts) never produces a
+// chip — `setCodeScope` normalizes it to `undefined` at the setter, so every
+// reader can treat "codeScope is set" and "codeScope is not '.'" as the same
+// question.
 //
 // `review` (v0.3): the pending review-flow request SelectionDock's Fix…/Ignore…
 // buttons hand off to the `/review` route. `startReview` freezes
@@ -81,6 +116,8 @@ export interface UiState {
   codeFilters: Set<IssueType>;
   packagesFilters: Set<IssueType>;
   codeSearch: string;
+  /** Path-prefix view-filter chip on the Code page — see this file's top doc comment. `undefined` (or root '.') means no chip. */
+  codeScope?: string;
   // Bumped by `bumpOpenFileNonce` on every explicit file OPEN (a tree-row
   // click), even when it re-opens the file that's already open. CodePane's
   // auto-scroll-to-first-issue effect (v0.3) keys off `${file}#${openFileNonce}`
@@ -103,6 +140,12 @@ export interface UiState {
   // Narrow setter for the Code page's own search input: updates codeSearch in
   // place. A keystroke in the search box must never affect anything else.
   setCodeSearch: (search: string) => void;
+  // Sets/clears the workspace scope chip — Dashboard's cell/row click, the
+  // chip's X, and (indirectly, via the workspace-switch hook's onSwitched)
+  // a successful promote all funnel through this one setter. Normalizes root
+  // ('.') to `undefined` so callers can pass a raw workspace value (as
+  // Dashboard does) without special-casing root themselves.
+  setCodeScope: (ws?: string) => void;
   // See openFileNonce above — CodePage's tree-row click calls this so
   // re-clicking the already-open file still re-fires CodePane's scroll/pulse.
   bumpOpenFileNonce: () => void;
@@ -127,6 +170,7 @@ export const useUiStore = create<UiState>((set) => ({
   codeFilters: new Set(CODE_TYPES),
   packagesFilters: new Set(PACKAGE_TYPES),
   codeSearch: '',
+  codeScope: undefined,
   openFileNonce: 0,
   review: undefined,
   expandedDirs: new Set<string>(),
@@ -152,6 +196,8 @@ export const useUiStore = create<UiState>((set) => ({
     }),
 
   setCodeSearch: (search) => set({ codeSearch: search }),
+
+  setCodeScope: (ws) => set({ codeScope: ws && ws !== '.' ? ws : undefined }),
 
   bumpOpenFileNonce: () => set((state) => ({ openFileNonce: state.openFileNonce + 1 })),
 

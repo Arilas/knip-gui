@@ -26,21 +26,26 @@
 // one) used to render it collapsed by default — the one-time seed above has
 // already fired, so nothing ever auto-expands a dir that didn't exist yet at
 // seed time. The tree-change effect below tracks "new since we last looked"
-// against a SEPARATE tree built from the raw `issues` prop (pre search/chip
-// filtering) specifically so toggling a filter chip or typing a search term
-// — which also changes the rendered `tree` below, but never adds real dir
-// paths to the underlying data — can never be mistaken for a rescan and
-// spuriously re-expand a dir the user filtered into view (search-revealed
-// dirs staying collapsed by default is an accepted design choice; see Task 3
-// UX overhaul notes). Only genuinely new paths get merged in, additively —
-// see ui.ts's `expandDirs` doc comment for why this can't undo a Collapse all.
+// against a SEPARATE tree built from `scopedIssues` (the workspace scope
+// chip applied, but pre search/chip-type filtering) specifically so toggling
+// a filter chip or typing a search term — which also changes the rendered
+// `tree` below, but never adds real dir paths to the underlying data — can
+// never be mistaken for a rescan and spuriously re-expand a dir the user
+// filtered into view (search-revealed dirs staying collapsed by default is an
+// accepted design choice; see Task 3 UX overhaul notes). The workspace scope
+// chip (Task W, #29) deliberately does NOT get this exemption: setting or
+// clearing it is a coarse, click-driven boundary, not a per-keystroke filter,
+// so a dir the chip had been hiding auto-expands the moment it reappears
+// (clearing the chip), same as a rescan introducing it fresh. Only genuinely
+// new paths get merged in, additively — see ui.ts's `expandDirs` doc comment
+// for why this can't undo a Collapse all.
 import { useEffect, useMemo, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronsDownUp, ChevronsUpDown, PanelRightClose, PanelRightOpen, Search } from 'lucide-react';
 import type { Issue, IssueType } from '../../../../src/core/types.js';
 import { registerCodeTreeFilterInput } from '../../lib/code-tree-focus.js';
 import { CODE_TYPES, filterIssues } from '../../lib/filters.js';
-import { autoExpandDepth, buildTree, countFiles, type DirNode } from '../../lib/tree.js';
+import { autoExpandDepth, buildTree, countFiles, filterByScope, type DirNode } from '../../lib/tree.js';
 import { useUiStore } from '../../state/ui.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
@@ -54,6 +59,14 @@ export interface TreeViewProps {
   onToggleFilter: (type: IssueType) => void;
   search: string;
   onSearchChange: (value: string) => void;
+  /**
+   * The Code page's workspace scope chip (state/ui.ts's `codeScope`), Task W
+   * (#29) — a path-prefix narrowing applied BEFORE `search`, so the two
+   * compose: the chip picks the workspace, then `search` filters within it.
+   * `undefined` (or root '.') is a no-op, same convention as `codeScope`
+   * itself (lib/tree.ts's `filterByScope`).
+   */
+  scope?: string;
   selected: ReadonlySet<string>;
   onToggleIds: (ids: string[]) => void;
   onAddFileFiltered: (fileIssues: Issue[], enabled: ReadonlySet<IssueType>) => void;
@@ -110,6 +123,7 @@ export function TreeView({
   onToggleFilter,
   search,
   onSearchChange,
+  scope,
   selected,
   onToggleIds,
   onAddFileFiltered,
@@ -119,11 +133,28 @@ export function TreeView({
 }: TreeViewProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
+  // Scope (the workspace chip) narrows FIRST, search filters WITHIN that
+  // subset — see this file's TreeViewProps.scope doc comment. Unlike search,
+  // scope IS threaded into fullTree/fullPolicyExpandedDirs below (the
+  // seed-delta auto-expand baseline): it's a coarse, click-driven boundary
+  // (Dashboard's workspace click / the chip's X), not a per-keystroke filter,
+  // so setting/clearing it should behave like "a different, real subtree is
+  // now in view" — the same way a genuine rescan does — rather than being
+  // lumped in with search's exemption. Concretely: clearing the chip must
+  // auto-expand a top-level dir the scope had been hiding, exactly as if a
+  // rescan had just introduced it; leaving scope out of the baseline (as
+  // search is) would instead leave it permanently collapsed the first time
+  // it reappears, since the one-time seed effect below never re-runs.
+  const scopedIssues = useMemo(() => filterByScope(issues, scope), [issues, scope]);
+
   // FilterChips' own live counts intentionally use the FULL type set (only
-  // search-scoped) so a chip shows "how many exist" even while it's off —
-  // the tree itself, below, uses the real `enabledTypes`.
-  const chipScopeIssues = useMemo(() => filterIssues(issues, ALL_CODE_TYPES, search), [issues, search]);
-  const filtered = useMemo(() => filterIssues(issues, enabledTypes, search), [issues, enabledTypes, search]);
+  // search/scope-scoped) so a chip shows "how many exist" even while it's off
+  // — the tree itself, below, uses the real `enabledTypes`.
+  const chipScopeIssues = useMemo(() => filterIssues(scopedIssues, ALL_CODE_TYPES, search), [scopedIssues, search]);
+  const filtered = useMemo(
+    () => filterIssues(scopedIssues, enabledTypes, search),
+    [scopedIssues, enabledTypes, search],
+  );
   const tree = useMemo(() => buildTree(filtered), [filtered]);
 
   // Lifted expand state (ui store) — see this file's top doc comment and
@@ -156,13 +187,15 @@ export function TreeView({
     if (!expandedDirsInitialized) initExpandedDirs(policyExpandedDirs);
   }, [expandedDirsInitialized, initExpandedDirs, policyExpandedDirs]);
 
-  // Seed-delta (Task 6, v0.3): built from the raw `issues` prop, NOT the
-  // locally-filtered `tree` above — search/chip changes must never look like
-  // "new paths appeared" (see this file's top doc comment). `fullPolicyDirs`
-  // is what a fresh seed would expand by default for the CURRENT underlying
-  // data; diffing it against what was seen last time isolates paths a rescan
-  // actually introduced.
-  const fullTree = useMemo(() => buildTree(issues), [issues]);
+  // Seed-delta (Task 6, v0.3): built from `scopedIssues` (scope-narrowed, but
+  // NOT search/enabledTypes-filtered) rather than the fully-filtered `tree`
+  // above — a search keystroke or a chip TYPE toggle must never look like
+  // "new paths appeared" (see this file's top doc comment), but a scope
+  // change deliberately does (see the scopedIssues comment above).
+  // `fullPolicyDirs` is what a fresh seed would expand by default for the
+  // CURRENT scoped data; diffing it against what was seen last time isolates
+  // paths a rescan — or a scope change — actually introduced.
+  const fullTree = useMemo(() => buildTree(scopedIssues), [scopedIssues]);
   const fullPolicyExpandedDirs = useMemo(() => {
     const policy = autoExpandDepth(fullTree, countFiles(fullTree));
     return policy === 'all' ? allDirPaths(fullTree) : topDirPaths(fullTree);
