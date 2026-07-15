@@ -101,6 +101,13 @@ function RootLayout() {
   // strictly scope(state) -> URL, so Back/Forward over `ws` can't kick off
   // surprise rescans and the two effects below never fight each other.
   const hydratedRef = useRef(false);
+  // True from the moment the boot effect fires its scoped rescan until that
+  // mutation settles. A REF, not a render value, on purpose: both effects run
+  // in the SAME commit when the first report settles, and on that commit every
+  // render snapshot (`busy`, `scanMutation.isPending`, a useIsMutating count)
+  // is still the pre-mutate false — only a ref written synchronously by the
+  // boot effect is visible to the reconcile effect running moments later.
+  const bootRescanRef = useRef(false);
 
   // Boot hydration (URL -> state, exactly once). Waits for the first SETTLED
   // report (report present AND not busy — the server's initial fire-and-forget
@@ -113,19 +120,43 @@ function RootLayout() {
     hydratedRef.current = true;
     const urlWs = ws ?? ALL_WORKSPACES;
     const scope = report.scope ?? ALL_WORKSPACES;
-    if (urlWs !== ALL_WORKSPACES && urlWs !== scope) scanMutation.mutate(ws);
+    if (urlWs !== ALL_WORKSPACES && urlWs !== scope) {
+      bootRescanRef.current = true;
+      // The mutate-level onSettled fires only after the mutation fully settles
+      // — and useScanMutation's hook-level onSettled (which the mutation
+      // AWAITS before dispatching its final state; see queries.ts/App.tsx's
+      // 401 comment for that mechanism) has refetched the report by then. So
+      // the first reconcile run after this clears sees the POST-rescan scope:
+      // a match on success (no-op), a genuine mismatch on failure (the URL
+      // snaps back to the scope that actually exists).
+      scanMutation.mutate(ws, {
+        onSettled: () => {
+          bootRescanRef.current = false;
+        },
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report, busy, ws]);
 
-  // Scope reconcile (state -> URL, mid-session). Once boot has settled and no
-  // scan is in flight, a report whose scope disagrees with the URL (a rescan
-  // that changed scope without touching the param — a sweep, an all-stale
-  // Rescan, a Re-run after the scope drifted) snaps the URL to match with a
-  // `replace` (no history spam). The `!busy` guard is what keeps this from
-  // fighting the boot scan or a switch's own in-flight scan: while either runs,
-  // scope hasn't caught up to the intended `ws` yet, so we wait it out.
+  // Scope reconcile (state -> URL, mid-session). Once boot has settled, a
+  // report whose scope disagrees with the URL (a rescan that changed scope
+  // without touching the param — a sweep, an all-stale Rescan, a Re-run after
+  // the scope drifted) snaps the URL to match with a `replace` (no history
+  // spam). Why this can't fight the two writers that also touch scope/ws:
+  //  - runSwitch (WorkspaceSwitcher) batches navigate+mutate in one handler,
+  //    so by the time this effect's deps next change, either the scan is in
+  //    flight (`busy` — waited out below; the mutation stays pending until
+  //    the report REFETCH lands, per useScanMutation's awaited onSettled) or
+  //    the fresh scope already matches the `ws` runSwitch wrote.
+  //  - the boot rescan above is the one writer that fires in the SAME commit
+  //    this effect first becomes eligible (hydratedRef just flipped true) —
+  //    and on that commit `busy` is still the render's stale false, so the
+  //    busy guard alone would let this strip `ws` here only for the boot
+  //    scan's landing to re-add it (a redundant URL flap). bootRescanRef,
+  //    set synchronously by the boot effect and cleared when its scan
+  //    settles, closes exactly that window.
   useEffect(() => {
-    if (!hydratedRef.current || busy || !report) return;
+    if (!hydratedRef.current || bootRescanRef.current || busy || !report) return;
     const urlWs = ws ?? ALL_WORKSPACES;
     const scope = report.scope ?? ALL_WORKSPACES;
     if (scope !== urlWs) {

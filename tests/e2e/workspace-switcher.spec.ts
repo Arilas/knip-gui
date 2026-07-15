@@ -24,7 +24,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { cp, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 // One above playwright.config.ts's shared PORT (4818) — this spec's server
 // is entirely separate from that shared instance.
@@ -63,6 +63,19 @@ function reapStrayServer(port: number): void {
       // already gone
     }
   }
+}
+
+// Reads /api/report directly (bypassing the client's 2s polling) using the
+// session token embedded in the served page — same pattern as
+// codepane-crash.spec.ts. Module-level so both tests below share it.
+async function readReport(page: Page): Promise<{ report: { scope?: string; issues: unknown[] } }> {
+  const token = await page.evaluate(
+    () => document.querySelector('meta[name="knip-gui-token"]')?.getAttribute('content'),
+  );
+  const res = await page.request.get(`${BASE_URL}/api/report`, {
+    headers: { 'x-knip-gui-token': token! },
+  });
+  return res.json();
 }
 
 async function waitForServer(url: string, timeoutMs = 20_000): Promise<void> {
@@ -117,16 +130,6 @@ test('workspace switcher scopes the scan and narrows both the report and the tre
   const switcher = page.getByTestId('workspace-switcher');
   await expect(switcher).toHaveAttribute('title', 'All workspaces');
 
-  async function readReport(): Promise<{ report: { scope?: string; issues: unknown[] } }> {
-    const token = await page.evaluate(
-      () => document.querySelector('meta[name="knip-gui-token"]')?.getAttribute('content'),
-    );
-    const res = await page.request.get(`${BASE_URL}/api/report`, {
-      headers: { 'x-knip-gui-token': token! },
-    });
-    return res.json();
-  }
-
   // Narrow to packages/app — owns none of the fixture's issues.
   await switcher.click();
   await page.getByPlaceholder('Search workspaces…').fill('app');
@@ -146,7 +149,7 @@ test('workspace switcher scopes the scan and narrows both the report and the tre
   // packages/lib, outside this scope.
   await expect(page.getByTestId('tree-file-packages/lib/extra.ts')).toHaveCount(0);
 
-  const scopedToApp = await readReport();
+  const scopedToApp = await readReport(page);
   expect(scopedToApp.report.scope).toBe('packages/app');
   expect(scopedToApp.report.issues).toEqual([]);
 
@@ -158,21 +161,24 @@ test('workspace switcher scopes the scan and narrows both the report and the tre
   await expect(switcher).toHaveAttribute('title', 'packages/lib');
   await expect(page.getByTestId('tree-file-packages/lib/extra.ts')).toBeVisible();
 
-  const scopedToLib = await readReport();
+  const scopedToLib = await readReport(page);
   expect(scopedToLib.report.scope).toBe('packages/lib');
   expect(scopedToLib.report.issues).toHaveLength(1);
   await expect(page).toHaveURL(/[?&]ws=packages(%2F|\/)lib/);
 
-  // Boot hydration (#14): reloading a scoped URL restores the scope — the
-  // root's one-shot ws effect reconciles the report to the URL's `ws` on a
-  // fresh load, so the tree stays narrowed and the switcher still reads the
-  // scoped workspace rather than snapping back to All.
+  // Reload with a scoped URL (#14): the `ws` param survives the reload and the
+  // UI still shows the scoped workspace. NOTE this does NOT exercise the boot
+  // RESCAN branch — the server persists the scoped report across the reload,
+  // so URL and report scope already agree and the boot effect latches without
+  // scanning. What this pins: the param is retained, and the switcher/tree
+  // read the scope from the (persisted) report rather than snapping back to
+  // All. The rescan branch is exercised by the deep-load test below.
   await page.reload();
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
   await expect(page).toHaveURL(/[?&]ws=packages(%2F|\/)lib/);
   await expect(switcher).toHaveAttribute('title', 'packages/lib', { timeout: 15_000 });
   await expect(page.getByTestId('tree-file-packages/lib/extra.ts')).toBeVisible();
-  expect((await readReport()).report.scope).toBe('packages/lib');
+  expect((await readReport(page)).report.scope).toBe('packages/lib');
 
   // Back to All workspaces — full report + tree restored.
   await switcher.click();
@@ -183,6 +189,54 @@ test('workspace switcher scopes the scan and narrows both the report and the tre
   // All/'.' removes the param entirely rather than serializing `ws=.`.
   await expect(page).toHaveURL(/^(?!.*[?&]ws=).*$/);
 
-  const scopedToAll = await readReport();
+  const scopedToAll = await readReport(page);
   expect(scopedToAll.report.scope).toBeUndefined();
+});
+
+test('deep-loading a URL whose ws differs from the server scope triggers the boot rescan to that workspace (#14)', async ({
+  page,
+}) => {
+  const switcher = page.getByTestId('workspace-switcher');
+
+  // Precondition: pin the server scope to packages/app via the UI so the
+  // deep-load below carries a GENUINELY different ws. The previous test
+  // happens to end on All workspaces (also a mismatch), but setting the scope
+  // explicitly keeps this test honest even if that test's ending changes.
+  await page.goto(BASE_URL);
+  await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
+  await switcher.click();
+  // The combobox's own cmdk input, NOT getByPlaceholder: this test starts on
+  // /dashboard, whose workspace-table search shares the same placeholder text.
+  await page.locator('[data-slot="command-input"]').fill('app');
+  await page.getByTestId('workspace-option-packages/app').click();
+  await expect(page.getByTestId('rerun-button')).toBeEnabled({ timeout: 15_000 });
+  await expect(switcher).toHaveAttribute('title', 'packages/app');
+  expect((await readReport(page)).report.scope).toBe('packages/app');
+
+  // Fresh page load carrying ws=packages/lib: the URL disagrees with the
+  // server's packages/app report, so the root layout's one-shot boot effect
+  // (router.tsx) must fire a scoped rescan to packages/lib — the branch the
+  // reload assertion in the previous test can't reach (there, URL and
+  // persisted scope already agree). The switcher label flipping to the URL's
+  // workspace is the user-visible proof the rescan ran and landed.
+  await page.goto(`${BASE_URL}/code?ws=${encodeURIComponent('packages/lib')}`);
+  await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
+  await expect(switcher).toHaveAttribute('title', 'packages/lib', { timeout: 30_000 });
+
+  // The URL kept the ws it was loaded with — the boot-rescan gate
+  // (bootRescanRef, router.tsx) keeps the reconcile effect from stripping it
+  // while the boot scan is still landing.
+  await expect(page).toHaveURL(/[?&]ws=packages(%2F|\/)lib/);
+
+  // The report really was rescanned to the URL's scope, and the scoped issue
+  // (packages/lib's one orphaned file) is in the tree.
+  expect((await readReport(page)).report.scope).toBe('packages/lib');
+  await expect(page.getByTestId('tree-file-packages/lib/extra.ts')).toBeVisible();
+
+  // Leave the shared server back on All workspaces so any future test in this
+  // file starts from the default scope, same courtesy as the previous test.
+  await switcher.click();
+  await page.getByTestId('workspace-option-.').click();
+  await expect(page.getByTestId('rerun-button')).toBeEnabled({ timeout: 15_000 });
+  await expect(switcher).toHaveAttribute('title', 'All workspaces');
 });
