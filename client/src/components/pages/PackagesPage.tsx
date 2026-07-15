@@ -1,25 +1,32 @@
-// Packages page (Task 4, UX overhaul): every dependency-shaped issue
-// (PACKAGE_TYPES — dependencies/devDependencies/optionalPeerDependencies/
-// binaries) grouped into one sortable shadcn Table per workspace (lib/
-// filters.ts's groupByWorkspace), with a FilterChips toolbar + search above
-// and a detail Sheet (workspace package.json, shiki-highlighted, scrolled to
-// the dependency's line when findable) on row click. Replaces App.tsx's Task
-// 1 TableView shim — see git history for the old flat, ungrouped table this
-// supersedes.
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+// Packages page (Task 4, UX overhaul; resizable split Task Q, #24): every
+// dependency-shaped issue (PACKAGE_TYPES — dependencies/devDependencies/
+// optionalPeerDependencies/binaries) grouped into one sortable shadcn Table
+// per workspace (lib/filters.ts's groupByWorkspace), with a FilterChips
+// toolbar + search above. Row click opens a resizable right-hand context
+// panel (same react-resizable-panels split primitives as CodePage.tsx, own
+// persistence key `knip-packages-split`) that REUSES CodePane — the
+// dependency's workspace package.json, badge, and auto-scroll/pulse all come
+// free from CodePane's existing single-issue rendering. This replaces the
+// previous Sheet-based detail view (see git history) since a persistent
+// split, not a modal overlay, is what lets the table stay usable (selection,
+// search, filters) while a row's context is open.
+import { useEffect, useMemo, useState } from 'react';
+import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
+import { X } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
 import { filterIssues, groupByWorkspace, isActionable, PACKAGE_TYPES, typeLabel, type WorkspaceGroup } from '../../lib/filters.js';
-import { highlightToHtml, langForPath } from '../../lib/highlighter.js';
+import { countMentions, findDeclarationLine } from '../../lib/mentions.js';
 import { idsToToggleForNode, nodeSelectionState } from '../../lib/tree.js';
 import { useFile } from '../../state/queries.js';
 import { useSelectionStore } from '../../state/selection.js';
 import { useUiStore } from '../../state/ui.js';
 import { SelectionDock } from '../SelectionDock.js';
+import { CodePane } from '../code/CodePane.js';
 import { FilterChips } from '../code/FilterChips.js';
 import { TriStateCheckbox, TYPE_BADGE_LABELS, unactionableReason } from '../code/TreeNode.js';
+import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet.js';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable.js';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js';
 
@@ -60,7 +67,65 @@ export function PackagesPage({ issues }: PackagesPageProps) {
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('symbol');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [detailIssue, setDetailIssue] = useState<Issue | null>(null);
+
+  // Preview panel state: which issue is shown, plus a LOCAL scroll-nonce
+  // (deliberately NOT the ui-store's openFileNonce, which belongs to the Code
+  // page's own file-open flow — see CodePane's doc comment on that prop).
+  // Bumped on every row click, including a re-click on the already-open row,
+  // so CodePane's scrollKey (`${filePath}#${nonce}`) changes and its
+  // auto-scroll/pulse effect re-fires even though filePath didn't change.
+  const [previewIssue, setPreviewIssue] = useState<Issue | null>(null);
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const previewPanelRef = usePanelRef();
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: 'knip-packages-split' });
+
+  function openPreview(issue: Issue) {
+    setPreviewIssue(issue);
+    setPreviewNonce((n) => n + 1);
+    // `resize(size)`, NOT `expand()` — confirmed live (a production build
+    // against the real e2e fixture, not just reading the .d.ts) that
+    // `expand()` on a panel whose CURRENT size is its mount-time
+    // `defaultSize={0}` (never a "real" prior size — see the ResizablePanel
+    // below) falls back to a broken ~20px sliver rather than a sane
+    // percentage: PanelImperativeHandle.expand()'s own fallback-to-minSize
+    // path reads `minSize={20}` as 20 PIXELS, even though that exact same
+    // numeric prop is unambiguously treated as 20 PERCENT everywhere else in
+    // this app (CodePage's own tree/pane split, proven live via
+    // resizable.spec.ts's drag test) — an inconsistency between how
+    // react-resizable-panels resolves `minSize` during normal drag-resize
+    // clamping vs. this one fallback-size computation, not something this
+    // app can rely on. `resize('35%')` sidesteps the ambiguity entirely: an
+    // explicit percentage STRING (PanelImperativeHandle.resize's own
+    // doc comment: numbers are pixels, unitless/`%`-suffixed strings are
+    // percent), so the target width is deterministic regardless of whatever
+    // "remembered prior size" bookkeeping expand() would otherwise consult.
+    previewPanelRef.current?.resize('35%');
+  }
+
+  function closePreview() {
+    setPreviewIssue(null);
+    previewPanelRef.current?.collapse();
+  }
+
+  // Escape closes the preview panel, same as it dismisses any other Radix
+  // overlay in this app (Sheet/Dialog/Popover) even though the panel itself
+  // is a plain resizable Panel, not a Radix primitive with that behavior
+  // built in. Scoped to a window listener only while a preview is actually
+  // open (not mounted otherwise) — this app has no OTHER global Escape
+  // handler today (use-global-shortcuts.ts's shortcutAction has none), so
+  // there's nothing here to collide with.
+  useEffect(() => {
+    if (!previewIssue) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') closePreview();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // `closePreview` is deliberately omitted from the dep array: it's a
+    // plain function of stable refs/setters (previewPanelRef, setPreviewIssue),
+    // re-created every render but never itself a reason to re-subscribe —
+    // `previewIssue` (open vs. closed) is the only real trigger here.
+  }, [previewIssue]);
 
   // FilterChips' own live counts intentionally use the FULL package type set
   // (only search-scoped) so a chip shows "how many exist" even while it's
@@ -85,59 +150,89 @@ export function PackagesPage({ issues }: PackagesPageProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold">Packages</h2>
-          <Input
-            type="search"
-            placeholder="Filter by name or path…"
-            aria-label="Filter packages by name or path"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="max-w-64"
-            data-testid="packages-search"
-          />
-        </div>
-
-        <div className="mb-3">
-          <FilterChips issues={chipScopeIssues} enabled={packagesFilters} onToggle={togglePackagesFilter} types={PACKAGE_TYPES} />
-        </div>
-
-        {groups.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {issues.some((i) => ALL_PACKAGE_TYPES.has(i.type))
-              ? 'No package issues match the current filters.'
-              : 'No package issues found — knip is happy.'}
-          </p>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-auto" data-testid="packages-scroll">
-            <div className="flex flex-col gap-6 pb-2">
-              {groups.map((group) => (
-                <WorkspaceTable
-                  key={group.workspace}
-                  group={group}
-                  selected={selected}
-                  onToggleIds={toggle}
-                  sortKey={sortKey}
-                  sortDir={sortDir}
-                  onSort={toggleSort}
-                  sortIndicator={sortIndicator}
-                  onRowClick={setDetailIssue}
-                />
-              ))}
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
+      >
+        <ResizablePanel id="packages-table" minSize={40} className="flex min-h-0 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Packages</h2>
+              <Input
+                type="search"
+                placeholder="Filter by name or path…"
+                aria-label="Filter packages by name or path"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="max-w-64"
+                data-testid="packages-search"
+              />
             </div>
+
+            <div className="mb-3">
+              <FilterChips issues={chipScopeIssues} enabled={packagesFilters} onToggle={togglePackagesFilter} types={PACKAGE_TYPES} />
+            </div>
+
+            {groups.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {issues.some((i) => ALL_PACKAGE_TYPES.has(i.type))
+                  ? 'No package issues match the current filters.'
+                  : 'No package issues found — knip is happy.'}
+              </p>
+            ) : (
+              <div className="min-h-0 flex-1 overflow-auto" data-testid="packages-scroll">
+                <div className="flex flex-col gap-6 pb-2">
+                  {groups.map((group) => (
+                    <WorkspaceTable
+                      key={group.workspace}
+                      group={group}
+                      selected={selected}
+                      onToggleIds={toggle}
+                      sortKey={sortKey}
+                      sortDir={sortDir}
+                      onSort={toggleSort}
+                      sortIndicator={sortIndicator}
+                      activeIssueId={previewIssue?.id}
+                      onRowClick={openPreview}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
+
+        {/* Fully collapsed (0-width) until a row is clicked — `defaultSize={0}`
+            drives the FIRST-EVER mount (no persisted layout yet); once a user
+            drags or the panel is expanded/collapsed via openPreview/
+            closePreview, useDefaultLayout persists that size the same way
+            CodePage's split does. */}
+        <ResizablePanel
+          id="packages-preview"
+          defaultSize={0}
+          minSize={20}
+          collapsible
+          collapsedSize={0}
+          panelRef={previewPanelRef}
+          className="flex min-h-0 flex-col"
+        >
+          {previewIssue && (
+            <PackagePreviewPanel
+              issue={previewIssue}
+              nonce={previewNonce}
+              selected={selected}
+              onToggleIds={toggle}
+              onClose={closePreview}
+            />
+          )}
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       <SelectionDock issues={issues} />
-
-      <PackageDetailSheet
-        issue={detailIssue}
-        onOpenChange={(open) => {
-          if (!open) setDetailIssue(null);
-        }}
-      />
     </div>
   );
 }
@@ -150,6 +245,7 @@ function WorkspaceTable({
   sortDir,
   onSort,
   sortIndicator,
+  activeIssueId,
   onRowClick,
 }: {
   group: WorkspaceGroup;
@@ -159,6 +255,7 @@ function WorkspaceTable({
   sortDir: SortDir;
   onSort: (key: SortKey) => void;
   sortIndicator: (key: SortKey) => string;
+  activeIssueId: string | undefined;
   onRowClick: (issue: Issue) => void;
 }) {
   const actionableIds = useMemo(() => group.issues.filter(isActionable).map((i) => i.id), [group.issues]);
@@ -203,15 +300,21 @@ function WorkspaceTable({
               return (
                 // Keyboard-operable row, same pattern as TreeNode.tsx's
                 // TreeNodeRow: role="button" + tabIndex=0 + Enter/Space both
-                // open the detail Sheet, so keyboard-only users can reach it
+                // open the preview panel, so keyboard-only users can reach it
                 // (a bare onClick on a <tr> is mouse-only). The checkbox cell
                 // swallows click AND keydown (Space bubbles as keydown)
-                // below, so checking a box never also opens the Sheet.
+                // below, so checking a box never also opens the panel.
+                // `data-state="selected"` piggybacks on ui/table.tsx's own
+                // `data-[state=selected]:bg-muted` TableRow styling — no new
+                // CSS needed for the active-row highlight; `aria-selected`
+                // alongside it for the same signal to assistive tech.
                 <TableRow
                   key={issue.id}
                   role="button"
                   tabIndex={0}
                   aria-label={`View ${issue.filePath.split('/').pop() ?? 'package.json'} for ${issue.symbol ?? issue.filePath}`}
+                  aria-selected={issue.id === activeIssueId}
+                  data-state={issue.id === activeIssueId ? 'selected' : undefined}
                   data-testid={`packages-row-${issue.type}-${issue.symbol ?? issue.id}`}
                   className="cursor-pointer outline-none focus-visible:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={() => onRowClick(issue)}
@@ -252,107 +355,123 @@ function WorkspaceTable({
   );
 }
 
-// Human sentence explaining what the issue means, shown in the Sheet above
-// the package.json content — typeLabel() alone ("Unused dependencies") reads
-// fine as a stat-tile caption but is too terse standing alone in a detail
-// view, so this spells out the specific dependency by name.
-function explanationFor(issue: Issue): string {
-  const name = issue.symbol ?? 'This entry';
-  switch (issue.type) {
-    case 'dependencies':
-      return `"${name}" is listed in dependencies, but nothing in this workspace imports it.`;
-    case 'devDependencies':
-      return `"${name}" is listed in devDependencies, but nothing in this workspace imports it.`;
-    case 'optionalPeerDependencies':
-      return `"${name}" is an optional peer dependency that nothing in this workspace uses.`;
-    case 'binaries':
-      return `"${name}" is a declared binary/script that nothing in this workspace runs.`;
-    default:
-      return typeLabel(issue.type);
-  }
-}
-
-function PackageDetailSheet({
+// The preview panel's body: a small header (type + symbol + filePath, close
+// button) above a REUSED CodePane showing just this one issue. CodePane
+// already owns the workspace package.json fetch, syntax highlight, gutter
+// badge, and auto-scroll/pulse-to-line for a single-issue `issues` array —
+// duplicating any of that here (as the old Sheet-based PackageDetailContent
+// used to) would just be a second, drifting copy of the same logic.
+function PackagePreviewPanel({
   issue,
-  onOpenChange,
+  nonce,
+  selected,
+  onToggleIds,
+  onClose,
 }: {
-  issue: Issue | null;
-  onOpenChange: (open: boolean) => void;
+  issue: Issue;
+  nonce: number;
+  selected: ReadonlySet<string>;
+  onToggleIds: (ids: string[]) => void;
+  onClose: () => void;
 }) {
-  return (
-    <Sheet open={issue !== null} onOpenChange={onOpenChange}>
-      <SheetContent data-testid="package-detail-sheet" className="w-full gap-0 sm:max-w-xl">
-        {issue && <PackageDetailContent issue={issue} />}
-      </SheetContent>
-    </Sheet>
-  );
-}
-
-function PackageDetailContent({ issue }: { issue: Issue }) {
+  // Own fetch (not just CodePane's internal one) so the declaration line can
+  // be located BEFORE handing the issue to CodePane — see the `line` comment
+  // below. Same query key as CodePane's own `useFile(filePath)` call
+  // (state/queries.ts's fileQueryKey), so react-query dedupes this to a
+  // cache hit riding on whichever of the two fetches lands first, never a
+  // second network request.
   const fileQuery = useFile(issue.filePath);
   const content = fileQuery.data?.content;
-  const lang = langForPath(issue.filePath);
 
-  const highlightQuery = useQuery({
-    queryKey: ['highlight', issue.filePath, lang, content] as const,
-    queryFn: async () => {
-      if (!lang || content === undefined) throw new Error('highlight query ran without a language/content');
-      return highlightToHtml(content, issue.filePath);
-    },
-    enabled: lang !== undefined && content !== undefined,
-    retry: false,
-  });
-
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Scrolls to (and highlights) the dependency's line once the highlighted
-  // HTML is in the DOM. Dependency-shaped issues carry no line/col from knip
-  // (see lib/highlighter.ts's issueLines doc comment — the same is true
-  // here), so the only way to locate the right spot is a plain string search
-  // over the RAW file content (not the tokenized HTML, where a naive search
-  // would land mid-span) for a quoted reference to the dependency name; the
-  // resulting line INDEX then maps 1:1 to the rendered `.line` spans, same
-  // indexing CodePane.tsx's gutter-marker measurement relies on.
-  useLayoutEffect(() => {
-    const container = containerRef.current;
-    const html = highlightQuery.data;
-    if (!container || !html || content === undefined || !issue.symbol) return;
-    const targetLine = content.split('\n').findIndex((line) => line.includes(`"${issue.symbol}"`));
-    if (targetLine === -1) return;
-    const lineEls = container.querySelectorAll<HTMLElement>('.line');
-    const target = lineEls[targetLine];
-    if (!target) return;
-    target.classList.add('code-pane-flagged-line');
-    target.scrollIntoView({ block: 'center' });
-  }, [content, highlightQuery.data, issue.symbol]);
+  // Dependency-shaped issues (every type PackagesPage shows) carry NO line/
+  // col/pos from knip — confirmed by running `knip --reporter json` directly
+  // against tests/fixtures/single: the dependencies entry is bare
+  // `{"name":"left-pad"}`, no position field (matches normalize.ts's
+  // symbolsFor doc comment, despite this task's own brief assuming a `line`
+  // was already present). Without a `line`, CodePane's gutter-marker auto-
+  // scroll/pulse — entirely keyed off `issue.line` (lib/highlighter.ts's
+  // issueLines) — never fires, and CodePane falls back to its line-less
+  // whole-file banner alone. Locating the declaration line here (a tested
+  // pure helper — lib/mentions.ts's findDeclarationLine, the same plain-
+  // string-over-raw-content technique the pre-Task-Q Sheet-based preview
+  // used) and handing CodePane a CLONE of the issue with that `line` filled
+  // in is what lets CodePane's existing badge/auto-scroll/pulse machinery do
+  // the rest for free — undefined when the name can't be found (or content
+  // hasn't loaded yet) leaves the issue unchanged, so CodePane's own
+  // whole-file-banner fallback still applies rather than crashing.
+  const line = content !== undefined && issue.symbol ? findDeclarationLine(content, issue.symbol) : undefined;
+  const codePaneIssue = line === undefined ? issue : { ...issue, line };
 
   return (
     <>
-      <SheetHeader>
-        <SheetTitle>{issue.symbol ?? issue.filePath}</SheetTitle>
-        <SheetDescription>{explanationFor(issue)}</SheetDescription>
-      </SheetHeader>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pb-4">
-        <p className="mb-1.5 shrink-0 truncate font-mono text-xs text-muted-foreground" title={issue.filePath}>
-          {issue.filePath}
-        </p>
-        {fileQuery.isLoading && <p className="text-sm text-muted-foreground">Loading {issue.filePath}…</p>}
-        {fileQuery.error != null && <p className="text-sm text-destructive">Failed to load {issue.filePath}.</p>}
-        {highlightQuery.data ? (
-          <div
-            ref={containerRef}
-            data-testid="package-detail-code"
-            className="code-pane-html min-h-0 flex-1 overflow-auto rounded border border-border"
-            dangerouslySetInnerHTML={{ __html: highlightQuery.data }}
-          />
-        ) : (
-          content !== undefined && (
-            <pre className="min-h-0 flex-1 overflow-auto whitespace-pre rounded border border-border p-2 font-mono text-xs">
-              {content}
-            </pre>
-          )
-        )}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs text-muted-foreground">
+            {typeLabel(issue.type)}
+            {issue.symbol && <span className="font-medium text-foreground"> · {issue.symbol}</span>}
+          </p>
+          <p className="truncate font-mono text-xs text-muted-foreground" title={issue.filePath}>
+            {issue.filePath}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close preview panel"
+          data-testid="packages-preview-close"
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </Button>
       </div>
+      {/* Every issue type PackagesPage ever passes in here is one of
+          PACKAGE_TYPES (dependencies/devDependencies/optionalPeerDependencies/
+          binaries) — this page never shows anything else — but the check is
+          spelled out rather than assumed, since it's the actual gate the
+          brief specifies ("dependency-kind rows only") and keeps this
+          correct if a non-dependency issue type is ever routed through this
+          same panel component in the future. */}
+      {ALL_PACKAGE_TYPES.has(issue.type) && <MentionsLine content={content} name={issue.symbol} />}
+      <CodePane
+        filePath={issue.filePath}
+        issues={[codePaneIssue]}
+        selected={selected}
+        onToggleIds={onToggleIds}
+        openFileNonce={nonce}
+      />
     </>
+  );
+}
+
+// "Other mentions" line: how many times this dependency's name appears
+// elsewhere in the same file, beyond the one occurrence CodePane's badge now
+// points at (via the synthesized `line` above). Takes already-fetched
+// `content` rather than fetching again — PackagePreviewPanel already has it
+// (needed for findDeclarationLine), so this stays a pure render given props,
+// no query of its own. Silently renders nothing while loading or on a fetch
+// failure (413/404/etc.) — an "other mentions" caption for content that
+// isn't actually on screen would be confusing, and CodePane's own error/
+// loading states already explain why.
+function MentionsLine({ content, name }: { content: string | undefined; name: string | undefined }) {
+  if (content === undefined || !name) return null;
+
+  // -1: CodePane's badge already accounts for exactly one occurrence (the
+  // flagged declaration line), so "other" mentions excludes it. Clamped at 0
+  // rather than trusting the subtraction blindly — if the declaration itself
+  // doesn't match countMentions' exact-token rule for some reason (e.g. knip
+  // ever emits a dependency name that ISN'T literally quoted verbatim in the
+  // file, such as a case-normalized match), this must not surface a
+  // misleading negative count.
+  const other = Math.max(0, countMentions(content, name) - 1);
+  return (
+    <p
+      className="shrink-0 border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
+      data-testid="packages-preview-mentions"
+    >
+      {other === 0
+        ? `No other mentions of "${name}" in this file.`
+        : `${other} other mention${other === 1 ? '' : 's'} of "${name}" in this file.`}
+    </p>
   );
 }

@@ -22,20 +22,23 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
   const row = page.locator('[data-testid^="packages-row-"][data-testid$="-left-pad"]');
   await expect(row).toBeVisible();
 
-  // Keyboard accessibility pin (Task 4 review finding): the row must be
-  // reachable and operable without a mouse — focusable (tabindex=0, exposed
-  // as a button) and Enter must open the detail Sheet. Playwright key events
-  // are trusted, unlike the Browser pane's synthetic dispatch. Runs BEFORE
-  // the ignore flow below, since that flow removes this row entirely (and
-  // this spec runs before any later packages spec would — file order).
+  // Keyboard accessibility pin (Task 4 review finding, still true post-
+  // Task Q's resizable-split preview panel): the row must be reachable and
+  // operable without a mouse — focusable (tabindex=0, exposed as a button)
+  // and Enter must open the preview panel (CodePane, Task Q/#24). Playwright
+  // key events are trusted, unlike the Browser pane's synthetic dispatch.
+  // Runs BEFORE the ignore flow below, since that flow removes this row
+  // entirely (and this spec runs before any later packages spec would —
+  // file order).
   await expect(row).toHaveAttribute('role', 'button');
   await expect(row).toHaveAttribute('tabindex', '0');
   await row.press('Enter');
-  const sheet = page.getByTestId('package-detail-sheet');
-  await expect(sheet).toBeVisible();
-  await expect(sheet).toContainText('left-pad');
+  const preview = page.getByTestId('packages-preview');
+  await expect(preview).toContainText('left-pad');
   await page.keyboard.press('Escape');
-  await expect(sheet).toHaveCount(0);
+  await expect
+    .poll(async () => (await preview.boundingBox())?.width ?? -1)
+    .toBe(0);
 
   await row.getByRole('checkbox').check();
 
