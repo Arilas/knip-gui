@@ -92,4 +92,39 @@ test('clicking the left-pad row opens the preview panel at its line; close colla
   await expect(row).toHaveAttribute('aria-selected', 'true');
   await expect(preview).toContainText('left-pad');
   await expect(badge).toBeVisible();
+
+  // Persisted-layout guard (task Q review, IMPORTANT 1): useDefaultLayout
+  // persists EVERY layout commit, including openPreview's programmatic
+  // resize('35%') — so without PackagesPage's mount-time force-collapse, a
+  // reload here would rehydrate the right panel open while previewIssue
+  // (plain React state) is null: an empty pane. First prove the hazardous
+  // state actually exists in storage — a nonzero persisted width for
+  // packages-preview (the write is debounced ~100ms, hence the poll; key
+  // format per resizable.spec.ts's doc comment: `react-resizable-panels:<id>`
+  // holding `{ [panelId]: sizePercent }`) — otherwise this reload step could
+  // silently pass against empty storage without exercising the guard at all.
+  await expect
+    .poll(async () => {
+      const raw = await page.evaluate(() => localStorage.getItem('react-resizable-panels:knip-packages-split'));
+      if (!raw) return 0;
+      return (JSON.parse(raw) as Record<string, number>)['packages-preview'] ?? 0;
+    })
+    .toBeGreaterThan(1);
+
+  await page.reload();
+  await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
+  // Reload of /packages lands back on Packages directly (URL routing, #14);
+  // the nav re-click is a harmless no-op kept so this spec doesn't assume
+  // the reload URL — same convention as resizable.spec.ts.
+  await page.getByTestId('nav-packages').click();
+
+  // Collapsed-by-default must have won over the persisted open width.
+  await expect(row).toBeVisible();
+  await expect.poll(async () => (await preview.boundingBox())?.width ?? -1).toBe(0);
+
+  // ...and a fresh row click still opens it (the guard didn't wedge the
+  // panel shut for the session).
+  await row.click();
+  await expect.poll(async () => (await preview.boundingBox())?.width ?? 0).toBeGreaterThan(0);
+  await expect(preview).toContainText('left-pad');
 });

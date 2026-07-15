@@ -34,6 +34,11 @@ test('select left-pad dependency, ignore, preview shows knip.json diff, rescan c
   await expect(row).toHaveAttribute('tabindex', '0');
   await row.press('Enter');
   const preview = page.getByTestId('packages-preview');
+  // toBeVisible BEFORE toContainText (task Q review, MINOR 4): textContent
+  // assertions pass against a zero-width element — exactly the sliver-bug
+  // class the resize('35%') fix in PackagesPage exists for — so visibility
+  // (nonzero box) must be pinned in its own right, not implied.
+  await expect(preview).toBeVisible();
   await expect(preview).toContainText('left-pad');
   await page.keyboard.press('Escape');
   await expect

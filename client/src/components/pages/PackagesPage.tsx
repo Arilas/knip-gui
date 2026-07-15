@@ -15,7 +15,7 @@ import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { X } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
 import { filterIssues, groupByWorkspace, isActionable, PACKAGE_TYPES, typeLabel, type WorkspaceGroup } from '../../lib/filters.js';
-import { countMentions, findDeclarationLine } from '../../lib/mentions.js';
+import { countMentions, findDeclarationLine, PACKAGE_JSON_SECTIONS } from '../../lib/mentions.js';
 import { idsToToggleForNode, nodeSelectionState } from '../../lib/tree.js';
 import { useFile } from '../../state/queries.js';
 import { useSelectionStore } from '../../state/selection.js';
@@ -82,30 +82,45 @@ export function PackagesPage({ issues }: PackagesPageProps) {
   function openPreview(issue: Issue) {
     setPreviewIssue(issue);
     setPreviewNonce((n) => n + 1);
-    // `resize(size)`, NOT `expand()` — confirmed live (a production build
-    // against the real e2e fixture, not just reading the .d.ts) that
-    // `expand()` on a panel whose CURRENT size is its mount-time
-    // `defaultSize={0}` (never a "real" prior size — see the ResizablePanel
-    // below) falls back to a broken ~20px sliver rather than a sane
-    // percentage: PanelImperativeHandle.expand()'s own fallback-to-minSize
-    // path reads `minSize={20}` as 20 PIXELS, even though that exact same
-    // numeric prop is unambiguously treated as 20 PERCENT everywhere else in
-    // this app (CodePage's own tree/pane split, proven live via
-    // resizable.spec.ts's drag test) — an inconsistency between how
-    // react-resizable-panels resolves `minSize` during normal drag-resize
-    // clamping vs. this one fallback-size computation, not something this
-    // app can rely on. `resize('35%')` sidesteps the ambiguity entirely: an
-    // explicit percentage STRING (PanelImperativeHandle.resize's own
-    // doc comment: numbers are pixels, unitless/`%`-suffixed strings are
-    // percent), so the target width is deterministic regardless of whatever
-    // "remembered prior size" bookkeeping expand() would otherwise consult.
-    previewPanelRef.current?.resize('35%');
+    const panel = previewPanelRef.current;
+    if (!panel || !panel.isCollapsed()) return;
+    // `resize('35%')`, NOT `expand()` — observed live (production build,
+    // real e2e fixture): expand() on a panel sitting at its collapsedSize
+    // with no remembered prior size — exactly the state the mount-collapse
+    // effect below guarantees before the first open — takes its
+    // fallback-to-minSize path, and bare-number sizes are uniformly PIXELS
+    // in this library (react-resizable-panels.d.ts documents this for
+    // minSize/defaultSize alike), so `minSize={20}` produced a useless
+    // ~20px sliver. CodePage's split never hits that path because its
+    // panels mount at a nonzero defaultSize, so expand() there always has a
+    // real size to restore. An explicit percentage STRING is unambiguous
+    // per PanelImperativeHandle.resize's contract. Guarded on isCollapsed:
+    // a re-click while the panel is already open only bumps the nonce and
+    // must not stomp a width the user has dragged to.
+    panel.resize('35%');
   }
 
   function closePreview() {
     setPreviewIssue(null);
     previewPanelRef.current?.collapse();
   }
+
+  // Collapsed-by-default must survive PERSISTED layouts, not just the
+  // first-ever mount: useDefaultLayout persists every layout commit —
+  // including openPreview's programmatic resize('35%') — so after a preview
+  // has ever been opened, the next mount would rehydrate the right panel at
+  // ~35% while `previewIssue` (plain React state, never persisted) is still
+  // null: an empty pane with no header or close button. Force-collapse on
+  // mount instead; `previewIssue` is definitionally null at mount, so this
+  // needs no condition. collapse() is a no-op when the panel is already
+  // collapsed (PanelImperativeHandle contract), i.e. the genuinely-fresh
+  // first mount. Drag-resize persistence for an OPEN panel is unaffected
+  // within a session — this only runs on mount. Pinned by
+  // tests/e2e/context-preview.spec.ts's reload step.
+  useEffect(() => {
+    previewPanelRef.current?.collapse();
+    // previewPanelRef is a stable ref object — mount-only on purpose.
+  }, []);
 
   // Escape closes the preview panel, same as it dismisses any other Radix
   // overlay in this app (Sheet/Dialog/Popover) even though the panel itself
@@ -206,11 +221,12 @@ export function PackagesPage({ issues }: PackagesPageProps) {
 
         <ResizableHandle withHandle />
 
-        {/* Fully collapsed (0-width) until a row is clicked — `defaultSize={0}`
-            drives the FIRST-EVER mount (no persisted layout yet); once a user
-            drags or the panel is expanded/collapsed via openPreview/
-            closePreview, useDefaultLayout persists that size the same way
-            CodePage's split does. */}
+        {/* Fully collapsed (0-width) until a row is clicked: `defaultSize={0}`
+            covers the first-ever mount (no persisted layout yet), and the
+            mount-collapse effect above covers every LATER mount, where
+            useDefaultLayout would otherwise rehydrate a persisted open width
+            with no previewIssue to fill it. Drag-resizing an open panel
+            still persists within the session, same as CodePage's split. */}
         <ResizablePanel
           id="packages-preview"
           defaultSize={0}
@@ -392,14 +408,19 @@ function PackagePreviewPanel({
   // scroll/pulse — entirely keyed off `issue.line` (lib/highlighter.ts's
   // issueLines) — never fires, and CodePane falls back to its line-less
   // whole-file banner alone. Locating the declaration line here (a tested
-  // pure helper — lib/mentions.ts's findDeclarationLine, the same plain-
-  // string-over-raw-content technique the pre-Task-Q Sheet-based preview
-  // used) and handing CodePane a CLONE of the issue with that `line` filled
-  // in is what lets CodePane's existing badge/auto-scroll/pulse machinery do
-  // the rest for free — undefined when the name can't be found (or content
-  // hasn't loaded yet) leaves the issue unchanged, so CodePane's own
-  // whole-file-banner fallback still applies rather than crashing.
-  const line = content !== undefined && issue.symbol ? findDeclarationLine(content, issue.symbol) : undefined;
+  // pure helper — lib/mentions.ts's findDeclarationLine, scoped via
+  // PACKAGE_JSON_SECTIONS to the issue type's OWN package.json section so a
+  // name listed in both dependencies and devDependencies highlights the
+  // right one; binaries pass undefined = whole-file scan) and handing
+  // CodePane a CLONE of the issue with that `line` filled in is what lets
+  // CodePane's existing badge/auto-scroll/pulse machinery do the rest for
+  // free — undefined when the name can't be found (or content hasn't loaded
+  // yet) leaves the issue unchanged, so CodePane's own whole-file-banner
+  // fallback still applies rather than crashing.
+  const line =
+    content !== undefined && issue.symbol
+      ? findDeclarationLine(content, issue.symbol, PACKAGE_JSON_SECTIONS[issue.type])
+      : undefined;
   const codePaneIssue = line === undefined ? issue : { ...issue, line };
 
   return (
