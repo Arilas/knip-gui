@@ -136,6 +136,54 @@ describe('findDeclarationLine', () => {
     const content = '{ "dependencies": { "other": "1.0.0" }, "left-pad": "9.9.9" }';
     expect(findDeclarationLine(content, 'left-pad', ['dependencies'])).toBeUndefined();
   });
+
+  // Reviewer probes (task Q review 2): the first-match anchor with no
+  // value-shape awareness was empirically hijacked by keys that merely LOOK
+  // like the section. An anchor only counts if its value opens an object;
+  // otherwise the search moves FORWARD to the next candidate rather than
+  // declaring the section absent-or-found.
+  it('is not hijacked by a nested decoy key whose value is a string (probe A)', () => {
+    // "dependencies" exists only as a scripts entry; the name exists only in
+    // devDependencies. The old scan anchored on the decoy, never flipped
+    // `entered` (no `{` after it), and leaked the devDependencies match.
+    const content = [
+      '{',
+      '  "scripts": {',
+      '    "dependencies": "node check-deps.js"',
+      '  },',
+      '  "devDependencies": {',
+      '    "left-pad": "1.3.0"',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(findDeclarationLine(content, 'left-pad', ['dependencies'])).toBeUndefined();
+  });
+
+  it('treats a top-level section with a non-object value as no section (probe B)', () => {
+    const content = ['{', '  "dependencies": "oops-not-an-object",', '  "devDependencies": { "left-pad": "1.3.0" }', '}'].join(
+      '\n',
+    );
+    expect(findDeclarationLine(content, 'left-pad', ['dependencies'])).toBeUndefined();
+  });
+
+  it('skips a decoy anchor and scans the REAL later section (probe C)', () => {
+    const content = [
+      '{', //                                        line 1
+      '  "scripts": {', //                           line 2
+      '    "dependencies": "node check-deps.js"', // line 3 — decoy
+      '  },', //                                     line 4
+      '  "dependencies": {', //                      line 5 — real section
+      '    "left-pad": "1.3.0"', //                  line 6
+      '  }', //                                      line 7
+      '}',
+    ].join('\n');
+    expect(findDeclarationLine(content, 'left-pad', ['dependencies'])).toBe(6);
+  });
+
+  it('accepts the section object opening on the line after the key', () => {
+    const content = ['{', '  "dependencies":', '    {', '      "left-pad": "1.3.0"', '    }', '}'].join('\n');
+    expect(findDeclarationLine(content, 'left-pad', ['dependencies'])).toBe(4);
+  });
 });
 
 describe('PACKAGE_JSON_SECTIONS', () => {

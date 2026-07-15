@@ -10,7 +10,7 @@
 // previous Sheet-based detail view (see git history) since a persistent
 // split, not a modal overlay, is what lets the table stay usable (selection,
 // search, filters) while a row's context is open.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { X } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
@@ -117,7 +117,10 @@ export function PackagesPage({ issues }: PackagesPageProps) {
   // first mount. Drag-resize persistence for an OPEN panel is unaffected
   // within a session — this only runs on mount. Pinned by
   // tests/e2e/context-preview.spec.ts's reload step.
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: collapse must land before the browser
+  // paints the hydrated layout, or a persisted-open remount flashes the
+  // empty pane for a frame.
+  useLayoutEffect(() => {
     previewPanelRef.current?.collapse();
     // previewPanelRef is a stable ref object — mount-only on purpose.
   }, []);

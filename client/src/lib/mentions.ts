@@ -66,17 +66,24 @@ export const PACKAGE_JSON_SECTIONS: Partial<Record<IssueType, readonly string[]>
  *
  * Same exact-token double-quoted matching rule as countMentions (see its
  * comment). When `sections` is given (PACKAGE_JSON_SECTIONS[issue.type]),
- * the scan is CONFINED to those top-level objects: find the `"section":`
- * header, then walk brace depth from its value's opening `{` until it
- * returns to zero, matching the name only inside that region — including the
- * header line itself after the key (single-line sections like the e2e
- * fixture's `"dependencies": { "left-pad": "1.3.0" }`) and EXCLUDING
- * anything on the closing line after the section's final `}`. No
- * fall-through to a whole-file match when a section scan misses: a wrong
- * line is worse than no line (CodePane just shows its banner instead).
- * Accepted limitation, documented rather than handled: literal `{`/`}`
- * characters inside JSON string values would skew the depth count — they
- * effectively never occur in dependency names/semver ranges.
+ * the scan is CONFINED to those objects: a candidate `"section":` key only
+ * ANCHORS the scan if its VALUE opens an object — first non-whitespace after
+ * the colon is `{`, on the same line or after whitespace-only continuation
+ * (task Q review 2: a nested decoy like `"scripts": { "dependencies": "node
+ * check-deps.js" }`, or a non-object section value, previously hijacked the
+ * anchor and — since no brace ever opened — leaked token matches from
+ * ANYWHERE later in the file). A candidate that fails the shape check is
+ * skipped and the search continues FORWARD to the next candidate, so a
+ * decoy can't shadow a real later section either. From the accepted anchor's
+ * opening `{`, brace depth is walked until it returns to zero, matching the
+ * name only inside that region — including the brace's own line (single-line
+ * sections like the e2e fixture's `"dependencies": { "left-pad": "1.3.0" }`)
+ * and EXCLUDING anything after the section's closing `}`. No fall-through to
+ * a whole-file match when a section scan misses: a wrong line is worse than
+ * no line (CodePane just shows its banner instead). Accepted limitation,
+ * documented rather than handled: literal `{`/`}` characters inside JSON
+ * string values would skew the depth count — they effectively never occur
+ * in dependency names/semver ranges.
  */
 export function findDeclarationLine(
   content: string,
@@ -94,43 +101,70 @@ export function findDeclarationLine(
 
   for (const section of sections) {
     const header = `"${section}"`;
-    // The header must be a KEY (`"deps"  :`), not a value — and the exact
-    // quoted token means `"dependencies"` can never match inside
-    // `"devDependencies"` (the `d` there is preceded by `D`, not `"`).
-    const start = lines.findIndex((line) => {
-      const at = line.indexOf(header);
-      return at !== -1 && /^\s*:/.test(line.slice(at + header.length));
-    });
-    if (start === -1) continue;
+    // Walk every candidate anchor in order, not just the first: nested keys
+    // that merely LOOK like the section (a scripts entry named
+    // "dependencies") fail the value-shape check below and must not shadow a
+    // real section further down. The exact quoted token also means
+    // `"dependencies"` can never match inside `"devDependencies"` (the `d`
+    // there is preceded by `D`, not `"`).
+    for (let start = 0; start < lines.length; start++) {
+      const headerLine = lines[start]!;
+      const at = headerLine.indexOf(header);
+      if (at === -1) continue;
+      // Must be a KEY: optional whitespace then `:` right after the token.
+      const colon = /^\s*:/.exec(headerLine.slice(at + header.length));
+      if (!colon) continue;
 
-    let depth = 0;
-    let entered = false;
-    for (let i = start; i < lines.length; i++) {
-      const line = lines[i]!;
-      // On the header line only the part AFTER the key participates —
-      // anything before it belongs to a different key (`"name": "left-pad"`
-      // preceding the dependencies key must not match).
-      const from = i === start ? line.indexOf(header) + header.length : 0;
-      // Walk braces to find where (if anywhere) on this line the section
-      // closes; the name is only matched up to that point.
-      let end = line.length;
-      let closed = false;
-      for (let j = from; j < line.length; j++) {
-        const ch = line[j];
-        if (ch === '{') {
-          depth += 1;
-          entered = true;
-        } else if (ch === '}') {
-          depth -= 1;
-          if (entered && depth === 0) {
-            end = j;
-            closed = true;
-            break;
+      // Anchor shape check: the key's value must OPEN AN OBJECT. Skip
+      // whitespace after the colon — across whitespace-only line breaks too
+      // (`"dependencies":\n  {`) — and require the first real character to
+      // be `{`. Anything else (string, number, array…) is not a section;
+      // keep searching for the next candidate.
+      let braceLine = start;
+      let bracePos = at + header.length + colon[0].length;
+      while (braceLine < lines.length) {
+        const l = lines[braceLine]!;
+        while (bracePos < l.length && /\s/.test(l[bracePos]!)) bracePos += 1;
+        if (bracePos < l.length) break;
+        braceLine += 1;
+        bracePos = 0;
+      }
+      if (braceLine >= lines.length || lines[braceLine]![bracePos] !== '{') continue;
+
+      // Real section found: walk brace depth from its opening `{`. Matching
+      // starts AT the brace (`entered` gates it — nothing before the object
+      // actually opens can match, per review), and the region never includes
+      // anything before the brace on its own line (a `"name": "left-pad"`
+      // key preceding a single-line section) or after the closing `}`.
+      let depth = 0;
+      let entered = false;
+      for (let i = braceLine; i < lines.length; i++) {
+        const line = lines[i]!;
+        const from = i === braceLine ? bracePos : 0;
+        let end = line.length;
+        let closed = false;
+        for (let j = from; j < line.length; j++) {
+          const ch = line[j];
+          if (ch === '{') {
+            depth += 1;
+            entered = true;
+          } else if (ch === '}') {
+            depth -= 1;
+            if (entered && depth === 0) {
+              end = j;
+              closed = true;
+              break;
+            }
           }
         }
+        if (entered && line.slice(from, end).includes(token)) return i + 1;
+        if (closed) break;
       }
-      if (line.slice(from, end).includes(token)) return i + 1;
-      if (closed) break;
+      // A validated section was scanned and the name wasn't in it. Stop for
+      // this key — valid JSON can't have a second section under the same
+      // top-level key, and falling through to later text would reintroduce
+      // exactly the out-of-section leak this scan exists to prevent.
+      break;
     }
   }
   return undefined;
