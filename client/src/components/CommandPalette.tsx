@@ -17,7 +17,7 @@
 import { useMemo } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { Check, EyeOff, FileCode2, Filter, History, LayoutDashboard, Package, RefreshCw } from 'lucide-react';
-import { useWorkspaceSwitch } from '../hooks/use-workspace-switch.js';
+import { ALL_WORKSPACES, useWorkspaceSwitch } from '../hooks/use-workspace-switch.js';
 import { CODE_TYPES, PACKAGE_TYPES, typeLabel } from '../lib/filters.js';
 import { cn } from '../lib/utils.js';
 import { useBusy, useReport, useScanMutation } from '../state/queries.js';
@@ -37,8 +37,6 @@ export interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
-
-const ALL_WORKSPACES = '.';
 
 const PAGES = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },

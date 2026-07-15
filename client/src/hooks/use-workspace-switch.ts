@@ -20,7 +20,7 @@ import { useSelectionStore } from '../state/selection.js';
 // convention (absent/'.' = unscoped).
 export const ALL_WORKSPACES = '.';
 
-export interface WorkspaceEntry {
+interface WorkspaceEntry {
   value: string;
   label: string;
   count: number;

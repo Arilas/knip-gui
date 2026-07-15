@@ -46,13 +46,12 @@ import { SetupScreen } from './components/pages/SetupScreen.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar.js';
 import { useGlobalShortcuts } from './hooks/use-global-shortcuts.js';
+// ALL_WORKSPACES ('.') is the shared "whole project" scope convention —
+// defined once next to the workspace-switch flow it belongs to.
+import { ALL_WORKSPACES } from './hooks/use-workspace-switch.js';
 import { useBusy, useReport, useScanMutation } from './state/queries.js';
 import { useSelectionStore } from './state/selection.js';
 import { useUiStore } from './state/ui.js';
-
-// The scope value meaning "the whole project" — matches Report.scope's own
-// convention (absent/'.' = unscoped) and the workspace switcher's ALL_WORKSPACES.
-const ALL_WORKSPACES = '.';
 
 // A knip-not-found error means knip can't even be resolved from this project; a
 // knip-failed error with exitCode >= 2 means knip itself exited fatally. Either
