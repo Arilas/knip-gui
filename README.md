@@ -73,7 +73,9 @@ checklist pre-checks exactly the files knip-gui itself just touched, leaving
 anything else in your working tree unchecked (and untouched — commits are
 scoped to only the checked paths).
 
-See [docs/backlog.md](docs/backlog.md) for known rough edges and future candidates.
+Known rough edges and future candidates are tracked in
+[GitHub Issues](https://github.com/Arilas/knip-gui/issues) — bug reports and
+feature requests welcome.
 
 ## Development
 
