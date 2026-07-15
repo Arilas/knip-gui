@@ -5,12 +5,14 @@
 // (a UX affordance — the scan and sweep endpoints are ALSO latched server-side,
 // so this is defense in depth, not the only guard).
 import { useIsMutating, useMutation, useQuery, useQueryClient, type Mutation } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import type { IgnoreEntry } from '../../../src/ignore/config-writer.js';
 import {
   getFile,
   getGitStatus,
   getIgnores,
   getReport,
+  getStatus,
   postFixApply,
   postFixPreview,
   postGitBranch,
@@ -22,6 +24,8 @@ import {
   postScan,
   postSweep,
   type FixSelection,
+  type ReportResponse,
+  type StatusResponse,
   type SweepOptions,
 } from '../api.js';
 
@@ -35,13 +39,54 @@ export const ignoresQueryKey = ['ignores'] as const;
 // fix/ignore apply, which trigger a background rescan).
 const BUSY_MUTATION_KEYS = ['scan', 'sweep', 'fixApply', 'ignoreApply', 'ignoreRemoveApply'];
 
+export const statusQueryKey = ['status'] as const;
+
+// The 2s scan poll now hits the slim /api/status instead of re-downloading
+// the full report every tick (#30). useReportStatusSync (mounted once in
+// RootLayout) invalidates the report query when status/scannedAt move, so
+// useReport itself no longer polls.
+export function useStatus() {
+  return useQuery({
+    queryKey: statusQueryKey,
+    queryFn: getStatus,
+    refetchInterval: (query) => (query.state.data?.status === 'scanning' ? 2000 : false),
+  });
+}
+
+/**
+ * True when the cached report no longer matches what /api/status reports —
+ * either the lifecycle status moved (ready -> scanning, scanning -> error, …)
+ * or a new scan landed (scannedAt changed). No cached report yet is NOT out
+ * of sync: the report query's own first fetch covers that.
+ */
+export function reportOutOfSync(
+  status: StatusResponse | undefined,
+  cached: ReportResponse | undefined,
+): boolean {
+  if (!status || !cached) return false;
+  return cached.status !== status.status || cached.report?.scannedAt !== status.scannedAt;
+}
+
+/** Mounted ONCE in RootLayout: refetch the heavy report only when the slim status says it moved. */
+export function useReportStatusSync(): void {
+  const queryClient = useQueryClient();
+  const { data: status } = useStatus();
+  useEffect(() => {
+    if (reportOutOfSync(status, queryClient.getQueryData<ReportResponse>(reportQueryKey))) {
+      void queryClient.invalidateQueries({ queryKey: reportQueryKey });
+    }
+  }, [queryClient, status]);
+}
+
 export function useReport() {
   return useQuery({
     queryKey: reportQueryKey,
     queryFn: getReport,
-    // Poll every 2s while a scan is in flight so the UI picks up completion
-    // without a manual refresh; stop polling once the report settles.
-    refetchInterval: (query) => (query.state.data?.status === 'scanning' ? 2000 : false),
+    // No refetchInterval — useReportStatusSync drives refetches. staleTime
+    // keeps window-refocus from re-downloading a multi-MB body that
+    // /api/status hasn't said is stale (invalidateQueries bypasses staleTime,
+    // so sync-driven refetches are unaffected).
+    staleTime: 30_000,
   });
 }
 
@@ -91,6 +136,7 @@ function invalidateAfterWrite(
 ): void {
   queryClient.invalidateQueries({ queryKey: reportQueryKey });
   queryClient.invalidateQueries({ queryKey: gitStatusQueryKey });
+  queryClient.invalidateQueries({ queryKey: statusQueryKey });
   invalidateFileQueries(queryClient);
   if (opts.ignores) queryClient.invalidateQueries({ queryKey: ignoresQueryKey });
 }
@@ -111,7 +157,10 @@ export function useScanMutation() {
     // was cached before — stale 'ready' data with no visible sign the retry
     // failed, or a stale, no-longer-accurate error/stderr from a PREVIOUS
     // failed attempt once the user's fix changes what's wrong.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: reportQueryKey }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: reportQueryKey });
+      queryClient.invalidateQueries({ queryKey: statusQueryKey });
+    },
   });
 }
 
@@ -212,6 +261,6 @@ export function useBusy(): boolean {
   const mutating = useIsMutating({
     predicate: (mutation: Mutation) => BUSY_MUTATION_KEYS.includes(String(mutation.options.mutationKey?.[0])),
   });
-  const { data } = useReport();
+  const { data } = useStatus();
   return mutating > 0 || data?.status === 'scanning';
 }

@@ -71,7 +71,7 @@ test('code pane reopened after an ignore survives the rescan that prunes its iss
   // (src/server/routes-fix.ts's triggerBackgroundRescan, fire-and-forget) is
   // STILL in flight at the moment src/used.ts remounts below. Assert that
   // precondition directly via an API poll (bypassing the client's own 2s
-  // /api/report polling interval, which would be too coarse to catch a
+  // /api/status polling interval, which would be too coarse to catch a
   // narrow window) using the session token embedded in the page — if a
   // future change ever makes the rescan finish before this point, THIS
   // assertion is what fails loudly, rather than the badge-count check below

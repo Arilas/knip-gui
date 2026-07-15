@@ -6,7 +6,7 @@ import { Hono, type Context } from 'hono';
 import { runScan } from '../core/knip-runner.js';
 import { PlanStore } from '../fix/plan-store.js';
 import { runSweep } from '../fix/sweep.js';
-import type { ReportResponse, ScanResponse } from './api-types.js';
+import type { ReportResponse, ScanResponse, StatusResponse } from './api-types.js';
 import { registerFixRoutes } from './routes-fix.js';
 import { registerGitRoutes } from './routes-git.js';
 import { registerIgnoresRoutes } from './routes-ignores.js';
@@ -195,6 +195,13 @@ export function createServer(opts: {
 
   app.get('/api/report', (c) =>
     c.json({ status: store.status, report: store.report, error: store.error } satisfies ReportResponse),
+  );
+
+  // The slim poll target (#30): everything the client needs to decide whether
+  // to refetch the multi-MB /api/report — and nothing else. scannedAt is the
+  // current report's timestamp (absent before the first successful scan).
+  app.get('/api/status', (c) =>
+    c.json({ status: store.status, scannedAt: store.report?.scannedAt, error: store.error } satisfies StatusResponse),
   );
 
   app.get('/api/file', async (c) => {

@@ -111,6 +111,10 @@ export function getReport(): Promise<ReportResponse> {
   return apiFetch<ReportResponse>('/api/report');
 }
 
+export function getStatus(): Promise<StatusResponse> {
+  return apiFetch<StatusResponse>('/api/status');
+}
+
 export function postScan(workspace?: string): Promise<ScanResponse> {
   return postJson<ScanResponse>('/api/scan', workspace ? { workspace } : {});
 }

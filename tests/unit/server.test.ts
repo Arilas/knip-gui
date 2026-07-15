@@ -241,6 +241,19 @@ describe('scan + report + file', () => {
     expect(rep.report.workspaces).toEqual(['.']);
   });
 
+  it('GET /api/status returns status + scannedAt without the report body', async () => {
+    const { app, token } = makeServer();
+    const h = { 'x-knip-gui-token': token };
+    await app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+
+    const res = await app.request('/api/status', { headers: { 'x-knip-gui-token': token } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('ready');
+    expect(typeof body.scannedAt).toBe('string');
+    expect('report' in body).toBe(false);
+  });
+
   it('a malformed (null) scan body does not clobber the store — treated as no workspace', async () => {
     // Regression: a body of literal `null` parses fine, but `body.workspace` on it
     // threw a TypeError that was caught and flipped the store to 'error'.

@@ -49,7 +49,7 @@ import { useGlobalShortcuts } from './hooks/use-global-shortcuts.js';
 // ALL_WORKSPACES ('.') is the shared "whole project" scope convention —
 // defined once next to the workspace-switch flow it belongs to.
 import { ALL_WORKSPACES } from './hooks/use-workspace-switch.js';
-import { useBusy, useReport, useScanMutation } from './state/queries.js';
+import { useBusy, useReport, useReportStatusSync, useScanMutation } from './state/queries.js';
 import { useSelectionStore } from './state/selection.js';
 import { useUiStore } from './state/ui.js';
 
@@ -72,6 +72,7 @@ function pageTitleFromPath(pathname: string): string {
 }
 
 function RootLayout() {
+  useReportStatusSync();
   const { data } = useReport();
   const { ws } = rootRoute.useSearch();
   const navigate = useNavigate();

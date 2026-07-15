@@ -24,6 +24,7 @@ vi.mock('../../client/src/api.js', () => ({
   getGitStatus: vi.fn(),
   getIgnores: vi.fn(),
   getReport: vi.fn(),
+  getStatus: vi.fn(),
   postFixApply: vi.fn(async () => ({ results: [], failedItems: [], rescanning: true })),
   postFixPreview: vi.fn(),
   postGitBranch: vi.fn(),
@@ -37,9 +38,11 @@ vi.mock('../../client/src/api.js', () => ({
 }));
 
 import { postScan } from '../../client/src/api.js';
+import type { ReportResponse } from '../../client/src/api.js';
 import {
   gitStatusQueryKey,
   ignoresQueryKey,
+  reportOutOfSync,
   reportQueryKey,
   useFixApplyMutation,
   useIgnoreApplyMutation,
@@ -196,5 +199,24 @@ describe('apply-mutation query invalidation', () => {
     });
     const keys = spy.mock.calls.map(([filters]) => (filters as { queryKey?: unknown } | undefined)?.queryKey);
     expect(keys).toContainEqual(reportQueryKey);
+  });
+});
+
+describe('reportOutOfSync', () => {
+  const ready = (scannedAt: string) =>
+    ({ status: 'ready', report: { scannedAt, issues: [], workspaces: [], production: false } }) as ReportResponse;
+
+  it('false with no status yet or no cached report yet', () => {
+    expect(reportOutOfSync(undefined, ready('t1'))).toBe(false);
+    expect(reportOutOfSync({ status: 'ready', scannedAt: 't1' }, undefined)).toBe(false);
+  });
+  it('false when status and scannedAt both match', () => {
+    expect(reportOutOfSync({ status: 'ready', scannedAt: 't1' }, ready('t1'))).toBe(false);
+  });
+  it('true when the lifecycle status moved', () => {
+    expect(reportOutOfSync({ status: 'scanning', scannedAt: 't1' }, ready('t1'))).toBe(true);
+  });
+  it('true when a new scan landed', () => {
+    expect(reportOutOfSync({ status: 'ready', scannedAt: 't2' }, ready('t1'))).toBe(true);
   });
 });
