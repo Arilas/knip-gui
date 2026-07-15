@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { FixMode, Issue } from '../../api.js';
-import { apiErrorMessage } from '../../api.js';
+import { apiErrorMessage, deleteFixPlan } from '../../api.js';
 import {
   appliedOkIssueIds,
   applyFlowReducer,
@@ -188,7 +188,25 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
     }
   }
 
+  // (#2, client half) A 'previewed' plan is compiled server-side but never
+  // consumed — planStore.take() only runs inside /api/fix/apply and
+  // /api/ignore/apply (routes-fix.ts) — so leaving the page at this step
+  // (handleCancel via handleLeave, or ReviewHeader's Back->reset) leaks it
+  // until PlanStore's own TTL/LRU eviction reclaims it. Fire-and-forget: a
+  // failed DELETE must never block navigation or surface an error — the TTL
+  // is the backstop, this call is purely an optimization.
+  // Deliberately NOT called from the apply:error path: by the time apply
+  // fails, planStore.take() (routes-fix.ts) has already removed the plan
+  // from the store (it takes before attempting the patches), so 'failed'
+  // after an apply attempt has no plan left to release — only 'previewed'
+  // (and 'failed' after a preview failure, which never had a plan to begin
+  // with) do, and the status guard below covers exactly that.
+  function releasePlanIfPreviewed() {
+    if (flow.status === 'previewed') deleteFixPlan(flow.planId).catch(() => {});
+  }
+
   function handleLeave() {
+    releasePlanIfPreviewed();
     clearReview();
     // #6: restore whatever file was open on the Code page before this review
     // started, unless the fix/ignore run just deleted it out from under us —
@@ -390,7 +408,10 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
         compileFailedLabels={compileFailedLabels}
         onPreview={handlePreview}
         onApply={handleApply}
-        onReset={() => dispatch({ type: 'reset' })}
+        onReset={() => {
+          releasePlanIfPreviewed();
+          dispatch({ type: 'reset' });
+        }}
         onCancel={handleCancel}
       />
 

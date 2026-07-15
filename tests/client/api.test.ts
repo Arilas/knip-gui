@@ -109,6 +109,17 @@ describe('api.ts', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ planId: 'p1' });
   });
 
+  it('deleteFixPlan DELETEs the plan-scoped path and returns the parsed json', async () => {
+    const { deleteFixPlan } = await import('../../client/src/api.js');
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(200, { deleted: true }));
+    const result = await deleteFixPlan('p1');
+    const [url, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(url).toBe('/api/fix/plan/p1');
+    expect(init?.method).toBe('DELETE');
+    expect((init?.headers as Record<string, string>)['x-knip-gui-token']).toBe(TOKEN);
+    expect(result).toEqual({ deleted: true });
+  });
+
   it('postIgnorePreview posts issueIds', async () => {
     const { postIgnorePreview } = await import('../../client/src/api.js');
     vi.mocked(fetch).mockResolvedValue(jsonResponse(200, { planId: 'p1', diffs: [], items: [] }));

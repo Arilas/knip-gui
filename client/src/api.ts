@@ -152,6 +152,15 @@ export function postFixApply(planId: string): Promise<ApplyResponse> {
   return postJson<ApplyResponse>('/api/fix/apply', { planId });
 }
 
+// Releases a previewed-but-never-applied plan (fix OR ignore — both share one
+// store, see routes-fix.ts's DELETE handler). Callers fire this
+// fire-and-forget on navigation away from an abandoned preview; the route is
+// a benign no-op for unknown/already-consumed ids, so there's nothing here to
+// retry or surface.
+export function deleteFixPlan(planId: string): Promise<{ deleted: boolean }> {
+  return apiFetch<{ deleted: boolean }>(`/api/fix/plan/${planId}`, { method: 'DELETE' });
+}
+
 export function postIgnorePreview(issueIds: string[]): Promise<PreviewResponse> {
   return postJson<PreviewResponse>('/api/ignore/preview', { issueIds });
 }
