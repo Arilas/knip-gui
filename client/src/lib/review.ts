@@ -10,7 +10,24 @@
 // real PlanItem[] against the issue list once, same lookup joinResults does
 // internally, before calling this), which keeps this module's signature to
 // exactly the three things the design brief specifies.
+import type { FixMode, Issue } from '../../../src/core/types.js';
 import type { ApplyFlowState } from './apply-flow.js';
+
+/**
+ * (#22) The single source of truth for "what fix mode does THIS issue
+ * actually use right now" — an override wins, otherwise the issue's own
+ * first available mode (matching compileFixPlan's and filesToDelete's own
+ * default, and the pre-#22 bulk radios' initial-checked behavior), with a
+ * final 'strip-export' fallback only for the degenerate case of an issue
+ * with an empty fixModes array (shouldn't happen for a real Issue, but keeps
+ * this total rather than possibly-undefined). ReviewHeader's per-issue
+ * `<select>` rows and its bulk-radio "checked"/mixed-state computation both
+ * go through this rather than re-deriving the override-vs-default logic
+ * themselves.
+ */
+export function effectiveFixMode(issue: Pick<Issue, 'id' | 'fixModes'>, overrides: Record<string, FixMode>): FixMode {
+  return overrides[issue.id] ?? issue.fixModes[0] ?? 'strip-export';
+}
 
 export type RailStatus = 'pending' | 'ok' | 'stale' | 'missing' | 'io-error' | 'compile-failed';
 

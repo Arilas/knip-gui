@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { affectedFilePaths, buildFileRail, isAllStale, shouldRestoreOpenFile } from '../../client/src/lib/review.js';
+import type { Issue } from '../../src/core/types.js';
+import {
+  affectedFilePaths,
+  buildFileRail,
+  effectiveFixMode,
+  isAllStale,
+  shouldRestoreOpenFile,
+} from '../../client/src/lib/review.js';
+
+function makeIssue(id: string, fixModes: Issue['fixModes']): Pick<Issue, 'id' | 'fixModes'> {
+  return { id, fixModes };
+}
 
 describe('buildFileRail', () => {
   it('marks every diffed file pending when no results have landed yet (preview step)', () => {
@@ -209,5 +220,27 @@ describe('isAllStale (#9 — the frozen review header can outlive the live selec
     expect(isAllStale('applying', 0, 3)).toBe(false);
     expect(isAllStale('applied', 0, 3)).toBe(false);
     expect(isAllStale('failed', 0, 3)).toBe(false);
+  });
+});
+
+describe('effectiveFixMode (#22 — per-issue fix-mode overrides on the Review options step)', () => {
+  it('returns the per-issue override when one exists, regardless of fixModes order', () => {
+    const issue = makeIssue('a', ['strip-export', 'delete-declaration']);
+    expect(effectiveFixMode(issue, { a: 'delete-declaration' })).toBe('delete-declaration');
+  });
+
+  it('falls back to fixModes[0] when no override is set (matches the pre-#22 radio default and filesToDelete/compileFixPlan)', () => {
+    const issue = makeIssue('a', ['delete-declaration', 'strip-export']);
+    expect(effectiveFixMode(issue, {})).toBe('delete-declaration');
+  });
+
+  it('ignores overrides keyed to a different issue id', () => {
+    const issue = makeIssue('a', ['strip-export', 'delete-declaration']);
+    expect(effectiveFixMode(issue, { b: 'delete-declaration' })).toBe('strip-export');
+  });
+
+  it('defaults to strip-export in the degenerate case of an issue with no fixModes at all', () => {
+    const issue = makeIssue('a', []);
+    expect(effectiveFixMode(issue, {})).toBe('strip-export');
   });
 });

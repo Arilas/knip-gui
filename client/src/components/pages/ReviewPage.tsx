@@ -110,10 +110,6 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
     () => selectedIssues.filter((i) => i.type === 'exports' || i.type === 'types'),
     [selectedIssues],
   );
-  const currentExportTypeMode: FixMode =
-    exportTypeIssues.length > 0
-      ? modeOverrides[exportTypeIssues[0]!.id] ?? exportTypeIssues[0]!.fixModes[0] ?? 'strip-export'
-      : 'strip-export';
   const deletePaths = useMemo(
     () => filesToDelete(issues, selected, modeOverrides),
     [issues, selected, modeOverrides],
@@ -410,10 +406,11 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
         flow={flow}
         affectedFiles={affectedFiles}
         exportTypeIssues={exportTypeIssues}
-        currentExportTypeMode={currentExportTypeMode}
+        modeOverrides={modeOverrides}
         onSetExportTypeMode={(mode) => {
           for (const issue of exportTypeIssues) setModeOverride(issue.id, mode);
         }}
+        onSetIssueMode={setModeOverride}
         deletePaths={deletePaths}
         confirmDelete={confirmDelete}
         onConfirmDeleteChange={setConfirmDelete}

@@ -9,6 +9,7 @@
 import type { ApplyFlowState } from '../../lib/apply-flow.js';
 import type { FixMode, Issue } from '../../api.js';
 import { optionsNextBlocked } from '../../lib/apply-flow.js';
+import { effectiveFixMode } from '../../lib/review.js';
 import { Button } from '../ui/button.js';
 
 export interface ReviewHeaderProps {
@@ -18,8 +19,14 @@ export interface ReviewHeaderProps {
   flow: ApplyFlowState;
   affectedFiles: string[];
   exportTypeIssues: Issue[];
-  currentExportTypeMode: FixMode;
+  // (#22) The full per-issue override map (state/selection.ts), not just a
+  // single derived mode — the bulk radios' checked/mixed state and each
+  // per-issue <select>'s value both read this via effectiveFixMode, and
+  // ReviewPage no longer has a single "the" mode to hand down now that
+  // overrides can diverge per issue.
+  modeOverrides: Record<string, FixMode>;
   onSetExportTypeMode: (mode: FixMode) => void;
+  onSetIssueMode: (issueId: string, mode: FixMode) => void;
   deletePaths: string[];
   confirmDelete: boolean;
   onConfirmDeleteChange: (checked: boolean) => void;
@@ -43,6 +50,102 @@ const EXPORT_TYPE_MODES: { value: FixMode; label: string; hint: string }[] = [
   },
 ];
 
+/**
+ * (#22) The options step's export/type fix-mode picker: the two bulk radios
+ * (unchanged contract — still write ALL selected export/type issues via
+ * onSetExportTypeMode, so existing e2e/callers that only care about the bulk
+ * behavior keep working) plus, below them, one native <select> per issue for
+ * overriding just that issue. Split out from ReviewHeader's render body
+ * purely to keep the per-issue derivation (effectiveFixMode over the whole
+ * list, twice — once for "is this radio checked", once for "is this legend
+ * mixed") out of the main JSX return.
+ */
+function ExportTypeModeFieldset({
+  exportTypeIssues,
+  modeOverrides,
+  onSetExportTypeMode,
+  onSetIssueMode,
+}: {
+  exportTypeIssues: Issue[];
+  modeOverrides: Record<string, FixMode>;
+  onSetExportTypeMode: (mode: FixMode) => void;
+  onSetIssueMode: (issueId: string, mode: FixMode) => void;
+}) {
+  const effectiveModes = exportTypeIssues.map((issue) => effectiveFixMode(issue, modeOverrides));
+  const mixed = new Set(effectiveModes).size > 1;
+  // Only issues that actually offer a choice get their own row — an issue
+  // with a single fixMode (shouldn't happen for exports/types today per
+  // FIX_MODES_BY_TYPE, but this stays correct if that ever changes) has
+  // nothing for a <select> to override.
+  const overridableIssues = exportTypeIssues.filter((issue) => issue.fixModes.length > 1);
+
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="text-xs font-medium text-foreground">
+        For the {exportTypeIssues.length} selected unused export{exportTypeIssues.length === 1 ? '' : 's'}/type
+        {exportTypeIssues.length === 1 ? '' : 's'}:
+        {mixed && <span className="ml-1 font-normal italic text-muted-foreground">(mixed)</span>}
+      </legend>
+      {EXPORT_TYPE_MODES.map((opt) => (
+        <label key={opt.value} className="flex items-start gap-2 text-sm">
+          <input
+            type="radio"
+            name="export-type-mode"
+            className="mt-0.5"
+            // Checked only when EVERY selected issue's effective mode agrees
+            // with this option — when overrides have diverged (`mixed`),
+            // that's false for both radios, matching a native radio group
+            // with no single shared value.
+            checked={effectiveModes.length > 0 && effectiveModes.every((m) => m === opt.value)}
+            onChange={() => onSetExportTypeMode(opt.value)}
+          />
+          <span>
+            <span className="font-medium">{opt.label}</span>
+            <span className="block text-xs text-muted-foreground">{opt.hint}</span>
+          </span>
+        </label>
+      ))}
+
+      {overridableIssues.length > 0 && (
+        <div className="max-h-40 overflow-y-auto rounded-md border border-border">
+          {overridableIssues.map((issue) => (
+            <div
+              key={issue.id}
+              className="flex items-center justify-between gap-2 border-b border-border px-2 py-1 text-xs last:border-b-0"
+            >
+              {/* min-w-0 is what actually lets `truncate` work here: a flex
+                  item refuses to shrink below its intrinsic content width
+                  without it, so a long filePath: symbol would push the row
+                  wider than the box (which only clips vertically) instead of
+                  eliding — same pattern as SelectionDock/FileRail/CommitDialog
+                  rows. */}
+              <span
+                className="min-w-0 flex-1 truncate font-mono"
+                title={issue.symbol ? `${issue.filePath}: ${issue.symbol}` : issue.filePath}
+              >
+                {issue.filePath}
+                {issue.symbol ? `: ${issue.symbol}` : ''}
+              </span>
+              <select
+                data-testid={`fix-mode-select-${issue.id}`}
+                className="shrink-0 rounded border border-border bg-background px-1 py-0.5 text-xs"
+                value={effectiveFixMode(issue, modeOverrides)}
+                onChange={(e) => onSetIssueMode(issue.id, e.target.value as FixMode)}
+              >
+                {issue.fixModes.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {EXPORT_TYPE_MODES.find((m) => m.value === mode)?.label ?? mode}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
 export function ReviewHeader({
   kind,
   frozenCount,
@@ -50,8 +153,9 @@ export function ReviewHeader({
   flow,
   affectedFiles,
   exportTypeIssues,
-  currentExportTypeMode,
+  modeOverrides,
   onSetExportTypeMode,
+  onSetIssueMode,
   deletePaths,
   confirmDelete,
   onConfirmDeleteChange,
@@ -91,27 +195,12 @@ export function ReviewHeader({
           </p>
 
           {kind === 'fix' && exportTypeIssues.length > 0 && (
-            <fieldset className="flex flex-col gap-2">
-              <legend className="text-xs font-medium text-foreground">
-                For the {exportTypeIssues.length} selected unused export{exportTypeIssues.length === 1 ? '' : 's'}/type
-                {exportTypeIssues.length === 1 ? '' : 's'}:
-              </legend>
-              {EXPORT_TYPE_MODES.map((opt) => (
-                <label key={opt.value} className="flex items-start gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="export-type-mode"
-                    className="mt-0.5"
-                    checked={currentExportTypeMode === opt.value}
-                    onChange={() => onSetExportTypeMode(opt.value)}
-                  />
-                  <span>
-                    <span className="font-medium">{opt.label}</span>
-                    <span className="block text-xs text-muted-foreground">{opt.hint}</span>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
+            <ExportTypeModeFieldset
+              exportTypeIssues={exportTypeIssues}
+              modeOverrides={modeOverrides}
+              onSetExportTypeMode={onSetExportTypeMode}
+              onSetIssueMode={onSetIssueMode}
+            />
           )}
 
           {kind === 'fix' && deletePaths.length > 0 && (
