@@ -80,6 +80,7 @@ describe('new routes require a token', () => {
     const routes: [string, string][] = [
       ['POST', '/api/fix/preview'],
       ['POST', '/api/fix/apply'],
+      ['DELETE', '/api/fix/plan/does-not-exist'],
       ['POST', '/api/ignore/preview'],
       ['POST', '/api/ignore/apply'],
       ['POST', '/api/sweep'],
@@ -172,6 +173,54 @@ describe('fix preview/apply', () => {
       body: JSON.stringify({ planId: 'does-not-exist' }),
     });
     expect(res.status).toBe(404);
+  });
+
+  it('DELETE removes a previewed plan, so a subsequent apply 404s', async () => {
+    const { app, h, store } = await makeReadyServer();
+    const exportIssue = store.report!.issues.find((i) => i.type === 'exports')!;
+
+    const previewRes = await app.request('/api/fix/preview', {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({ issueIds: [exportIssue.id] }),
+    });
+    const { planId } = await previewRes.json();
+
+    const delRes = await app.request(`/api/fix/plan/${planId}`, { method: 'DELETE', headers: h });
+    expect(delRes.status).toBe(200);
+    expect(await delRes.json()).toEqual({ deleted: true });
+
+    const applyRes = await app.request('/api/fix/apply', {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({ planId }),
+    });
+    expect(applyRes.status).toBe(404);
+    expect((await applyRes.json()).error).toBe('unknown or already-applied plan');
+  });
+
+  it('DELETE on an unknown planId is a benign no-op (200 {deleted: false})', async () => {
+    const { app, h } = await makeReadyServer();
+    const res = await app.request('/api/fix/plan/does-not-exist', { method: 'DELETE', headers: h });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ deleted: false });
+  });
+
+  it('DELETE does not take the shared busy latch — succeeds while a scan holds it', async () => {
+    const { app, h, store } = await makeReadyServer();
+    const exportIssue = store.report!.issues.find((i) => i.type === 'exports')!;
+    const previewRes = await app.request('/api/fix/preview', {
+      method: 'POST',
+      headers: h,
+      body: JSON.stringify({ issueIds: [exportIssue.id] }),
+    });
+    const { planId } = await previewRes.json();
+
+    expect(store.tryBeginOp('scan')).toBe(true);
+    const res = await app.request(`/api/fix/plan/${planId}`, { method: 'DELETE', headers: h });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ deleted: true });
+    store.endOp();
   });
 
   it('reports a per-file stale result when the file changed on disk after preview', async () => {

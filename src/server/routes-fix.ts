@@ -102,6 +102,20 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     return c.json({ results, failedItems, rescanning });
   });
 
+  // Releases a previewed-but-never-applied plan (the client fires this on
+  // navigation/cancel so an abandoned preview doesn't sit around until
+  // PlanStore's own TTL/LRU eviction reclaims it). Deliberately does NOT take
+  // the shared busy latch — see FixRoutesCtx.planStore's contract and
+  // PlanStore.delete: removing an in-memory plan can't race with a scan or
+  // apply, both of which only touch the filesystem and this store's own
+  // take(), never this route. An unknown/already-applied/expired id is a
+  // benign no-op (200), not a 404 — the client fires-and-forgets this on
+  // every navigation regardless of whether the plan is still live.
+  app.delete('/api/fix/plan/:planId', (c) => {
+    const deleted = planStore.delete(c.req.param('planId'));
+    return c.json({ deleted });
+  });
+
   app.post('/api/ignore/preview', async (c) => {
     if (store.status !== 'ready' || !store.report) return c.json({ error: 'no report available' }, 409);
     const body = await readJsonObject(c);
