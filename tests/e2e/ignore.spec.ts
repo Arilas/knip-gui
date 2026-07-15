@@ -4,6 +4,14 @@
 // smoke.spec.ts (see playwright.config.ts's doc comment) but targets an
 // unrelated issue (a dependency, not an export/file), so it's independent of
 // whatever state smoke.spec.ts left behind.
+//
+// ORDER DEPENDENCY (reciprocal of context-preview.spec.ts's header): this
+// spec permanently consumes the fixture's ONLY unused dependency (left-pad),
+// so context-preview.spec.ts — which needs that row to click — must run
+// FIRST. The suite runs workers:1 with alphabetical file discovery, and
+// 'context-preview' sorts before 'ignore'; renaming either file, or adding
+// an alphabetically-earlier spec that mutates the fixture, breaks that spec,
+// not this one.
 import { expect, test } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial' });

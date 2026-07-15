@@ -88,6 +88,7 @@ export function Dashboard() {
   const setCodeFilters = useUiStore((s) => s.setCodeFilters);
   const setPackagesFilters = useUiStore((s) => s.setPackagesFilters);
   const setCodeScope = useUiStore((s) => s.setCodeScope);
+  const setCodeSearch = useUiStore((s) => s.setCodeSearch);
   const busy = useBusy();
   const sweepMutation = useSweepMutation();
   const log = useActivityStore((s) => s.log);
@@ -160,6 +161,11 @@ export function Dashboard() {
     if (to === '/code') {
       setCodeFilters([type]);
       setCodeScope(workspace);
+      // A leftover free-text search from an earlier Code visit would compose
+      // with the fresh chip and can filter the scoped tree down to nothing —
+      // the click's contract is "show me this workspace", same guarantee the
+      // pre-chip behavior gave by overwriting the search box outright.
+      setCodeSearch('');
     } else {
       setPackagesFilters([type]);
     }
@@ -168,6 +174,8 @@ export function Dashboard() {
 
   function onRowOpen(workspace: string) {
     setCodeScope(workspace);
+    // Same stale-search reset as onCellClick — see the comment there.
+    setCodeSearch('');
     navigate({ to: '/code' });
   }
 

@@ -23,12 +23,6 @@ import {
 } from '../../lib/tree.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js';
 
-// Re-exported for callers that only ever imported FlatRow from here (Task 3
-// originally defined it in this file) — the real definition moved to
-// lib/tree.ts for Task K/#13 so the React-free treeKeyAction helper could use
-// it too; nothing here should define it again.
-export type { FlatRow } from '../../lib/tree.js';
-
 export interface TreeNodeRowProps {
   row: FlatRow;
   /**

@@ -129,12 +129,15 @@ export function PackagesPage({ issues }: PackagesPageProps) {
   // overlay in this app (Sheet/Dialog/Popover) even though the panel itself
   // is a plain resizable Panel, not a Radix primitive with that behavior
   // built in. Scoped to a window listener only while a preview is actually
-  // open (not mounted otherwise) — this app has no OTHER global Escape
-  // handler today (use-global-shortcuts.ts's shortcutAction has none), so
-  // there's nothing here to collide with.
+  // open (not mounted otherwise). The defaultPrevented check is what keeps
+  // this from double-acting with a Radix overlay ABOVE the preview (the ⌘K
+  // command palette is reachable from every page): Radix's DismissableLayer
+  // preventDefault()s the Escape it consumes, so a palette-dismissing Escape
+  // must not also collapse the preview underneath it.
   useEffect(() => {
     if (!previewIssue) return;
     function onKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented) return;
       if (e.key === 'Escape') closePreview();
     }
     window.addEventListener('keydown', onKeyDown);
