@@ -12,7 +12,7 @@
 // always lines up with the actual rendered line regardless of font/theme —
 // simpler than teaching a transformer to splice checkbox/badge markup (with
 // working React event handlers) into a raw HTML string.
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Issue } from '../../../../src/core/types.js';
 import { ApiError } from '../../api.js';
@@ -109,6 +109,30 @@ function CodeBlock({
   // unrelated content refresh). A ref rather than state — it must survive
   // across renders without itself triggering one.
   const scrolledKeyRef = useRef<string | null>(null);
+  // Bumped by the ResizeObserver below to force the measuring effect to
+  // re-run when the container reflows (window resize, sidebar toggle, font
+  // load, etc.) without the `.line` DOM/html/lineIssues themselves changing —
+  // an absolutely-positioned overlay measured against stale offsetTop/Height
+  // would otherwise drift out from under wrapped/reflowed lines. Only ever
+  // used as a dep-array trigger; its actual value is irrelevant.
+  const [measureTick, setMeasureTick] = useState(0);
+
+  // Mount-scoped (not re-subscribed on every render) — ResizeObserver.observe
+  // is stable across the container's lifetime, and only unmount needs to
+  // disconnect it. Separate from the measuring effect below so bumping
+  // `measureTick` here doesn't itself re-run this subscription effect.
+  useEffect(() => {
+    // jsdom (vitest) has no ResizeObserver; skip so tests don't crash.
+    if (typeof ResizeObserver === 'undefined') return;
+    const container = containerRef.current;
+    if (!container) return;
+    // Fires once immediately on observe (per spec) — a harmless extra
+    // measure pass on mount, on top of the measuring effect's own initial
+    // run; not worth guarding against.
+    const observer = new ResizeObserver(() => setMeasureTick((t) => t + 1));
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -160,7 +184,11 @@ function CodeBlock({
     setPulseMarker(firstIssueMarker);
     const timer = setTimeout(() => setPulseMarker(null), 1200);
     return () => clearTimeout(timer);
-  }, [html, lineIssues, scrollKey]);
+    // `measureTick` added so a resize-triggered reflow re-measures marker
+    // positions; it does NOT reopen the auto-scroll/pulse gate above — that's
+    // still keyed on `scrolledKeyRef.current === scrollKey`, which a resize
+    // never changes, so scrolling/pulsing still fires at most once per open.
+  }, [html, lineIssues, scrollKey, measureTick]);
 
   return (
     <div ref={scrollerRef} className="relative flex-1 overflow-auto">
