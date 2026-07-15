@@ -46,7 +46,7 @@ describe('ignore plan round-trip against real knip (member-level @public)', () =
     };
 
     const plan = await compileIgnorePlan(workDir, [issue], ['blue']);
-    expect(plan.items).toEqual([{ issueId: 'blue', ok: true }]);
+    expect(plan.items).toEqual([{ issueId: 'blue', ok: true, filePath: 'src/used.ts' }]);
     expect(plan.patches).toHaveLength(1);
 
     const results = await applyPatches(workDir, plan.patches);

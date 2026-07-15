@@ -64,8 +64,8 @@ describe('compileFixPlan: source-transform chaining', () => {
       const plan = await compileFixPlan(dir, issues, selection);
 
       expect(plan.kind).toBe('fix');
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
-      expect(itemFor(plan.items, 'i2')).toEqual({ issueId: 'i2', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'src/two.ts' });
+      expect(itemFor(plan.items, 'i2')).toEqual({ issueId: 'i2', ok: true, filePath: 'src/two.ts' });
       expect(plan.patches).toHaveLength(1);
       const patch = plan.patches[0]!;
       expect(patch.filePath).toBe('src/two.ts');
@@ -107,8 +107,8 @@ describe('compileFixPlan: source-transform chaining', () => {
 
       const plan = await compileFixPlan(dir, issues, selection);
 
-      expect(itemFor(plan.items, 'first')).toEqual({ issueId: 'first', ok: true });
-      expect(itemFor(plan.items, 'second')).toEqual({ issueId: 'second', ok: true });
+      expect(itemFor(plan.items, 'first')).toEqual({ issueId: 'first', ok: true, filePath: 'src/shift.ts' });
+      expect(itemFor(plan.items, 'second')).toEqual({ issueId: 'second', ok: true, filePath: 'src/shift.ts' });
       expect(plan.patches).toHaveLength(1);
       expect(plan.patches[0]!.contentAfter).toBe('');
     });
@@ -130,7 +130,7 @@ describe('compileFixPlan: source-transform chaining', () => {
 
       const plan = await compileFixPlan(dir, issues, selection);
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'src/over.ts' });
       expect(plan.patches[0]!.contentAfter).toBe('');
     });
   });
@@ -151,7 +151,7 @@ describe('compileFixPlan: source-transform chaining', () => {
       const badItem = itemFor(plan.items, 'bad');
       expect(badItem.ok).toBe(false);
       expect(badItem.reason).toBeTruthy();
-      expect(itemFor(plan.items, 'good')).toEqual({ issueId: 'good', ok: true });
+      expect(itemFor(plan.items, 'good')).toEqual({ issueId: 'good', ok: true, filePath: 'src/partial.ts' });
 
       expect(plan.patches).toHaveLength(1);
       expect(plan.patches[0]!.contentAfter).toBe('export const a = 1;\nconst b = 2;\n');
@@ -172,7 +172,7 @@ describe('compileFixPlan: source-transform chaining', () => {
       ];
       const plan = await compileFixPlan(dir, issues, { issueIds: ['i1'] });
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'src/enum.ts' });
       expect(plan.patches[0]!.contentAfter).toBe('export enum Color {\n  Red,\n}\n');
     });
   });
@@ -194,7 +194,7 @@ describe('compileFixPlan: source-transform chaining', () => {
       ];
       const plan = await compileFixPlan(dir, issues, { issueIds: ['i1'] });
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'src/dup.ts' });
       expect(plan.patches[0]!.contentAfter).toBe('export const dupeSource = 42;\n');
     });
   });
@@ -237,8 +237,8 @@ describe('compileFixPlan: delete-file precedence', () => {
       ];
       const plan = await compileFixPlan(dir, issues, { issueIds: ['exp', 'del'] });
 
-      expect(itemFor(plan.items, 'exp')).toEqual({ issueId: 'exp', ok: true });
-      expect(itemFor(plan.items, 'del')).toEqual({ issueId: 'del', ok: true });
+      expect(itemFor(plan.items, 'exp')).toEqual({ issueId: 'exp', ok: true, filePath: 'src/gone.ts' });
+      expect(itemFor(plan.items, 'del')).toEqual({ issueId: 'del', ok: true, filePath: 'src/gone.ts' });
       expect(plan.patches).toHaveLength(1);
       expect(plan.patches[0]!.kind).toBe('delete');
       expect(plan.patches[0]!.filePath).toBe('src/gone.ts');
@@ -281,7 +281,7 @@ describe('compileFixPlan: dependency removal', () => {
       ];
       const plan = await compileFixPlan(dir, issues, { issueIds: ['i1'] });
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'package.json' });
       expect(plan.patches).toHaveLength(1);
       expect(plan.patches[0]!.filePath).toBe('package.json');
       expect(plan.patches[0]!.contentAfter).toBe('{\n  "name": "pkg",\n  "dependencies": {\n  }\n}\n');
@@ -303,7 +303,11 @@ describe('compileFixPlan: dependency removal', () => {
       ];
       const plan = await compileFixPlan(dir, issues, { issueIds: ['i1'] });
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({
+        issueId: 'i1',
+        ok: true,
+        filePath: 'packages/app/package.json',
+      });
       expect(plan.patches).toHaveLength(1);
       expect(plan.patches[0]!.filePath).toBe('packages/app/package.json');
       expect(plan.patches[0]!.contentAfter).toBe('{\n  "name": "app",\n  "dependencies": {\n  }\n}\n');
@@ -324,8 +328,8 @@ describe('compileFixPlan: dependency removal', () => {
       ];
       const plan = await compileFixPlan(dir, issues, { issueIds: ['i1', 'i2'] });
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
-      expect(itemFor(plan.items, 'i2')).toEqual({ issueId: 'i2', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'package.json' });
+      expect(itemFor(plan.items, 'i2')).toEqual({ issueId: 'i2', ok: true, filePath: 'package.json' });
       expect(plan.patches).toHaveLength(1);
       expect(plan.patches[0]!.contentAfter).toBe('{\n  "name": "pkg",\n  "dependencies": {\n  }\n}\n');
     });
@@ -349,7 +353,12 @@ describe('compileFixPlan: selection edge cases', () => {
     await withTmpDir(async (dir) => {
       const issues: Issue[] = [makeIssue('i1', 'unlisted', 'src/x.ts', { symbol: 'x', fixModes: [] })];
       const plan = await compileFixPlan(dir, issues, { issueIds: ['i1'] });
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: false, reason: 'not-fixable' });
+      expect(itemFor(plan.items, 'i1')).toEqual({
+        issueId: 'i1',
+        ok: false,
+        reason: 'not-fixable',
+        filePath: 'src/x.ts',
+      });
       expect(plan.patches).toHaveLength(0);
     });
   });
@@ -363,7 +372,12 @@ describe('compileFixPlan: selection edge cases', () => {
         issueIds: ['i1'],
         modeOverrides: { i1: 'strip-export' },
       });
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: false, reason: 'invalid-mode' });
+      expect(itemFor(plan.items, 'i1')).toEqual({
+        issueId: 'i1',
+        ok: false,
+        reason: 'invalid-mode',
+        filePath: 'src/x.ts',
+      });
     });
   });
 
@@ -371,7 +385,12 @@ describe('compileFixPlan: selection edge cases', () => {
     await withTmpDir(async (dir) => {
       const issues: Issue[] = [makeIssue('i1', 'files', 'src/missing.ts')];
       const plan = await compileFixPlan(dir, issues, { issueIds: ['i1'] });
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: false, reason: 'file-not-found' });
+      expect(itemFor(plan.items, 'i1')).toEqual({
+        issueId: 'i1',
+        ok: false,
+        reason: 'file-not-found',
+        filePath: 'src/missing.ts',
+      });
     });
   });
 });
@@ -390,8 +409,8 @@ describe('compileIgnorePlan', () => {
       const plan = await compileIgnorePlan(dir, issues, ['dep', 'exp']);
 
       expect(plan.kind).toBe('ignore');
-      expect(itemFor(plan.items, 'dep')).toEqual({ issueId: 'dep', ok: true });
-      expect(itemFor(plan.items, 'exp')).toEqual({ issueId: 'exp', ok: true });
+      expect(itemFor(plan.items, 'dep')).toEqual({ issueId: 'dep', ok: true, filePath: 'knip.json' });
+      expect(itemFor(plan.items, 'exp')).toEqual({ issueId: 'exp', ok: true, filePath: 'src/pub.ts' });
 
       expect(plan.patches).toHaveLength(2);
       const configPatch = plan.patches.find((p) => p.filePath === 'knip.json')!;
@@ -411,7 +430,7 @@ describe('compileIgnorePlan', () => {
       const issues: Issue[] = [makeIssue('i1', 'files', 'src/orphan.ts')];
       const plan = await compileIgnorePlan(dir, issues, ['i1']);
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'knip.json' });
       expect(plan.patches[0]!.contentAfter).toBe('{\n  "ignore": [\n    "src/orphan.ts"\n  ]\n}\n');
     });
   });
@@ -422,7 +441,7 @@ describe('compileIgnorePlan', () => {
       const issues: Issue[] = [makeIssue('i1', 'binaries', 'package.json', { symbol: 'some-cli' })];
       const plan = await compileIgnorePlan(dir, issues, ['i1']);
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'knip.json' });
       expect(plan.patches[0]!.contentAfter).toBe('{\n  "ignoreBinaries": [\n    "some-cli"\n  ]\n}\n');
     });
   });
@@ -440,7 +459,7 @@ describe('compileIgnorePlan', () => {
       ];
       const plan = await compileIgnorePlan(dir, issues, ['i1']);
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'src/enum.ts' });
       expect(plan.patches[0]!.contentAfter).toBe(
         'export enum Color {\n  Red,\n  /** @public */\n  Blue,\n}\n',
       );
@@ -461,7 +480,7 @@ describe('compileIgnorePlan', () => {
       ];
       const plan = await compileIgnorePlan(dir, issues, ['i1']);
 
-      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true });
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'src/ns.ts' });
       expect(plan.patches[0]!.contentAfter).toBe(
         'export namespace Config {\n  export const usedFlag = true;\n  /** @public */\n  export const unusedFlag = false;\n}\n',
       );
@@ -477,8 +496,14 @@ describe('compileIgnorePlan', () => {
       ];
       const plan = await compileIgnorePlan(dir, issues, ['i1', 'i2', 'i3']);
 
+      const expectedFilePaths: Record<string, string> = { i1: 'src/x.ts', i2: 'src/y.ts', i3: 'src/z.ts' };
       for (const id of ['i1', 'i2', 'i3']) {
-        expect(itemFor(plan.items, id)).toEqual({ issueId: id, ok: false, reason: 'not-ignorable' });
+        expect(itemFor(plan.items, id)).toEqual({
+          issueId: id,
+          ok: false,
+          reason: 'not-ignorable',
+          filePath: expectedFilePaths[id],
+        });
       }
       expect(plan.patches).toHaveLength(0);
     });
@@ -497,7 +522,7 @@ describe('compileIgnorePlan', () => {
       const plan = await compileIgnorePlan(dir, issues, ['dep', 'exp']);
 
       expect(itemFor(plan.items, 'dep')).toEqual({ issueId: 'dep', ok: false, reason: 'code-config' });
-      expect(itemFor(plan.items, 'exp')).toEqual({ issueId: 'exp', ok: true });
+      expect(itemFor(plan.items, 'exp')).toEqual({ issueId: 'exp', ok: true, filePath: 'src/pub.ts' });
       expect(plan.patches).toHaveLength(1);
       expect(plan.patches[0]!.filePath).toBe('src/pub.ts');
     });
@@ -518,6 +543,51 @@ describe('compileIgnorePlan', () => {
     await withTmpDir(async (dir) => {
       const plan = await compileIgnorePlan(dir, [], ['nope']);
       expect(itemFor(plan.items, 'nope')).toEqual({ issueId: 'nope', ok: false, reason: 'unknown-issue' });
+    });
+  });
+});
+
+describe('PlanItem.filePath', () => {
+  it('every PlanItem carries the filePath its patch lands in', async () => {
+    await withTmpDir(async (dir) => {
+      const exportContent = 'export const a = 1;\n';
+      await seedFile(dir, 'src/exp.ts', exportContent);
+      await seedFile(dir, 'src/del.ts', 'export const z = 1;\n');
+      const pkg = '{\n  "name": "pkg",\n  "dependencies": {\n    "left-pad": "1.0.0"\n  }\n}\n';
+      await seedFile(dir, 'package.json', pkg);
+
+      const exportIssue = makeIssue('exp', 'exports', 'src/exp.ts', {
+        symbol: 'a',
+        pos: exportContent.indexOf('a'),
+      });
+      const depIssue = makeIssue('dep', 'dependencies', 'package.json', { symbol: 'left-pad' });
+      const fileIssue = makeIssue('del', 'files', 'src/del.ts');
+      const issues: Issue[] = [exportIssue, depIssue, fileIssue];
+
+      const plan = await compileFixPlan(dir, issues, { issueIds: issues.map((i) => i.id) });
+      const byId = new Map(plan.items.map((i) => [i.issueId, i]));
+      expect(byId.get(exportIssue.id)?.filePath).toBe(exportIssue.filePath);
+      expect(byId.get(depIssue.id)?.filePath).toBe('package.json'); // root workspace pkg
+      expect(byId.get(fileIssue.id)?.filePath).toBe(fileIssue.filePath);
+    });
+  });
+
+  it('ignore-plan config-edit items carry the config file path', async () => {
+    await withTmpDir(async (dir) => {
+      await seedFile(dir, 'knip.json', '{}\n');
+      const depIssue = makeIssue('dep', 'dependencies', 'package.json', { symbol: 'left-pad' });
+
+      const plan = await compileIgnorePlan(dir, [depIssue], [depIssue.id]);
+
+      expect(plan.items[0]?.filePath).toBe('knip.json');
+    });
+  });
+
+  it('unknown-issue items have no filePath', async () => {
+    await withTmpDir(async (dir) => {
+      const plan = await compileFixPlan(dir, [], { issueIds: ['nope'] });
+      expect(plan.items[0]?.ok).toBe(false);
+      expect(plan.items[0]?.filePath).toBeUndefined();
     });
   });
 });
@@ -576,8 +646,16 @@ describe('compileFixPlan: end-to-end against the real single fixture (no apply)'
       issueIds: [exportIssue!.id, depIssue!.id],
     });
 
-    expect(itemFor(plan.items, exportIssue!.id)).toEqual({ issueId: exportIssue!.id, ok: true });
-    expect(itemFor(plan.items, depIssue!.id)).toEqual({ issueId: depIssue!.id, ok: true });
+    expect(itemFor(plan.items, exportIssue!.id)).toEqual({
+      issueId: exportIssue!.id,
+      ok: true,
+      filePath: 'src/used.ts',
+    });
+    expect(itemFor(plan.items, depIssue!.id)).toEqual({
+      issueId: depIssue!.id,
+      ok: true,
+      filePath: 'package.json',
+    });
 
     const usedPatch = plan.patches.find((p) => p.filePath === 'src/used.ts');
     const pkgPatch = plan.patches.find((p) => p.filePath === 'package.json');

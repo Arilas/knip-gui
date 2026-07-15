@@ -124,7 +124,7 @@ describe('fix preview/apply', () => {
     expect(body.diffs).toHaveLength(1);
     expect(body.diffs[0].filePath).toBe('src/used.ts');
     expect(body.diffs[0].diff).toContain('unusedHelper');
-    expect(body.items).toEqual([{ issueId: exportIssue.id, ok: true }]);
+    expect(body.items).toEqual([{ issueId: exportIssue.id, ok: true, filePath: 'src/used.ts' }]);
   });
 
   it('applies the plan, writes the file, and 404s a second apply of the same planId', async () => {
@@ -342,7 +342,7 @@ describe('ignore preview/apply', () => {
     expect(previewBody.patches).toBeUndefined();
     expect(previewBody.diffs).toHaveLength(1);
     expect(previewBody.diffs[0].filePath).toBe('knip.json');
-    expect(previewBody.items).toEqual([{ issueId: filesIssue.id, ok: true }]);
+    expect(previewBody.items).toEqual([{ issueId: filesIssue.id, ok: true, filePath: 'knip.json' }]);
 
     const applyRes = await app.request('/api/ignore/apply', {
       method: 'POST',

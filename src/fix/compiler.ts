@@ -29,6 +29,15 @@ export interface PlanItem {
   issueId: string;
   ok: boolean;
   reason?: string;
+  /**
+   * The file this issue's patch lands in — the source file for source
+   * transforms, the owning workspace's package.json for dependency fixes,
+   * the knip config file for ignore-mode config edits. Unset only when it
+   * cannot be known: unknown-issue, or no/code-config ignore failures.
+   * The client's join/attribution logic (apply-flow.ts) reads this instead
+   * of re-deriving it from the issue (#39).
+   */
+  filePath?: string;
 }
 
 export interface FixPlan {
@@ -125,7 +134,9 @@ function runSourceChain(
   const items: PlanItem[] = [];
   for (const [issueId, results] of resultsByIssue) {
     const failed = results.find((r): r is { ok: false; reason: string } => !r.ok);
-    items.push(failed ? { issueId, ok: false, reason: failed.reason } : { issueId, ok: true });
+    items.push(
+      failed ? { issueId, ok: false, reason: failed.reason, filePath } : { issueId, ok: true, filePath },
+    );
   }
 
   return { content: current, changed, items };
@@ -157,12 +168,12 @@ export async function compileFixPlan(
       continue;
     }
     if (issue.fixModes.length === 0) {
-      items.push({ issueId, ok: false, reason: 'not-fixable' });
+      items.push({ issueId, ok: false, reason: 'not-fixable', filePath: issue.filePath });
       continue;
     }
     const mode = selection.modeOverrides?.[issueId] ?? issue.fixModes[0]!;
     if (!issue.fixModes.includes(mode)) {
-      items.push({ issueId, ok: false, reason: 'invalid-mode' });
+      items.push({ issueId, ok: false, reason: 'invalid-mode', filePath: issue.filePath });
       continue;
     }
 
@@ -190,7 +201,7 @@ export async function compileFixPlan(
       // touched. Every alias (index 1+) gets its own removeDuplicate call.
       const members = (issue.duplicateMembers ?? []).slice(1);
       if (members.length === 0) {
-        items.push({ issueId, ok: false, reason: 'no-duplicate-members' });
+        items.push({ issueId, ok: false, reason: 'no-duplicate-members', filePath: issue.filePath });
         continue;
       }
       const list = sourceOpsByFile.get(issue.filePath) ?? [];
@@ -212,19 +223,19 @@ export async function compileFixPlan(
     const superseded = sourceOpsByFile.get(filePath);
     if (superseded) {
       sourceOpsByFile.delete(filePath);
-      for (const id of new Set(superseded.map((op) => op.issueId))) items.push({ issueId: id, ok: true });
+      for (const id of new Set(superseded.map((op) => op.issueId))) items.push({ issueId: id, ok: true, filePath });
     }
 
     const abs = resolve(projectDir, filePath);
     const contentBefore = await readFileOrNull(abs);
     if (contentBefore === null) {
-      for (const id of fileIssueIds) items.push({ issueId: id, ok: false, reason: 'file-not-found' });
+      for (const id of fileIssueIds) items.push({ issueId: id, ok: false, reason: 'file-not-found', filePath });
       continue;
     }
     const patch: FilePatch = { filePath, kind: 'delete', hashBefore: hashContent(contentBefore), contentAfter: null };
     patches.push(patch);
     diffs.push({ filePath, diff: renderDiff(patch, contentBefore) });
-    for (const id of fileIssueIds) items.push({ issueId: id, ok: true });
+    for (const id of fileIssueIds) items.push({ issueId: id, ok: true, filePath });
   }
 
   for (const [filePath, ops] of sourceOpsByFile) {
@@ -232,7 +243,7 @@ export async function compileFixPlan(
     const contentBefore = await readFileOrNull(abs);
     if (contentBefore === null) {
       for (const id of new Set(ops.map((op) => op.issueId))) {
-        items.push({ issueId: id, ok: false, reason: 'file-not-found' });
+        items.push({ issueId: id, ok: false, reason: 'file-not-found', filePath });
       }
       continue;
     }
@@ -251,7 +262,7 @@ export async function compileFixPlan(
     const abs = resolve(projectDir, pkgPath);
     const contentBefore = await readFileOrNull(abs);
     if (contentBefore === null) {
-      for (const op of ops) items.push({ issueId: op.issueId, ok: false, reason: 'file-not-found' });
+      for (const op of ops) items.push({ issueId: op.issueId, ok: false, reason: 'file-not-found', filePath: pkgPath });
       continue;
     }
 
@@ -262,9 +273,9 @@ export async function compileFixPlan(
       if (result.ok) {
         if (result.newContent !== current) changed = true;
         current = result.newContent;
-        items.push({ issueId: op.issueId, ok: true });
+        items.push({ issueId: op.issueId, ok: true, filePath: pkgPath });
       } else {
-        items.push({ issueId: op.issueId, ok: false, reason: result.reason });
+        items.push({ issueId: op.issueId, ok: false, reason: result.reason, filePath: pkgPath });
       }
     }
 
@@ -323,7 +334,7 @@ export async function compileIgnorePlan(
     // by the client's isIgnorable) — the switch below only ever needs cases for
     // types this guard admits; the `default` is an unreachable safety net.
     if (!IGNORABLE_ISSUE_TYPES.has(issue.type)) {
-      items.push({ issueId, ok: false, reason: 'not-ignorable' });
+      items.push({ issueId, ok: false, reason: 'not-ignorable', filePath: issue.filePath });
       continue;
     }
 
@@ -369,7 +380,7 @@ export async function compileIgnorePlan(
       }
       default:
         // unlisted, unresolved, duplicates, nsExports, nsTypes, catalog, cycles
-        items.push({ issueId, ok: false, reason: 'not-ignorable' });
+        items.push({ issueId, ok: false, reason: 'not-ignorable', filePath: issue.filePath });
     }
   }
 
@@ -382,6 +393,7 @@ export async function compileIgnorePlan(
     } else {
       const configKind = config.kind as Exclude<KnipConfigKind, 'code' | 'none'>;
       const abs = config.path!;
+      const relPath = relative(projectDir, abs);
       const contentBefore = await readFile(abs, 'utf8');
       let current = contentBefore;
       let changed = false;
@@ -394,13 +406,12 @@ export async function compileIgnorePlan(
         if (result.ok) {
           if (result.newContent !== current) changed = true;
           current = result.newContent;
-          items.push({ issueId, ok: true });
+          items.push({ issueId, ok: true, filePath: relPath });
         } else {
-          items.push({ issueId, ok: false, reason: result.reason });
+          items.push({ issueId, ok: false, reason: result.reason, filePath: relPath });
         }
       }
       if (changed) {
-        const relPath = relative(projectDir, abs);
         const patch: FilePatch = { filePath: relPath, kind: 'modify', hashBefore: hashContent(contentBefore), contentAfter: current };
         patches.push(patch);
         diffs.push({ filePath: relPath, diff: renderDiff(patch, contentBefore) });
@@ -412,7 +423,7 @@ export async function compileIgnorePlan(
     const abs = resolve(projectDir, filePath);
     const contentBefore = await readFileOrNull(abs);
     if (contentBefore === null) {
-      for (const op of ops) items.push({ issueId: op.issueId, ok: false, reason: 'file-not-found' });
+      for (const op of ops) items.push({ issueId: op.issueId, ok: false, reason: 'file-not-found', filePath });
       continue;
     }
 
@@ -432,9 +443,9 @@ export async function compileIgnorePlan(
       if (result.ok) {
         if (result.newContent !== current) changed = true;
         current = result.newContent;
-        items.push({ issueId: op.issueId, ok: true });
+        items.push({ issueId: op.issueId, ok: true, filePath });
       } else {
-        items.push({ issueId: op.issueId, ok: false, reason: result.reason });
+        items.push({ issueId: op.issueId, ok: false, reason: result.reason, filePath });
       }
     });
 
@@ -482,15 +493,17 @@ export async function compileRemoveIgnoresPlan(projectDir: string, entries: Igno
     } else {
       const configKind = config.kind as Exclude<KnipConfigKind, 'code' | 'none'>;
       const abs = config.path!;
+      const relPath = relative(projectDir, abs);
       const contentBefore = await readFile(abs, 'utf8');
       const result = removeIgnores(contentBefore, configKind, entries);
 
       if (!result.ok) {
-        for (const entry of entries) items.push({ issueId: ignoreEntryId(entry), ok: false, reason: result.reason });
+        for (const entry of entries) {
+          items.push({ issueId: ignoreEntryId(entry), ok: false, reason: result.reason, filePath: relPath });
+        }
       } else {
-        for (const entry of entries) items.push({ issueId: ignoreEntryId(entry), ok: true });
+        for (const entry of entries) items.push({ issueId: ignoreEntryId(entry), ok: true, filePath: relPath });
         if (result.newContent !== contentBefore) {
-          const relPath = relative(projectDir, abs);
           const patch: FilePatch = {
             filePath: relPath,
             kind: 'modify',

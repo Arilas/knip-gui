@@ -102,7 +102,9 @@ describe('remove-ignores preview/apply', () => {
     expect(previewBody.diffs).toHaveLength(1);
     expect(previewBody.diffs[0].filePath).toBe('knip.json');
     expect(previewBody.diffs[0].diff).toContain('-    "left-pad"');
-    expect(previewBody.items).toEqual([{ issueId: 'ignoreDependencies:.:left-pad', ok: true }]);
+    expect(previewBody.items).toEqual([
+      { issueId: 'ignoreDependencies:.:left-pad', ok: true, filePath: 'knip.json' },
+    ]);
 
     const applyRes = await app.request('/api/ignores/remove/apply', {
       method: 'POST',
@@ -164,7 +166,7 @@ describe('remove-ignores preview/apply', () => {
     const body = await res.json();
     expect(body.diffs).toEqual([]);
     expect(body.items).toEqual([
-      { issueId: 'ignoreDependencies:.:does-not-exist', ok: false, reason: 'not-found' },
+      { issueId: 'ignoreDependencies:.:does-not-exist', ok: false, reason: 'not-found', filePath: 'knip.json' },
     ]);
   });
 
