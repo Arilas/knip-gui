@@ -138,10 +138,11 @@ export function buildFileRail(diffs: RailDiffEntry[], items: RailPlanItem[], res
  * (no diffs/items/results exist yet) — just the deduped, sorted set of
  * `filePath`s among the selected issues. This deliberately doesn't account
  * for dependency-shaped issues actually patching into a workspace's
- * package.json rather than `issue.filePath` (see apply-flow.ts's
- * patchFileForIssue) — that reconciliation only matters once a real plan
- * comes back, which is exactly when the 'preview' step's buildFileRail call
- * (fed the plan's real diffs) supersedes this list.
+ * package.json rather than `issue.filePath` — the patch-target file now rides
+ * on PlanItem.filePath (set server-side at compile time) — that reconciliation
+ * only matters once a real plan comes back, which is exactly when the
+ * 'preview' step's buildFileRail call (fed the plan's real diffs) supersedes
+ * this list.
  */
 export function affectedFilePaths(issues: { filePath: string }[]): string[] {
   return [...new Set(issues.map((i) => i.filePath))].sort();

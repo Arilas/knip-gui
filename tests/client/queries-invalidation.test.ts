@@ -44,6 +44,7 @@ import {
   ignoresQueryKey,
   reportOutOfSync,
   reportQueryKey,
+  statusQueryKey,
   useFixApplyMutation,
   useIgnoreApplyMutation,
   useIgnoreRemoveApplyMutation,
@@ -94,24 +95,28 @@ describe('apply-mutation query invalidation', () => {
   it('ignore apply invalidates BOTH the report and the ignores query (stale-badge regression pin)', async () => {
     const keys = await invalidatedKeysAfter(useIgnoreApplyMutation, 'plan-1');
     expect(keys).toContainEqual(reportQueryKey);
+    expect(keys).toContainEqual(statusQueryKey);
     expect(keys).toContainEqual(ignoresQueryKey);
   });
 
   it('ignore-remove apply invalidates BOTH the report and the ignores query', async () => {
     const keys = await invalidatedKeysAfter(useIgnoreRemoveApplyMutation, 'plan-1');
     expect(keys).toContainEqual(reportQueryKey);
+    expect(keys).toContainEqual(statusQueryKey);
     expect(keys).toContainEqual(ignoresQueryKey);
   });
 
   it('fix apply invalidates the report but NOT the ignores query (fixes never touch the config ignore arrays)', async () => {
     const keys = await invalidatedKeysAfter(useFixApplyMutation, 'plan-1');
     expect(keys).toContainEqual(reportQueryKey);
+    expect(keys).toContainEqual(statusQueryKey);
     expect(keys).not.toContainEqual(ignoresQueryKey);
   });
 
   it('sweep invalidates the report but NOT the ignores query (knip --fix never writes ignore entries)', async () => {
     const keys = await invalidatedKeysAfter(useSweepMutation, {});
     expect(keys).toContainEqual(reportQueryKey);
+    expect(keys).toContainEqual(statusQueryKey);
     expect(keys).not.toContainEqual(ignoresQueryKey);
   });
 
@@ -158,12 +163,14 @@ describe('apply-mutation query invalidation', () => {
     });
     const keys = spy.mock.calls.map(([filters]) => (filters as { queryKey?: unknown } | undefined)?.queryKey);
     expect(keys).toContainEqual(reportQueryKey);
+    expect(keys).toContainEqual(statusQueryKey);
   });
 
   it('scan invalidates the report on success', async () => {
     vi.mocked(postScan).mockResolvedValueOnce({ status: 'ready', issueCount: 0 });
     const keys = await invalidatedKeysAfter(useScanMutation, undefined);
     expect(keys).toContainEqual(reportQueryKey);
+    expect(keys).toContainEqual(statusQueryKey);
   });
 
   // Task 6 browser-verification finding: a scan that ITSELF fails (e.g.
@@ -182,6 +189,7 @@ describe('apply-mutation query invalidation', () => {
     });
     const keys = spy.mock.calls.map(([filters]) => (filters as { queryKey?: unknown } | undefined)?.queryKey);
     expect(keys).toContainEqual(reportQueryKey);
+    expect(keys).toContainEqual(statusQueryKey);
   });
 
   // Task 7 polish item: useSweepMutation mirrored useScanMutation's Task 6
@@ -199,6 +207,7 @@ describe('apply-mutation query invalidation', () => {
     });
     const keys = spy.mock.calls.map(([filters]) => (filters as { queryKey?: unknown } | undefined)?.queryKey);
     expect(keys).toContainEqual(reportQueryKey);
+    expect(keys).toContainEqual(statusQueryKey);
   });
 });
 

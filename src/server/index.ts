@@ -12,7 +12,7 @@ import { registerGitRoutes } from './routes-git.js';
 import { registerIgnoresRoutes } from './routes-ignores.js';
 import { readJsonObject } from './body.js';
 import { runScanIntoStore } from './scan-runner.js';
-import { BUSY_OP_LABELS, ReportStore } from './store.js';
+import { BUSY_OP_LABELS, ReportStore, toErrorBody } from './store.js';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -185,7 +185,7 @@ export function createServer(opts: {
       // client-side only surfaces a string `error`. The structured StoreError
       // still lands in the store and is served by /api/report for SetupScreen.
       if (!result.ok) {
-        return c.json({ error: result.error.message, code: result.error.code, stderr: result.error.stderr }, 500);
+        return c.json(toErrorBody(result.error), 500);
       }
       return c.json({ status: 'ready', issueCount: result.issueCount } satisfies ScanResponse);
     } finally {

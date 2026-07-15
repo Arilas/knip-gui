@@ -1,6 +1,17 @@
 import type { Report } from '../core/types.js';
+import type { ErrorBody } from './api-types.js';
 
 export interface StoreError { code: string; message: string; stderr?: string; exitCode?: number }
+
+// Flattens a StoreError to the wire-level ErrorBody (api-types.ts): `error` is
+// always the human-readable string apiErrorMessage reads client-side, with
+// `code`/`stderr` carried alongside for callers that want the structured
+// detail too. Shared by every scan-failure response site (server/index.ts's
+// /api/scan and routes-fix.ts's post-sweep rescan) so the three-field
+// construction isn't duplicated.
+export function toErrorBody(error: StoreError): ErrorBody {
+  return { error: error.message, code: error.code, stderr: error.stderr };
+}
 
 // Every route that mutates the project on disk or this store — the initial scan,
 // a sweep (`knip --fix`), or any patch-apply route — must hold this before doing

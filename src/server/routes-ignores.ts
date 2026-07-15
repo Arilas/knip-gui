@@ -3,6 +3,7 @@ import { compileRemoveIgnoresPlan } from '../fix/compiler.js';
 import { listIgnores } from '../ignore/config-writer.js';
 import { applyPlanHandler, type FixRoutesCtx } from './routes-fix.js';
 import { readJsonObject } from './body.js';
+import type { PreviewResponse } from './api-types.js';
 
 // Ignored page's server surface (Task 5, UX overhaul): list the project's
 // current ignore entries, and preview/apply removing a subset of them.
@@ -26,7 +27,7 @@ export function registerIgnoresRoutes(app: Hono, ctx: FixRoutesCtx): void {
     // /api/ignore/preview — only planId, diffs and items go over the wire.
     const plan = await compileRemoveIgnoresPlan(projectDir, entries);
     planStore.put(plan);
-    return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items });
+    return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items } satisfies PreviewResponse);
   });
 
   app.post('/api/ignores/remove/apply', applyPlanHandler(ctx, 'ignore-remove-apply'));

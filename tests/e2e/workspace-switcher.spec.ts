@@ -65,7 +65,8 @@ function reapStrayServer(port: number): void {
   }
 }
 
-// Reads /api/report directly (bypassing the client's 2s polling) using the
+// Reads /api/report directly — the client's 2s poll now hits the slimmer
+// /api/status instead, so this reads the full report on its own using the
 // session token embedded in the served page — same pattern as
 // codepane-crash.spec.ts. Module-level so both tests below share it.
 async function readReport(page: Page): Promise<{ report: { scope?: string; issues: unknown[] } }> {

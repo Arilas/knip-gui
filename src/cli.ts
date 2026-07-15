@@ -62,7 +62,7 @@ export async function startCli(opts: { dir: string; port: number; open: boolean;
         // special-case that code here the way the old structured body did).
         const body = await res.json().catch(() => undefined);
         const message = body?.error as string | undefined;
-        if (message) console.error(`${message} — open the UI for details and setup help`);
+        console.error(`${message || 'scan failed'} — open the UI for details and setup help`);
       })
       .catch(() => {});
   }

@@ -7,8 +7,8 @@ import type { PlanStore } from '../fix/plan-store.js';
 import { probeSweepCapabilities, runSweep } from '../fix/sweep.js';
 import { readJsonObject } from './body.js';
 import { runScanIntoStore } from './scan-runner.js';
-import { BUSY_OP_LABELS, type BusyOp, type ReportStore, type StoreError } from './store.js';
-import type { ApplyResponse } from './api-types.js';
+import { BUSY_OP_LABELS, toErrorBody, type BusyOp, type ReportStore, type StoreError } from './store.js';
+import type { ApplyResponse, PreviewResponse, SweepResponse } from './api-types.js';
 
 export interface FixRoutesCtx {
   projectDir: string;
@@ -105,7 +105,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
       modeOverrides: body.modeOverrides as Record<string, FixMode> | undefined,
     });
     planStore.put(plan);
-    return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items });
+    return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items } satisfies PreviewResponse);
   });
 
   app.post('/api/fix/apply', applyPlanHandler(ctx, 'fix-apply'));
@@ -130,7 +130,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     const issueIds = Array.isArray(body.issueIds) ? body.issueIds : [];
     const plan = await compileIgnorePlan(projectDir, store.report.issues, issueIds);
     planStore.put(plan);
-    return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items });
+    return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items } satisfies PreviewResponse);
   });
 
   app.post('/api/ignore/apply', applyPlanHandler(ctx, 'ignore-apply'));
@@ -173,9 +173,9 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
       // Flatten the StoreError to a string `error` (plus structured detail) so the
       // client's apiErrorMessage — which only reads a string `error` — can surface it.
       if (!result.ok) {
-        return c.json({ error: result.error.message, code: result.error.code, stderr: result.error.stderr }, 500);
+        return c.json(toErrorBody(result.error), 500);
       }
-      return c.json({ issueCount: result.issueCount });
+      return c.json({ issueCount: result.issueCount } satisfies SweepResponse);
     } finally {
       store.endOp();
     }
