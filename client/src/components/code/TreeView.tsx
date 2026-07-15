@@ -38,6 +38,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronsDownUp, ChevronsUpDown, PanelRightClose, PanelRightOpen, Search } from 'lucide-react';
 import type { Issue, IssueType } from '../../../../src/core/types.js';
+import { registerCodeTreeFilterInput } from '../../lib/code-tree-focus.js';
 import { CODE_TYPES, filterIssues } from '../../lib/filters.js';
 import { autoExpandDepth, buildTree, countFiles, type DirNode } from '../../lib/tree.js';
 import { useUiStore } from '../../state/ui.js';
@@ -224,7 +225,13 @@ export function TreeView({
         <div className="flex items-center gap-1.5">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+            {/* Registers into the module-level focus registry (Task P, #25) so
+                the global `/` shortcut can focus this input from anywhere —
+                including before it's mounted, when the shortcut hook has to
+                navigate to /code first. React clears the registration (calls
+                this with null) automatically on unmount. */}
             <Input
+              ref={registerCodeTreeFilterInput}
               type="search"
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}

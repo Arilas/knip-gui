@@ -7,93 +7,36 @@
 // unchanged semantics from TopBar). Collapses to an icon-only trigger when
 // the sidebar is in icon-rail mode (`group-data-[collapsible=icon]:` — same
 // pattern the rest of the shadcn sidebar chrome uses to hide its own labels).
-import { useMemo, useState } from 'react';
-import { useNavigate, useRouterState } from '@tanstack/react-router';
+//
+// The select/confirm/runSwitch flow itself moved to hooks/use-workspace-
+// switch.ts (Task P, #25): CommandPalette's Workspaces group needs the exact
+// same semantics, so this component is now just the popover/combobox chrome
+// around that shared hook + the shared WorkspaceSwitchConfirmDialog.
+import { useState } from 'react';
 import { Check, ChevronsUpDown, FolderGit2 } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
+import { useWorkspaceSwitch } from '../../hooks/use-workspace-switch.js';
 import { cn } from '../../lib/utils.js';
-import { pluralizeWord } from '../../lib/pluralize.js';
-import { useBusy, useReport, useScanMutation } from '../../state/queries.js';
-import { useSelectionStore } from '../../state/selection.js';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '../ui/alert-dialog.js';
 import { Button } from '../ui/button.js';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../ui/command.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.js';
-
-// The scope value meaning "the whole project" — matches Report.scope's own
-// convention (absent/'.' = unscoped) and TopBar's old `<option value=".">`.
-const ALL_WORKSPACES = '.';
+import { WorkspaceSwitchConfirmDialog } from './WorkspaceSwitchConfirmDialog.js';
 
 export interface WorkspaceSwitcherProps {
   workspaces: string[];
   issues: Issue[];
 }
 
-interface Entry {
-  value: string;
-  label: string;
-  count: number;
-}
-
 export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps) {
   const [open, setOpen] = useState(false);
-  // Target scope of a switch awaiting confirmation because it would discard a
-  // non-empty selection (the rescan prunes out-of-scope ids). null = no prompt.
-  const [pendingScope, setPendingScope] = useState<string | null>(null);
-  const { data } = useReport();
-  const scanMutation = useScanMutation();
-  const navigate = useNavigate();
-  const busy = useBusy();
-  const selectionCount = useSelectionStore((s) => s.selected.size);
-  // Never let a scoped rescan land while the Review page is open — it prunes the
-  // selection under a frozen "Fix N issues" title and can leave a compiled plan
-  // pointing at a report that no longer matches.
-  const reviewing = useRouterState({ select: (s) => s.location.pathname === '/review' });
-
-  const currentScope = data?.report?.scope ?? ALL_WORKSPACES;
-
-  const entries = useMemo<Entry[]>(() => {
-    const counts = new Map<string, number>();
-    for (const issue of issues) counts.set(issue.workspace, (counts.get(issue.workspace) ?? 0) + 1);
-    const rest = workspaces
-      .filter((ws) => ws !== ALL_WORKSPACES)
-      .sort((a, b) => a.localeCompare(b))
-      .map((ws) => ({ value: ws, label: ws, count: counts.get(ws) ?? 0 }));
-    return [{ value: ALL_WORKSPACES, label: 'All workspaces', count: issues.length }, ...rest];
-  }, [workspaces, issues]);
+  const { entries, currentScope, busy, reviewing, selectionCount, select, pendingScope, confirmSwitch, cancelSwitch } =
+    useWorkspaceSwitch(workspaces, issues);
 
   const current = entries.find((e) => e.value === currentScope) ?? entries[0];
 
-  function runSwitch(value: string) {
-    const ws = value === ALL_WORKSPACES ? undefined : value;
-    // Mirror the new scope into the URL (All/'.' removes the param) so a
-    // reload/bookmark restores it via the root's boot hydration. `replace` (not
-    // push): `ws` is derived state mirrored to the URL, not a distinct history
-    // stop — the root's reconcile effect keeps the two in sync one way per
-    // phase (see router.tsx), so a pushed entry would only get snapped back.
-    navigate({ to: '.', search: (prev) => ({ ...prev, ws }), replace: true });
-    scanMutation.mutate(ws);
-  }
-
-  function select(value: string) {
+  function handleSelect(value: string) {
     setOpen(false);
-    if (value === currentScope) return;
-    // A scope change rescans, which prunes any selected issues outside the new
-    // scope — warn before silently discarding a non-empty cart.
-    if (selectionCount > 0) {
-      setPendingScope(value);
-      return;
-    }
-    runSwitch(value);
+    select(value);
   }
 
   return (
@@ -130,7 +73,7 @@ export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps
                   key={entry.value}
                   value={entry.label}
                   data-testid={`workspace-option-${entry.value}`}
-                  onSelect={() => select(entry.value)}
+                  onSelect={() => handleSelect(entry.value)}
                 >
                   <Check className={cn('size-4', entry.value === currentScope ? 'opacity-100' : 'opacity-0')} />
                   <span className="flex-1 truncate">{entry.label}</span>
@@ -142,28 +85,12 @@ export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps
         </Command>
       </PopoverContent>
 
-      <AlertDialog open={pendingScope !== null} onOpenChange={(next) => !next && setPendingScope(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Switch workspace?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You have {pluralizeWord(selectionCount, 'issue')} selected. Switching workspaces
-              re-scans and clears any selection outside the new scope.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingScope(null)}>Keep selection</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (pendingScope !== null) runSwitch(pendingScope);
-                setPendingScope(null);
-              }}
-            >
-              Switch anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <WorkspaceSwitchConfirmDialog
+        pendingScope={pendingScope}
+        selectionCount={selectionCount}
+        onCancel={cancelSwitch}
+        onConfirm={confirmSwitch}
+      />
     </Popover>
   );
 }

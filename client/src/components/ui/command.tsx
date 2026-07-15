@@ -59,7 +59,13 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
-        {children}
+        {/* The standard shadcn CommandDialog block (Task P, #25 fix): this
+            wrapper was missing entirely, so CommandInput/CommandList/
+            CommandItem had no cmdk store/context to attach to — mounting any
+            of them threw "Cannot read properties of undefined (reading
+            'subscribe')" and crashed to the ErrorBoundary the instant the
+            dialog opened. */}
+        <Command className="size-full">{children}</Command>
       </DialogContent>
     </Dialog>
   )

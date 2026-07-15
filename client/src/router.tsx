@@ -35,6 +35,7 @@ import {
   useRouterState,
 } from '@tanstack/react-router';
 import { Loader2 } from 'lucide-react';
+import { CommandPalette } from './components/CommandPalette.js';
 import { CodePage } from './components/pages/CodePage.js';
 import { Dashboard } from './components/pages/Dashboard.js';
 import { ActivityPage } from './components/pages/ActivityPage.js';
@@ -44,6 +45,7 @@ import { ReviewPage } from './components/pages/ReviewPage.js';
 import { SetupScreen } from './components/pages/SetupScreen.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from './components/ui/sidebar.js';
+import { useGlobalShortcuts } from './hooks/use-global-shortcuts.js';
 import { useBusy, useReport, useScanMutation } from './state/queries.js';
 import { useSelectionStore } from './state/selection.js';
 import { useUiStore } from './state/ui.js';
@@ -78,6 +80,12 @@ function RootLayout() {
   const busy = useBusy();
   const pruneMissing = useSelectionStore((s) => s.pruneMissing);
   const pageTitle = useRouterState({ select: (s) => pageTitleFromPath(s.location.pathname) });
+  // Command palette + bare shortcuts (Task P, #25) — mounted here, not
+  // App.tsx, because both need live navigate()/useRouterState() from router
+  // context, which only exists inside the routed tree; RootLayout is the
+  // router-context equivalent of "the app root" the task called for. See
+  // hooks/use-global-shortcuts.ts's doc comment for the full rationale.
+  const { paletteOpen, setPaletteOpen } = useGlobalShortcuts();
 
   const report = data?.report;
   const issues = report?.issues ?? [];
@@ -184,6 +192,7 @@ function RootLayout() {
           <Outlet />
         </div>
       </SidebarInset>
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </SidebarProvider>
   );
 }
