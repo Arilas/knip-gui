@@ -89,9 +89,23 @@ export function GitFooter() {
               looking at someone else's screenshot) can tell at a glance that
               devDependencies/test files were excluded from this scan. */}
           {report.production && (
-            <Badge variant="secondary" data-testid="production-badge" className="h-4 px-1.5 text-[10px]">
-              Production
-            </Badge>
+            <Tooltip>
+              {/* Badge isn't a button, so asChild puts the tooltip's a11y
+                  wiring (aria-describedby, focus/hover handlers) directly on
+                  the badge's own span — same pattern as the dirty-dot above. */}
+              <TooltipTrigger asChild>
+                <Badge
+                  variant="secondary"
+                  data-testid="production-badge"
+                  className="h-4 border-transparent bg-amber-500/15 px-1.5 text-[10px] text-amber-700 dark:bg-amber-500/10 dark:text-amber-400"
+                >
+                  Production
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                Scanned with --production — only production entry points traversed.
+              </TooltipContent>
+            </Tooltip>
           )}
         </span>
       )}
