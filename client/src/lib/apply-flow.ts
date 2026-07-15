@@ -101,14 +101,15 @@ export interface FileResultRow {
  * ever producing a patch). This zips `previewDiffs` (the files that DID
  * produce a patch/diff) against `applyResults` by filePath for the
  * ok/stale/missing/io-error rows, then appends one 'compile-failed' row per
- * failed PlanItem — those never had a diff of their own, so their filePath is
- * recovered from `issues` (PlanItem itself only carries an issueId).
+ * failed PlanItem — those never had a diff of their own, so their filePath
+ * now rides directly on the PlanItem (Task 3, server-side), falling back to
+ * 'unknown file' only for the unknown-issue/no-config-match cases that leave
+ * it unset.
  */
 export function joinResults(
   previewDiffs: DiffEntry[],
   applyResults: PatchResult[],
   planItems: PlanItem[],
-  issues: Issue[],
 ): FileResultRow[] {
   const resultByFile = new Map(applyResults.map((r) => [r.filePath, r]));
   const diffRows: FileResultRow[] = previewDiffs.map(({ filePath }): FileResultRow => {
@@ -118,11 +119,10 @@ export function joinResults(
     return { filePath, status: result.reason ?? 'io-error', reason: result.detail };
   });
 
-  const issueById = new Map(issues.map((i) => [i.id, i]));
   const compileFailedRows: FileResultRow[] = planItems
     .filter((item) => !item.ok)
     .map((item) => ({
-      filePath: issueById.get(item.issueId)?.filePath ?? 'unknown file',
+      filePath: item.filePath ?? 'unknown file',
       status: 'compile-failed' as const,
       reason: item.reason,
     }));
@@ -197,22 +197,6 @@ export function optionsNextBlocked(
   return mode === 'fix' && deletePaths.length > 0 && !confirmedDelete;
 }
 
-const DEP_TYPES = new Set<Issue['type']>(['dependencies', 'devDependencies', 'optionalPeerDependencies']);
-
-// The file a fixed issue's patch actually lands in. Dependency-shaped issues
-// are patched into the owning workspace's package.json (mirrors
-// compileFixPlan's own pkgPath computation in src/fix/compiler.ts), not
-// `issue.filePath`; everything else is patched in place. Ignore-mode config
-// edits (files/deps/binaries -> the knip config file) land somewhere this
-// can't derive from the issue alone — appliedOkIssueIds handles that case
-// via its all-patches-ok fallback.
-function patchFileForIssue(issue: Issue): string {
-  if (DEP_TYPES.has(issue.type)) {
-    return issue.workspace === '.' ? 'package.json' : `${issue.workspace}/package.json`;
-  }
-  return issue.filePath;
-}
-
 /**
  * The issue ids that were ACTUALLY applied: compiled ok (their PlanItem is
  * ok) AND their patch file applied ok. The commit-message summary must be
@@ -221,18 +205,15 @@ function patchFileForIssue(issue: Issue): string {
  * (the commit paths already correctly exclude such files; the message must
  * agree with them).
  *
- * An issue whose patch file isn't among the diffed files at all (an
- * ignore-mode config edit, whose patch lands in the knip config rather than
- * any file derivable from the issue) counts as applied only when every patch
+ * An ok item whose filePath isn't among the diffed files at all (e.g. a
+ * knip-config edit that compiled to a no-op — the entry was already present,
+ * so it never produced a patch row) counts as applied only when every patch
  * row succeeded — when something failed we can't attribute it, so we
- * undercount rather than overclaim.
+ * undercount rather than overclaim. An item with no filePath at all (unknown
+ * issue, or a failure before any config file was identified) is never
+ * counted.
  */
-export function appliedOkIssueIds(
-  planItems: PlanItem[],
-  rows: FileResultRow[],
-  issues: Issue[],
-): string[] {
-  const issueById = new Map(issues.map((i) => [i.id, i]));
+export function appliedOkIssueIds(planItems: PlanItem[], rows: FileResultRow[]): string[] {
   const patchRows = rows.filter((r) => r.status !== 'compile-failed');
   const patchFiles = new Set(patchRows.map((r) => r.filePath));
   const okFiles = new Set(patchRows.filter((r) => r.status === 'ok').map((r) => r.filePath));
@@ -240,11 +221,8 @@ export function appliedOkIssueIds(
 
   const ids: string[] = [];
   for (const item of planItems) {
-    if (!item.ok) continue;
-    const issue = issueById.get(item.issueId);
-    if (!issue) continue;
-    const file = patchFileForIssue(issue);
-    const applied = patchFiles.has(file) ? okFiles.has(file) : allPatchesOk;
+    if (!item.ok || item.filePath === undefined) continue;
+    const applied = patchFiles.has(item.filePath) ? okFiles.has(item.filePath) : allPatchesOk;
     if (applied) ids.push(item.issueId);
   }
   return ids;
@@ -293,10 +271,10 @@ export function buildApplyActivityEntry(
   fallbackSummary: string,
   at: string,
 ): ApplyActivityEntry | null {
-  const joinedRows = joinResults(diffs, results, items, planIssues);
+  const joinedRows = joinResults(diffs, results, items);
   const okPaths = joinedRows.filter((r) => r.status === 'ok').map((r) => r.filePath);
   if (okPaths.length === 0) return null;
-  const okIds = appliedOkIssueIds(items, joinedRows, planIssues);
+  const okIds = appliedOkIssueIds(items, joinedRows);
   const summary = summaryByType({ selected: new Set(okIds) }, planIssues) || fallbackSummary;
   return { kind, summary, paths: okPaths, at };
 }

@@ -243,9 +243,8 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   // --- rail rows per step (lib/review.ts's buildFileRail, Task 2) ---
   const zippedItems: RailPlanItem[] = useMemo(() => {
     if (flow.status === 'idle' || flow.status === 'previewing' || flow.status === 'failed') return [];
-    const issueById = new Map(planIssuesRef.current.map((i) => [i.id, i]));
     return flow.items.map((item) => ({
-      filePath: issueById.get(item.issueId)?.filePath ?? 'unknown file',
+      filePath: item.filePath ?? 'unknown file',
       ok: item.ok,
       reason: item.reason,
     }));
@@ -281,12 +280,13 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   }, [flow]);
 
   // --- applied-step reconciliation (apply-flow.ts's joinResults/
-  // appliedOkIssueIds, reused untouched — see that module's doc comments).
-  // DISPLAY only (CommitBar's paths/summary props) — the activity-log write
-  // itself happens in handleApply via buildApplyActivityEntry, not here; see
-  // that call's comment for why logging moved out of render/effect scope. ---
-  const joinedRows =
-    flow.status === 'applied' ? joinResults(flow.diffs, flow.results, flow.items, planIssuesRef.current) : [];
+  // appliedOkIssueIds — see that module's doc comments; both now read
+  // filePath straight off each PlanItem, Task 4, rather than re-deriving it
+  // from planIssuesRef). DISPLAY only (CommitBar's paths/summary props) —
+  // the activity-log write itself happens in handleApply via
+  // buildApplyActivityEntry, not here; see that call's comment for why
+  // logging moved out of render/effect scope. ---
+  const joinedRows = flow.status === 'applied' ? joinResults(flow.diffs, flow.results, flow.items) : [];
   const okPaths = useMemo(() => joinedRows.filter((r) => r.status === 'ok').map((r) => r.filePath), [joinedRows]);
 
   // Deletion signal for handleLeave's shouldRestoreOpenFile call (#6): every
@@ -316,7 +316,7 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   }, [review.kind, flow, okPaths]);
   const commitSummary = useMemo(() => {
     if (flow.status !== 'applied') return review.summary;
-    const okIds = appliedOkIssueIds(flow.items, joinedRows, planIssuesRef.current);
+    const okIds = appliedOkIssueIds(flow.items, joinedRows);
     return summaryByType({ selected: new Set(okIds) }, planIssuesRef.current) || review.summary;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flow, review.summary]);

@@ -104,16 +104,10 @@ describe('applyFlowReducer', () => {
 });
 
 describe('joinResults', () => {
-  const issues: Issue[] = [
-    issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'unusedHelper' }),
-    issue({ type: 'exports', filePath: 'src/shapes.ts', symbol: 'UnusedShape' }),
-  ];
-  const [okIssue, failedIssue] = issues;
-
   it('marks a file ok when its apply result succeeded', () => {
     const diffs: DiffEntry[] = [{ filePath: 'src/used.ts', diff: 'd1' }];
     const results: PatchResult[] = [{ filePath: 'src/used.ts', ok: true }];
-    expect(joinResults(diffs, results, [], issues)).toEqual([{ filePath: 'src/used.ts', status: 'ok' }]);
+    expect(joinResults(diffs, results, [])).toEqual([{ filePath: 'src/used.ts', status: 'ok' }]);
   });
 
   it('surfaces stale/missing/io-error reasons from the patch result', () => {
@@ -127,7 +121,7 @@ describe('joinResults', () => {
       { filePath: 'b.ts', ok: false, reason: 'missing' },
       { filePath: 'c.ts', ok: false, reason: 'io-error', detail: 'EACCES' },
     ];
-    expect(joinResults(diffs, results, [], [])).toEqual([
+    expect(joinResults(diffs, results, [])).toEqual([
       { filePath: 'a.ts', status: 'stale', reason: undefined },
       { filePath: 'b.ts', status: 'missing', reason: undefined },
       { filePath: 'c.ts', status: 'io-error', reason: 'EACCES' },
@@ -136,24 +130,26 @@ describe('joinResults', () => {
 
   it('falls back to missing when a diffed file has no matching apply result', () => {
     const diffs: DiffEntry[] = [{ filePath: 'orphan.ts', diff: 'd' }];
-    expect(joinResults(diffs, [], [], [])).toEqual([
+    expect(joinResults(diffs, [], [])).toEqual([
       { filePath: 'orphan.ts', status: 'missing', reason: 'no apply result received for this file' },
     ]);
   });
 
-  it('appends compile-failed rows for planItems with ok:false, resolving filePath via issues', () => {
-    const diffs: DiffEntry[] = [{ filePath: okIssue!.filePath, diff: 'd' }];
-    const results: PatchResult[] = [{ filePath: okIssue!.filePath, ok: true }];
-    const planItems: PlanItem[] = [{ issueId: failedIssue!.id, ok: false, reason: 'parse-error' }];
-    expect(joinResults(diffs, results, planItems, issues)).toEqual([
-      { filePath: okIssue!.filePath, status: 'ok' },
-      { filePath: failedIssue!.filePath, status: 'compile-failed', reason: 'parse-error' },
+  it('appends compile-failed rows for planItems with ok:false, using the PlanItem\'s own filePath', () => {
+    const diffs: DiffEntry[] = [{ filePath: 'src/used.ts', diff: 'd' }];
+    const results: PatchResult[] = [{ filePath: 'src/used.ts', ok: true }];
+    const planItems: PlanItem[] = [
+      { issueId: 'failed-1', ok: false, reason: 'parse-error', filePath: 'src/shapes.ts' },
+    ];
+    expect(joinResults(diffs, results, planItems)).toEqual([
+      { filePath: 'src/used.ts', status: 'ok' },
+      { filePath: 'src/shapes.ts', status: 'compile-failed', reason: 'parse-error' },
     ]);
   });
 
-  it('labels a compile-failed row "unknown file" when the issue id is not found', () => {
+  it('labels a compile-failed row "unknown file" when the plan item has no filePath', () => {
     const planItems: PlanItem[] = [{ issueId: 'ghost', ok: false, reason: 'gone' }];
-    expect(joinResults([], [], planItems, issues)).toEqual([
+    expect(joinResults([], [], planItems)).toEqual([
       { filePath: 'unknown file', status: 'compile-failed', reason: 'gone' },
     ]);
   });
@@ -252,17 +248,12 @@ describe('optionsNextBlocked', () => {
 });
 
 describe('appliedOkIssueIds', () => {
-  const exportIssue = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'unusedHelper' });
-  const fileIssue = issue({ type: 'files', filePath: 'src/orphan.ts' });
-  const depIssue = issue({ type: 'dependencies', filePath: 'package.json', symbol: 'left-pad' });
-  const wsDepIssue = issue({
-    type: 'devDependencies',
-    workspace: 'packages/app',
-    filePath: 'irrelevant.txt',
-    symbol: 'lodash',
-  });
-  const issues = [exportIssue, fileIssue, depIssue, wsDepIssue];
-  const okItems: PlanItem[] = issues.map((i) => ({ issueId: i.id, ok: true }));
+  const okItems: PlanItem[] = [
+    { issueId: 'export-1', ok: true, filePath: 'src/used.ts' },
+    { issueId: 'file-1', ok: true, filePath: 'src/orphan.ts' },
+    { issueId: 'dep-1', ok: true, filePath: 'package.json' },
+    { issueId: 'wsdep-1', ok: true, filePath: 'packages/app/package.json' },
+  ];
 
   it('returns every plan-ok issue when all patches applied ok', () => {
     const rows: FileResultRow[] = [
@@ -271,7 +262,7 @@ describe('appliedOkIssueIds', () => {
       { filePath: 'package.json', status: 'ok' },
       { filePath: 'packages/app/package.json', status: 'ok' },
     ];
-    expect(appliedOkIssueIds(okItems, rows, issues)).toEqual(issues.map((i) => i.id));
+    expect(appliedOkIssueIds(okItems, rows)).toEqual(okItems.map((i) => i.issueId));
   });
 
   it('excludes issues whose file went stale between preview and apply', () => {
@@ -280,16 +271,16 @@ describe('appliedOkIssueIds', () => {
       { filePath: 'src/orphan.ts', status: 'ok' },
     ];
     const items: PlanItem[] = [
-      { issueId: exportIssue.id, ok: true },
-      { issueId: fileIssue.id, ok: true },
+      { issueId: 'export-1', ok: true, filePath: 'src/used.ts' },
+      { issueId: 'file-1', ok: true, filePath: 'src/orphan.ts' },
     ];
-    expect(appliedOkIssueIds(items, rows, issues)).toEqual([fileIssue.id]);
+    expect(appliedOkIssueIds(items, rows)).toEqual(['file-1']);
   });
 
-  it('maps dependency issues to their workspace package.json, not issue.filePath', () => {
+  it('does not credit a dependency issue against issue.filePath when its patch actually landed in the workspace package.json', () => {
     const rows: FileResultRow[] = [{ filePath: 'packages/app/package.json', status: 'missing' }];
-    const items: PlanItem[] = [{ issueId: wsDepIssue.id, ok: true }];
-    expect(appliedOkIssueIds(items, rows, issues)).toEqual([]);
+    const items: PlanItem[] = [{ issueId: 'wsdep-1', ok: true, filePath: 'packages/app/package.json' }];
+    expect(appliedOkIssueIds(items, rows)).toEqual([]);
   });
 
   it('excludes compile-failed plan items regardless of file outcomes', () => {
@@ -298,29 +289,37 @@ describe('appliedOkIssueIds', () => {
       { filePath: 'src/used.ts', status: 'compile-failed', reason: 'parse-error' },
     ];
     const items: PlanItem[] = [
-      { issueId: fileIssue.id, ok: true },
-      { issueId: exportIssue.id, ok: false, reason: 'parse-error' },
+      { issueId: 'file-1', ok: true, filePath: 'src/orphan.ts' },
+      { issueId: 'export-1', ok: false, reason: 'parse-error', filePath: 'src/used.ts' },
     ];
-    expect(appliedOkIssueIds(items, rows, issues)).toEqual([fileIssue.id]);
+    expect(appliedOkIssueIds(items, rows)).toEqual(['file-1']);
   });
 
-  it('counts config-patched issues (patch file not derivable from the issue) when every patch row succeeded', () => {
-    // An ignore-mode files issue: the patch lands in knip.json, which no
-    // issue field points at.
+  it('counts config-patched issues (filePath not among the diffed files) when every patch row succeeded', () => {
+    // An ignore-mode files issue: the patch lands in knip.json, its filePath.
     const rows: FileResultRow[] = [{ filePath: 'knip.json', status: 'ok' }];
-    const items: PlanItem[] = [{ issueId: fileIssue.id, ok: true }];
-    expect(appliedOkIssueIds(items, rows, issues)).toEqual([fileIssue.id]);
+    const items: PlanItem[] = [{ issueId: 'file-1', ok: true, filePath: 'knip.json' }];
+    expect(appliedOkIssueIds(items, rows)).toEqual(['file-1']);
   });
 
   it('drops config-patched issues when any patch row failed (undercount rather than overclaim)', () => {
     const rows: FileResultRow[] = [{ filePath: 'knip.json', status: 'stale' }];
-    const items: PlanItem[] = [{ issueId: fileIssue.id, ok: true }];
-    expect(appliedOkIssueIds(items, rows, issues)).toEqual([]);
+    const items: PlanItem[] = [{ issueId: 'file-1', ok: true, filePath: 'knip.json' }];
+    expect(appliedOkIssueIds(items, rows)).toEqual([]);
   });
 
-  it('ignores plan items whose issue id is unknown', () => {
+  it('ignores plan items with no filePath (unknown-issue / unattributable failures)', () => {
     const rows: FileResultRow[] = [{ filePath: 'src/used.ts', status: 'ok' }];
-    expect(appliedOkIssueIds([{ issueId: 'ghost', ok: true }], rows, issues)).toEqual([]);
+    expect(appliedOkIssueIds([{ issueId: 'ghost', ok: true }], rows)).toEqual([]);
+  });
+
+  it('an ok item whose file produced no patch counts as applied only when every patch applied ok', () => {
+    const rows: FileResultRow[] = [{ filePath: 'a.ts', status: 'ok' }];
+    // knip.json edit compiled ok but was a no-op (entry already present) — no patch row for it
+    const items: PlanItem[] = [{ issueId: 'i1', ok: true, filePath: 'knip.json' }];
+    expect(appliedOkIssueIds(items, rows)).toEqual(['i1']);
+    const rowsWithFailure: FileResultRow[] = [{ filePath: 'a.ts', status: 'stale' }];
+    expect(appliedOkIssueIds(items, rowsWithFailure)).toEqual([]);
   });
 });
 
@@ -335,7 +334,7 @@ describe('buildApplyActivityEntry', () => {
 
   it('builds an entry from ok rows: kind, summary-by-type, and ok-only paths', () => {
     const diffs: DiffEntry[] = [{ filePath: usedIssue.filePath, diff: 'd' }];
-    const items: PlanItem[] = [{ issueId: usedIssue.id, ok: true }];
+    const items: PlanItem[] = [{ issueId: usedIssue.id, ok: true, filePath: usedIssue.filePath }];
     const results: PatchResult[] = [{ filePath: usedIssue.filePath, ok: true }];
     expect(buildApplyActivityEntry(diffs, items, results, [usedIssue], 'fix', 'fallback', at)).toEqual({
       kind: 'fix',
@@ -347,14 +346,14 @@ describe('buildApplyActivityEntry', () => {
 
   it('returns null when every row failed (nothing to log)', () => {
     const diffs: DiffEntry[] = [{ filePath: usedIssue.filePath, diff: 'd' }];
-    const items: PlanItem[] = [{ issueId: usedIssue.id, ok: true }];
+    const items: PlanItem[] = [{ issueId: usedIssue.id, ok: true, filePath: usedIssue.filePath }];
     const results: PatchResult[] = [{ filePath: usedIssue.filePath, ok: false, reason: 'stale' }];
     expect(buildApplyActivityEntry(diffs, items, results, [usedIssue], 'fix', 'fallback', at)).toBeNull();
   });
 
   it('falls back to fallbackSummary when summaryByType yields an empty string', () => {
-    // The ok'd plan item's issueId isn't in planIssues, so appliedOkIssueIds
-    // can't attribute it to any issue and summaryByType sees an empty
+    // The ok'd plan item has no filePath, so appliedOkIssueIds can't
+    // attribute it to any patch row and summaryByType sees an empty
     // selection — even though okPaths is non-empty and an entry is still
     // logged.
     const diffs: DiffEntry[] = [{ filePath: 'a.ts', diff: 'd' }];

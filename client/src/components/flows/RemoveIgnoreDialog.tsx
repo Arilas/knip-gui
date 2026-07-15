@@ -8,9 +8,9 @@
 // ActionModal itself moved onto the same primitives in Task 6), reusing
 // DiffView for the diff render and apply-flow.ts's `joinResults` for the
 // post-apply per-file ok/stale/missing/io-error rows — the same join
-// ActionModal's ResultsStep uses, just fed empty `items`/`issues` arrays
-// (there's nothing more to reconcile: preview already gates Remove on every
-// entry compiling ok, so no compile-failed row can appear post-apply).
+// ActionModal's ResultsStep uses, just fed an empty `items` array (there's
+// nothing more to reconcile: preview already gates Remove on every entry
+// compiling ok, so no compile-failed row can appear post-apply).
 import { useEffect, useReducer } from 'react';
 import { toast } from 'sonner';
 import type { IgnoreEntry, PatchResult, PlanItem } from '../../api.js';
@@ -103,10 +103,10 @@ export function RemoveIgnoreDialog({ entry, onOpenChange }: RemoveIgnoreDialogPr
       const result = await applyMutation.mutateAsync(flow.planId);
       dispatch({ type: 'apply:success', results: result.results });
       if (result.results.some((r) => r.ok)) {
-        // joinResults' 3rd/4th params (planItems/issues) only matter for a
+        // joinResults' 3rd param (planItems) only matters for a
         // compile-failed row's file path, unreachable here — see the
         // `rows` computation below the reducer for the same rationale.
-        const okPaths = joinResults(flow.diffs, result.results, [], [])
+        const okPaths = joinResults(flow.diffs, result.results, [])
           .filter((r) => r.status === 'ok')
           .map((r) => r.filePath);
         log({
@@ -127,10 +127,10 @@ export function RemoveIgnoreDialog({ entry, onOpenChange }: RemoveIgnoreDialogPr
     }
   }
 
-  // joinResults' 3rd/4th params (planItems/issues) only matter for resolving
-  // a compile-failed row's file path — impossible to reach here (preview
-  // already gates Remove behind every entry compiling ok), so both are `[]`.
-  const rows = flow.status === 'applied' ? joinResults(flow.diffs, flow.results, [], []) : [];
+  // joinResults' 3rd param (planItems) only matters for resolving a
+  // compile-failed row's file path — impossible to reach here (preview
+  // already gates Remove behind every entry compiling ok), so it's `[]`.
+  const rows = flow.status === 'applied' ? joinResults(flow.diffs, flow.results, []) : [];
 
   return (
     <Dialog open={entry !== null} onOpenChange={(open) => (flow.status !== 'applying' ? onOpenChange(open) : undefined)}>
