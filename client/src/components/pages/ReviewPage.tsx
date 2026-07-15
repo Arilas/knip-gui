@@ -24,6 +24,7 @@ import { apiErrorMessage } from '../../api.js';
 import {
   appliedOkIssueIds,
   applyFlowReducer,
+  buildApplyActivityEntry,
   defaultCommitMessage,
   filesToDelete,
   initialApplyFlowState,
@@ -145,6 +146,26 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
         failedItems: result.failedItems,
         rescanning: result.rescanning,
       });
+      // (#7) Log right here, in the mutateAsync continuation, rather than in
+      // a post-render effect keyed on flow.status === 'applied': this code
+      // keeps running even if the user has already navigated away and
+      // unmounted the page during the 'applying' window (React doesn't
+      // cancel in-flight promises), whereas an effect on an unmounted
+      // component simply never fires again — silently dropping the entry
+      // CommitDialog's "changed by knip-gui" check depends on. flow.diffs/
+      // flow.items are still the frozen 'previewed' values checked above (this
+      // function never reassigns `flow`); planIssuesRef.current is the issue
+      // list the plan was compiled from, per its own doc comment above.
+      const entry = buildApplyActivityEntry(
+        flow.diffs,
+        flow.items,
+        result.results,
+        planIssuesRef.current,
+        review.kind,
+        review.summary,
+        new Date().toISOString(),
+      );
+      if (entry) log(entry);
     } catch (e) {
       const message = apiErrorMessage(e);
       dispatch({ type: 'apply:error', error: message });
@@ -215,7 +236,10 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   }, [flow]);
 
   // --- applied-step reconciliation (apply-flow.ts's joinResults/
-  // appliedOkIssueIds, reused untouched — see that module's doc comments) ---
+  // appliedOkIssueIds, reused untouched — see that module's doc comments).
+  // DISPLAY only (CommitBar's paths/summary props) — the activity-log write
+  // itself happens in handleApply via buildApplyActivityEntry, not here; see
+  // that call's comment for why logging moved out of render/effect scope. ---
   const joinedRows =
     flow.status === 'applied' ? joinResults(flow.diffs, flow.results, flow.items, planIssuesRef.current) : [];
   const okPaths = useMemo(() => joinedRows.filter((r) => r.status === 'ok').map((r) => r.filePath), [joinedRows]);
@@ -251,19 +275,6 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
     return summaryByType({ selected: new Set(okIds) }, planIssuesRef.current) || review.summary;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flow, review.summary]);
-
-  // Activity logging (fix/ignore — commit logging lives in CommitBar): once
-  // per successful apply, mirroring ActionModal.ResultsStep's ref-guarded
-  // effect. Nothing is logged when every row failed (okPaths empty).
-  const loggedRef = useRef(false);
-  useEffect(() => {
-    if (flow.status !== 'applied' || loggedRef.current || okPaths.length === 0) return;
-    loggedRef.current = true;
-    log({ kind: review.kind, summary: commitSummary, paths: okPaths, at: new Date().toISOString() });
-    // Runs once per successful apply; commitSummary/okPaths/log/review are
-    // read at that moment, not re-triggered on their own later changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow.status]);
 
   const selectedRow = railRows.find((r) => r.filePath === selectedFilePath);
   const selectedDiff =

@@ -10,6 +10,7 @@ import type { PatchResult } from '../../src/fix/patch.js';
 import {
   appliedOkIssueIds,
   applyFlowReducer,
+  buildApplyActivityEntry,
   commitPaths,
   defaultBranchName,
   defaultCommitMessage,
@@ -320,5 +321,50 @@ describe('appliedOkIssueIds', () => {
   it('ignores plan items whose issue id is unknown', () => {
     const rows: FileResultRow[] = [{ filePath: 'src/used.ts', status: 'ok' }];
     expect(appliedOkIssueIds([{ issueId: 'ghost', ok: true }], rows, issues)).toEqual([]);
+  });
+});
+
+describe('buildApplyActivityEntry', () => {
+  // #7: this is the pure computation ReviewPage's handleApply calls right
+  // after applyMutation.mutateAsync resolves (an async continuation that
+  // survives the component unmounting), replacing the old post-render
+  // useEffect that silently dropped the log entry whenever the user
+  // navigated away during the brief 'applying' window.
+  const usedIssue = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'unusedHelper' });
+  const at = '2026-07-15T00:00:00.000Z';
+
+  it('builds an entry from ok rows: kind, summary-by-type, and ok-only paths', () => {
+    const diffs: DiffEntry[] = [{ filePath: usedIssue.filePath, diff: 'd' }];
+    const items: PlanItem[] = [{ issueId: usedIssue.id, ok: true }];
+    const results: PatchResult[] = [{ filePath: usedIssue.filePath, ok: true }];
+    expect(buildApplyActivityEntry(diffs, items, results, [usedIssue], 'fix', 'fallback', at)).toEqual({
+      kind: 'fix',
+      summary: '1 export',
+      paths: ['src/used.ts'],
+      at,
+    });
+  });
+
+  it('returns null when every row failed (nothing to log)', () => {
+    const diffs: DiffEntry[] = [{ filePath: usedIssue.filePath, diff: 'd' }];
+    const items: PlanItem[] = [{ issueId: usedIssue.id, ok: true }];
+    const results: PatchResult[] = [{ filePath: usedIssue.filePath, ok: false, reason: 'stale' }];
+    expect(buildApplyActivityEntry(diffs, items, results, [usedIssue], 'fix', 'fallback', at)).toBeNull();
+  });
+
+  it('falls back to fallbackSummary when summaryByType yields an empty string', () => {
+    // The ok'd plan item's issueId isn't in planIssues, so appliedOkIssueIds
+    // can't attribute it to any issue and summaryByType sees an empty
+    // selection — even though okPaths is non-empty and an entry is still
+    // logged.
+    const diffs: DiffEntry[] = [{ filePath: 'a.ts', diff: 'd' }];
+    const items: PlanItem[] = [{ issueId: 'ghost', ok: true }];
+    const results: PatchResult[] = [{ filePath: 'a.ts', ok: true }];
+    expect(buildApplyActivityEntry(diffs, items, results, [], 'ignore', 'fallback summary', at)).toEqual({
+      kind: 'ignore',
+      summary: 'fallback summary',
+      paths: ['a.ts'],
+      at,
+    });
   });
 });

@@ -11,6 +11,7 @@
 import type { FixMode, Issue } from '../../../src/core/types.js';
 import type { PlanItem } from '../../../src/fix/compiler.js';
 import type { PatchResult } from '../../../src/fix/patch.js';
+import { summaryByType } from '../state/selection.js';
 
 export interface DiffEntry {
   filePath: string;
@@ -247,4 +248,55 @@ export function appliedOkIssueIds(
     if (applied) ids.push(item.issueId);
   }
   return ids;
+}
+
+/** The shape `useActivityStore.log` (state/activity.ts) expects, minus its auto-assigned `id`. */
+export interface ApplyActivityEntry {
+  kind: 'fix' | 'ignore';
+  summary: string;
+  paths: string[];
+  at: string;
+}
+
+/**
+ * (#7) The activity-log entry for one completed fix/ignore apply, or `null`
+ * when nothing succeeded — pulled out of ReviewPage's old post-render
+ * useEffect (gated on flow.status === 'applied' + a loggedRef) so it can be
+ * called from handleApply's `mutateAsync` continuation instead. That effect
+ * silently dropped the log entry whenever the user navigated away during the
+ * brief 'applying' window: the page unmounted before the effect's next
+ * render ever ran, so the entry CommitDialog's provenance check relies on
+ * (appliedPaths(), state/activity.ts) never got written, and the just-applied
+ * files went on to show as "not changed by knip-gui". An async continuation
+ * after `await mutateAsync(...)` keeps running post-unmount (React doesn't
+ * cancel in-flight promises), so calling this from there instead makes the
+ * log write unconditional on the component still being mounted.
+ *
+ * `diffs`/`items`/`planIssues` must be the frozen inputs the plan that just
+ * ran was built from (ReviewPage's `flow.diffs`/`flow.items` at the
+ * 'previewed' state, and `planIssuesRef.current`) — not any live state that
+ * may have drifted since. `results` is the apply mutation's own response.
+ * Mirrors the deleted effect's exact semantics: join the preview diffs
+ * against the apply results (joinResults) to get the ok/failed rows, log
+ * nothing when no row came back ok, and otherwise summarize only the
+ * actually-applied issues (appliedOkIssueIds + summaryByType), falling back
+ * to `fallbackSummary` (the frozen pre-apply selection summary) when that
+ * yields '' (e.g. the ok'd files can't be attributed to any issue in
+ * `planIssues`).
+ */
+export function buildApplyActivityEntry(
+  diffs: DiffEntry[],
+  items: PlanItem[],
+  results: PatchResult[],
+  planIssues: Issue[],
+  kind: 'fix' | 'ignore',
+  fallbackSummary: string,
+  at: string,
+): ApplyActivityEntry | null {
+  const joinedRows = joinResults(diffs, results, items, planIssues);
+  const okPaths = joinedRows.filter((r) => r.status === 'ok').map((r) => r.filePath);
+  if (okPaths.length === 0) return null;
+  const okIds = appliedOkIssueIds(items, joinedRows, planIssues);
+  const summary = summaryByType({ selected: new Set(okIds) }, planIssues) || fallbackSummary;
+  return { kind, summary, paths: okPaths, at };
 }
