@@ -30,21 +30,25 @@ import {
   initialApplyFlowState,
   joinResults,
 } from '../../lib/apply-flow.js';
+import { pluralizeWord } from '../../lib/pluralize.js';
 import {
   affectedFilePaths,
   buildFileRail,
+  isAllStale,
   shouldRestoreOpenFile,
   type RailPlanItem,
   type RailResult,
 } from '../../lib/review.js';
 import { useActivityStore } from '../../state/activity.js';
 import {
+  useBusy,
   useFixApplyMutation,
   useFixPreviewMutation,
   useGitStatus,
   useIgnoreApplyMutation,
   useIgnorePreviewMutation,
   useReport,
+  useScanMutation,
 } from '../../state/queries.js';
 import { summaryByType, useSelectionStore } from '../../state/selection.js';
 import { useUiStore, type ReviewRequest } from '../../state/ui.js';
@@ -83,6 +87,8 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   const ignoreApply = useIgnoreApplyMutation();
   const gitStatusQuery = useGitStatus();
   const reportQuery = useReport();
+  const scanMutation = useScanMutation();
+  const busy = useBusy();
   const log = useActivityStore((s) => s.log);
 
   // Frozen the moment "Preview changes" is clicked (mirrors ActionModal's old
@@ -113,7 +119,16 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
     [issues, selected, modeOverrides],
   );
 
+  // (#9) See lib/review.ts's isAllStale doc comment: true only at the
+  // pre-preview 'options' step, when the live selection a rescan pruned to
+  // nothing has left the frozen header's count with nothing left to act on.
+  // Computed once per render and reused by both the early-return guard below
+  // (belt-and-suspenders against any other path trying to drive a preview
+  // off an empty selection) and the render branch further down.
+  const allStale = isAllStale(flow.status, selectedIssues.length, review.frozenCount);
+
   async function handlePreview() {
+    if (allStale) return;
     planIssuesRef.current = issues;
     planModeOverridesRef.current = modeOverrides;
     const issueIds = [...selected];
@@ -308,6 +323,53 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
 
   const isRepo = gitStatusQuery.data?.isRepo ?? false;
   const rescanning = flow.status === 'applied' && reportQuery.data?.status === 'scanning';
+
+  // (#9) Dedicated dead-end screen instead of the normal header+rail+main
+  // body: an 'options' step whose frozen count badge has nothing left behind
+  // it to preview is worse than no screen at all — it looks actionable
+  // (radios, a Preview button) but Preview can never produce anything. No
+  // GitFooter Re-run affordance is reachable from here to fix it either
+  // (that button is disabled for the whole time page === 'review' — see its
+  // own comment), so this state needs its own Rescan.
+  //
+  // Ordering: handleLeave() runs BEFORE scanMutation.mutate() rather than
+  // after/concurrently. clearReview()+navigate() are synchronous zustand
+  // writes that only take effect on React's next render, so this handler
+  // still finishes running (and fires the mutation) before this component
+  // unmounts — but conceptually the mutation is now "launched from the Code
+  // page", which lines up with where the user actually lands. This is safe
+  // either way since useScanMutation is queryClient-bound, not tied to this
+  // component's lifetime (react-query doesn't cancel in-flight mutations on
+  // unmount) — the ordering is a documentation choice, not a correctness one.
+  if (allStale) {
+    return (
+      <div
+        data-testid="review-all-stale"
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-8 text-center"
+      >
+        <p className="max-w-md text-sm text-muted-foreground">
+          All {pluralizeWord(review.frozenCount, 'selected issue', 'selected issues')}{' '}
+          {review.frozenCount === 1 ? 'is' : 'are'} stale — the code changed since the scan. Rescan and reselect.
+        </p>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            data-testid="review-all-stale-rescan"
+            disabled={busy}
+            onClick={() => {
+              handleLeave();
+              scanMutation.mutate(reportQuery.data?.report?.scope);
+            }}
+          >
+            Rescan
+          </Button>
+          <Button type="button" variant="outline" onClick={handleLeave}>
+            Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div data-testid="review-page" className="flex min-h-0 flex-1 flex-col overflow-hidden">

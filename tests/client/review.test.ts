@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { affectedFilePaths, buildFileRail, shouldRestoreOpenFile } from '../../client/src/lib/review.js';
+import { affectedFilePaths, buildFileRail, isAllStale, shouldRestoreOpenFile } from '../../client/src/lib/review.js';
 
 describe('buildFileRail', () => {
   it('marks every diffed file pending when no results have landed yet (preview step)', () => {
@@ -187,5 +187,27 @@ describe('shouldRestoreOpenFile (#6 — restore the pre-review open file on Revi
         deletedOkPaths: ['src/used.ts'],
       }),
     ).toBe(true);
+  });
+});
+
+describe('isAllStale (#9 — the frozen review header can outlive the live selection)', () => {
+  it('is true when idle, the live selection is empty, and a review was actually frozen', () => {
+    expect(isAllStale('idle', 0, 3)).toBe(true);
+  });
+
+  it('is false when the live selection is non-empty, even at idle', () => {
+    expect(isAllStale('idle', 1, 3)).toBe(false);
+  });
+
+  it('is false when frozenCount is 0 (nothing was ever selected — not "gone stale")', () => {
+    expect(isAllStale('idle', 0, 0)).toBe(false);
+  });
+
+  it('is false once the flow has moved beyond idle, even with an empty live selection (a mid-flow prune must not yank an in-progress/completed plan out from under the user)', () => {
+    expect(isAllStale('previewed', 0, 3)).toBe(false);
+    expect(isAllStale('previewing', 0, 3)).toBe(false);
+    expect(isAllStale('applying', 0, 3)).toBe(false);
+    expect(isAllStale('applied', 0, 3)).toBe(false);
+    expect(isAllStale('failed', 0, 3)).toBe(false);
   });
 });

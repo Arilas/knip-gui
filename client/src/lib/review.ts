@@ -10,6 +10,8 @@
 // real PlanItem[] against the issue list once, same lookup joinResults does
 // internally, before calling this), which keeps this module's signature to
 // exactly the three things the design brief specifies.
+import type { ApplyFlowState } from './apply-flow.js';
+
 export type RailStatus = 'pending' | 'ok' | 'stale' | 'missing' | 'io-error' | 'compile-failed';
 
 export interface FileRailRow {
@@ -184,4 +186,31 @@ export function shouldRestoreOpenFile({
   if (!returnOpenFile) return false;
   if (applied && deletedOkPaths.includes(returnOpenFile)) return false;
   return true;
+}
+
+/**
+ * (#9) The Review page freezes `frozenCount`/`summary` at startReview time,
+ * but the LIVE selection (`selectedIssues`, derived from the selection store
+ * filtered against the current `issues`) can be pruned to nothing before the
+ * user ever clicks "Preview changes" — an external edit + rescan invalidates
+ * every selected issue, and App.tsx's pruneMissing effect drops the
+ * now-dangling selection entries out from under this page. Left unhandled,
+ * the 'options' step (ReviewHeader) renders with a frozen non-zero count
+ * badge but nothing to actually preview: a dead end with no explanation.
+ *
+ * Gated on `flowStatus === 'idle'` specifically (not "selectedCount === 0"
+ * alone) so this can ONLY fire on the pre-preview step: once a plan has
+ * compiled (previewing/previewed/applying/applied/failed), the plan's own
+ * frozen diffs/items are what the rest of the page renders from, and the
+ * live selection emptying out from under an in-flight or completed plan is
+ * expected (see ReviewPage.tsx's planIssuesRef/planModeOverridesRef doc
+ * comments) — flipping to this empty state mid-flow would yank the plan
+ * result out from under the user for no reason.
+ *
+ * `frozenCount > 0` excludes the (currently unreachable, but cheap to guard)
+ * case of a review started with nothing selected in the first place — that's
+ * not "gone stale", there was never anything to preview.
+ */
+export function isAllStale(flowStatus: ApplyFlowState['status'], selectedCount: number, frozenCount: number): boolean {
+  return flowStatus === 'idle' && selectedCount === 0 && frozenCount > 0;
 }
