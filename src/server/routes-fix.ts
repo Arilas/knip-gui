@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import { runScan } from '../core/knip-runner.js';
 import { compileFixPlan, compileIgnorePlan } from '../fix/compiler.js';
 import type { FixMode } from '../core/types.js';
@@ -7,7 +7,8 @@ import type { PlanStore } from '../fix/plan-store.js';
 import { probeSweepCapabilities, runSweep } from '../fix/sweep.js';
 import { readJsonObject } from './body.js';
 import { runScanIntoStore } from './scan-runner.js';
-import { BUSY_OP_LABELS, type ReportStore, type StoreError } from './store.js';
+import { BUSY_OP_LABELS, type BusyOp, type ReportStore, type StoreError } from './store.js';
+import type { ApplyResponse } from './api-types.js';
 
 export interface FixRoutesCtx {
   projectDir: string;
@@ -59,6 +60,36 @@ export function triggerBackgroundRescan(ctx: FixRoutesCtx): boolean {
   return true;
 }
 
+// The one apply handler all three plan-consuming routes share (#41): latch →
+// planStore.take → applyPatches → endOp → triggerBackgroundRescan. The latch
+// invariants live HERE, once: no await between tryBeginOp and acting on it,
+// and endOp() released synchronously with no await before
+// triggerBackgroundRescan's own tryBeginOp('scan') — nothing can slip into
+// that gap. Exported for routes-ignores.ts.
+export function applyPlanHandler(ctx: FixRoutesCtx, op: BusyOp) {
+  return async (c: Context) => {
+    const { store, planStore, projectDir } = ctx;
+    if (!store.tryBeginOp(op)) {
+      return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
+    }
+    const body = await readJsonObject(c);
+    const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
+    if (!plan) {
+      store.endOp();
+      return c.json({ error: 'unknown or already-applied plan' }, 404);
+    }
+    let results: PatchResult[];
+    try {
+      results = await applyPatches(projectDir, plan.patches);
+    } finally {
+      store.endOp();
+    }
+    const failedItems = plan.items.filter((i) => !i.ok);
+    const rescanning = triggerBackgroundRescan(ctx);
+    return c.json({ results, failedItems, rescanning } satisfies ApplyResponse);
+  };
+}
+
 export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   const { store, planStore, projectDir, sweep = runSweep } = ctx;
 
@@ -76,31 +107,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items });
   });
 
-  app.post('/api/fix/apply', async (c) => {
-    // Same synchronous check-and-latch reasoning as /api/scan and /api/sweep: no
-    // await before tryBeginOp, or a concurrent request could slip through.
-    if (!store.tryBeginOp('fix-apply')) {
-      return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
-    }
-    const body = await readJsonObject(c);
-    const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
-    if (!plan) {
-      store.endOp();
-      return c.json({ error: 'unknown or already-applied plan' }, 404);
-    }
-    let results: PatchResult[];
-    try {
-      results = await applyPatches(projectDir, plan.patches);
-    } finally {
-      // Released here — synchronously, with no await before triggerBackgroundRescan
-      // below — so nothing can slip into the gap between this endOp() and the
-      // rescan's own tryBeginOp('scan').
-      store.endOp();
-    }
-    const failedItems = plan.items.filter((i) => !i.ok);
-    const rescanning = triggerBackgroundRescan(ctx);
-    return c.json({ results, failedItems, rescanning });
-  });
+  app.post('/api/fix/apply', applyPlanHandler(ctx, 'fix-apply'));
 
   // Releases a previewed-but-never-applied plan (the client fires this on
   // navigation/cancel so an abandoned preview doesn't sit around until
@@ -125,29 +132,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items });
   });
 
-  app.post('/api/ignore/apply', async (c) => {
-    // Same synchronous check-and-latch reasoning as /api/fix/apply above.
-    if (!store.tryBeginOp('ignore-apply')) {
-      return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
-    }
-    const body = await readJsonObject(c);
-    const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
-    if (!plan) {
-      store.endOp();
-      return c.json({ error: 'unknown or already-applied plan' }, 404);
-    }
-    let results: PatchResult[];
-    try {
-      results = await applyPatches(projectDir, plan.patches);
-    } finally {
-      // Released synchronously, no await before triggerBackgroundRescan — see
-      // /api/fix/apply above.
-      store.endOp();
-    }
-    const failedItems = plan.items.filter((i) => !i.ok);
-    const rescanning = triggerBackgroundRescan(ctx);
-    return c.json({ results, failedItems, rescanning });
-  });
+  app.post('/api/ignore/apply', applyPlanHandler(ctx, 'ignore-apply'));
 
   app.post('/api/sweep', async (c) => {
     // Check-and-latch must be synchronous (no await between the tryBeginOp check

@@ -1,10 +1,8 @@
 import type { Hono } from 'hono';
 import { compileRemoveIgnoresPlan } from '../fix/compiler.js';
-import { applyPatches, type PatchResult } from '../fix/patch.js';
 import { listIgnores } from '../ignore/config-writer.js';
+import { applyPlanHandler, type FixRoutesCtx } from './routes-fix.js';
 import { readJsonObject } from './body.js';
-import { triggerBackgroundRescan, type FixRoutesCtx } from './routes-fix.js';
-import { BUSY_OP_LABELS } from './store.js';
 
 // Ignored page's server surface (Task 5, UX overhaul): list the project's
 // current ignore entries, and preview/apply removing a subset of them.
@@ -31,28 +29,5 @@ export function registerIgnoresRoutes(app: Hono, ctx: FixRoutesCtx): void {
     return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items });
   });
 
-  app.post('/api/ignores/remove/apply', async (c) => {
-    // Same synchronous check-and-latch reasoning as routes-fix.ts's apply routes:
-    // no await before tryBeginOp, or a concurrent request could slip through.
-    if (!store.tryBeginOp('ignore-remove-apply')) {
-      return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
-    }
-    const body = await readJsonObject(c);
-    const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
-    if (!plan) {
-      store.endOp();
-      return c.json({ error: 'unknown or already-applied plan' }, 404);
-    }
-    let results: PatchResult[];
-    try {
-      results = await applyPatches(projectDir, plan.patches);
-    } finally {
-      // Released synchronously, no await before triggerBackgroundRescan — see
-      // routes-fix.ts's apply routes.
-      store.endOp();
-    }
-    const failedItems = plan.items.filter((i) => !i.ok);
-    const rescanning = triggerBackgroundRescan(ctx);
-    return c.json({ results, failedItems, rescanning });
-  });
+  app.post('/api/ignores/remove/apply', applyPlanHandler(ctx, 'ignore-remove-apply'));
 }
