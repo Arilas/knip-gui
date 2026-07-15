@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { runScan } from '../core/knip-runner.js';
 import { PlanStore } from '../fix/plan-store.js';
 import { runSweep } from '../fix/sweep.js';
@@ -130,15 +130,20 @@ export function createServer(opts: {
   // for the `__KNIP_GUI_TOKEN__` placeholder baked into the build (see
   // client/index.html); falls back to the Plan 1 inline shell when the client
   // hasn't been built (dist/client absent), e.g. in unit tests or a source
-  // checkout that hasn't run `npm run build` yet.
-  app.get('/', async (c) => {
+  // checkout that hasn't run `npm run build` yet. Shared by `GET /` and the
+  // SPA fallback below: every client-side route (/code, /review, …) must boot
+  // the SAME token-bearing shell so the client-side router can resolve the
+  // path itself — a deep-link or reload of an in-app URL would otherwise 404.
+  async function serveShell(c: Context) {
     try {
       const html = await readFile(join(clientDir, 'index.html'), 'utf8');
       return c.html(html.replaceAll('__KNIP_GUI_TOKEN__', token));
     } catch {
       return c.html(fallbackShell(token));
     }
-  });
+  }
+
+  app.get('/', serveShell);
 
   // Public static assets (js/css/etc emitted by the client build) — deliberately
   // NOT behind the /api/* token middleware, since these are just static bytes
@@ -224,6 +229,30 @@ export function createServer(opts: {
   registerFixRoutes(app, fixCtx);
   registerGitRoutes(app, { projectDir });
   registerIgnoresRoutes(app, fixCtx);
+
+  // SPA fallback — registered LAST so it only catches paths no real route
+  // above claimed. The client is a single-page app whose router owns
+  // /dashboard, /code, /review, … : a browser deep-link or reload of any of
+  // those hits the server first, and without this every non-`/` in-app URL
+  // would 404. The Host guard (`app.use('*')`) already ran, so the shell we
+  // hand back here is as protected as `GET /`. Two carve-outs before serving
+  // it:
+  //   - `/api/*` that fell through every real API route is a genuinely
+  //     unknown endpoint — answer with the machine-readable JSON envelope
+  //     apiFetch expects, never the HTML shell (which would surface as an
+  //     opaque parse error client-side).
+  //   - a last path segment containing a `.` is an asset request (`/foo.png`,
+  //     a stale `/assets/…` miss that escaped its own route, a source-map
+  //     probe): there is no such client-side ROUTE, so 404 rather than
+  //     handing back HTML a browser would try to render as the missing asset.
+  //     Client-side route segments never contain a dot.
+  app.get('*', (c) => {
+    const path = c.req.path;
+    if (path.startsWith('/api/')) return c.json({ error: 'not found' }, 404);
+    const lastSegment = path.slice(path.lastIndexOf('/') + 1);
+    if (lastSegment.includes('.')) return c.notFound();
+    return serveShell(c);
+  });
 
   return { app, token, store };
 }

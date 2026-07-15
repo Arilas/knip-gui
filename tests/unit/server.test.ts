@@ -160,11 +160,22 @@ describe('static client serving', () => {
     expect(res.headers.get('content-type')).toContain('javascript');
   });
 
-  it('404s an asset path that escapes the client dir', async () => {
+  it('never leaks a file escaping the client dir via an asset traversal', async () => {
     const clientDir = await makeClientDir();
     const { app } = createServer({ projectDir: single, scan: async () => fakeRaw, clientDir });
-    const res = await app.request('/assets/../../etc/passwd');
-    expect(res.status).toBe(404);
+    // The WHATWG URL constructor normalizes the `..` segments away before this
+    // ever reaches the server (`/assets/../../etc/passwd` -> `/etc/passwd`), so
+    // it never matches `/assets/*` — it lands on the SPA fallback. A dotless
+    // target serves the SPA shell (harmless: the app's own token page, not the
+    // target file); a dotted target 404s under the fallback's asset carve-out.
+    // Either way the escaped file's bytes are NEVER returned.
+    const dotless = await app.request('/assets/../../etc/passwd');
+    expect(dotless.status).toBe(200);
+    const dotlessBody = await dotless.text();
+    expect(dotlessBody).not.toContain('root:');
+
+    const dotted = await app.request('/assets/../../etc/hosts.txt');
+    expect(dotted.status).toBe(404);
   });
 
   it('404s an asset that does not exist', async () => {
@@ -172,6 +183,47 @@ describe('static client serving', () => {
     const { app } = createServer({ projectDir: single, scan: async () => fakeRaw, clientDir });
     const res = await app.request('/assets/nope.js');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('SPA fallback (client-side routes)', () => {
+  it('serves the token-substituted shell for a client-side path so a deep-link/reload lands in the SPA', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/code');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    // Same token-bearing shell GET / hands out — the client boots and its
+    // router resolves /code itself.
+    expect(await res.text()).toContain(token);
+  });
+
+  it('serves the shell for a nested client-side path too', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/review');
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain(token);
+  });
+
+  it('404s an unknown /api/* path as JSON (never the HTML shell — an API 404 must stay machine-readable)', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/api/nope', { headers: { 'x-knip-gui-token': token } });
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(await res.json()).toEqual({ error: 'not found' });
+  });
+
+  it('404s a path whose last segment has a file extension (a missing asset must not fall through to the shell)', async () => {
+    const { app } = makeServer();
+    const res = await app.request('/foo.png');
+    expect(res.status).toBe(404);
+    expect(await res.text()).not.toContain('knip-gui-token');
+  });
+
+  it('still guards the fallback against a non-loopback Host (the shell hands out the token)', async () => {
+    const { app } = makeServer();
+    const res = await app.request('/code', { headers: { host: 'evil.example.com' } });
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain('knip-gui-token');
   });
 });
 
