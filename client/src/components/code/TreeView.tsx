@@ -39,18 +39,27 @@
 // (clearing the chip), same as a rescan introducing it fresh. Only genuinely
 // new paths get merged in, additively — see ui.ts's `expandDirs` doc comment
 // for why this can't undo a Collapse all.
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronsDownUp, ChevronsUpDown, PanelRightClose, PanelRightOpen, Search } from 'lucide-react';
 import type { Issue, IssueType } from '../../../../src/core/types.js';
 import { registerCodeTreeFilterInput } from '../../lib/code-tree-focus.js';
 import { CODE_TYPES, filterIssues } from '../../lib/filters.js';
-import { autoExpandDepth, buildTree, countFiles, filterByScope, type DirNode } from '../../lib/tree.js';
+import {
+  autoExpandDepth,
+  buildTree,
+  countFiles,
+  filterByScope,
+  toggleNodeSelection,
+  treeKeyAction,
+  type DirNode,
+  type FlatRow,
+} from '../../lib/tree.js';
 import { useUiStore } from '../../state/ui.js';
 import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
 import { FilterChips } from './FilterChips.js';
-import { TreeNodeRow, type FlatRow } from './TreeNode.js';
+import { TreeNodeRow } from './TreeNode.js';
 
 export interface TreeViewProps {
   /** Every code-eligible issue in scope (workspace/search is applied here, not by the caller). */
@@ -83,16 +92,26 @@ export interface TreeViewProps {
 
 const ALL_CODE_TYPES = new Set(CODE_TYPES);
 
+// setSize/posInSet (Task K, #13's aria-setsize/aria-posinset) are computed
+// HERE, at flatten time, rather than re-derived later from the flattened
+// list: node.children is already the exact, already-sorted sibling group,
+// so its own index is the 1-indexed position for free. Recovering "siblings
+// under the same parent" from a flat depth-only list after the fact would
+// need the same parent-scan treeKeyAction's findParentIndex does for
+// ArrowLeft — doable, but pointless extra work when the real answer is
+// sitting right here in the recursion.
 function flatten(node: DirNode, depth: number, expandedDirs: ReadonlySet<string>, out: FlatRow[]): void {
-  for (const child of node.children) {
+  const setSize = node.children.length;
+  node.children.forEach((child, i) => {
+    const posInSet = i + 1;
     if (child.kind === 'dir') {
       const expanded = expandedDirs.has(child.path);
-      out.push({ kind: 'dir', node: child, depth, expanded });
+      out.push({ kind: 'dir', node: child, depth, expanded, setSize, posInSet });
       if (expanded) flatten(child, depth + 1, expandedDirs, out);
     } else {
-      out.push({ kind: 'file', node: child, depth });
+      out.push({ kind: 'file', node: child, depth, setSize, posInSet });
     }
-  }
+  });
 }
 
 function allDirPaths(node: DirNode, out: Set<string> = new Set()): Set<string> {
@@ -231,6 +250,52 @@ export function TreeView({
     overscan: 12,
   });
 
+  // Roving tabindex (ARIA tree pattern, Task K/#13): activeIndex is plain
+  // component state (per the design brief — no store involvement, this is
+  // purely a keyboard-focus concern, not app state worth persisting). Clamped
+  // — rather than left dangling — whenever a search/filter/scope change
+  // shrinks `rows` out from under whatever was active, so a stale index can
+  // never make handleTreeKeyDown below read past the end of the new list.
+  const [activeIndex, setActiveIndex] = useState(0);
+  useEffect(() => {
+    if (rows.length > 0 && activeIndex > rows.length - 1) setActiveIndex(rows.length - 1);
+  }, [rows.length, activeIndex]);
+  const safeActiveIndex = rows.length === 0 ? 0 : Math.min(activeIndex, rows.length - 1);
+
+  // Virtualization means a row's DOM node only exists while it's (near)
+  // visible — this map is populated/emptied by each TreeNodeRow's own ref
+  // callback as rows mount/unmount, so moveActive (below) has something to
+  // call .focus() on once scrollToIndex has pulled the target row back into
+  // the mounted window.
+  const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const registerRowRef = useCallback((index: number, el: HTMLDivElement | null) => {
+    if (el) rowRefs.current.set(index, el);
+    else rowRefs.current.delete(index);
+  }, []);
+
+  // Moves the roving-tabindex focus to `index` and — the part a plain state
+  // update can't do — actually puts real DOM focus there. scrollToIndex
+  // alone only schedules the target row to mount on the NEXT render, so a
+  // synchronous .focus() right after it would usually hit nothing; bounded
+  // rAF polling (same idiom as hooks/use-global-shortcuts.ts's
+  // retryFocusUntilMounted, for the same "wait for React to commit, but stop
+  // as soon as it has" reason) waits for that render instead of a fixed
+  // guessed timeout.
+  function moveActive(index: number) {
+    setActiveIndex(index);
+    virtualizer.scrollToIndex(index, { align: 'auto' });
+    let attempts = 0;
+    const tryFocus = () => {
+      const el = rowRefs.current.get(index);
+      if (el) {
+        el.focus();
+        return;
+      }
+      if (attempts++ < 20) requestAnimationFrame(tryFocus);
+    };
+    requestAnimationFrame(tryFocus);
+  }
+
   // toggleDir merges into whatever's already expanded — if the store hasn't
   // been seeded yet (theoretically possible: the seeding effect above hasn't
   // committed, though in practice it always has by the time a row is
@@ -252,6 +317,49 @@ export function TreeView({
     storeCollapseAll();
   }
 
+  // Single container-level key handler (rather than one per row, as the
+  // pre-Task-K Enter/Space-only version had) because most actions
+  // (ArrowLeft/Right, Home/End, toggle-select) need the FULL row list, not
+  // just the focused row in isolation — treeKeyAction (lib/tree.ts) is the
+  // pure decision, this is just the impure "carry it out" half. Only
+  // preventDefault/stopPropagation when the tree actually consumes the key:
+  // an unhandled key (notably `/`, and any bare letter/digit) must keep
+  // bubbling to the window-level global-shortcuts listener (hooks/
+  // use-global-shortcuts.ts) exactly as if the tree weren't there — that's
+  // what keeps the #25 `/`-focus-filter shortcut and bare `r`/digit shortcuts
+  // working while a tree row has focus (tree rows are div-based, so
+  // use-global-shortcuts.ts's isTypingTarget never suppresses them anyway).
+  function handleTreeKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    const action = treeKeyAction(e.key, { rows, activeIndex: safeActiveIndex });
+    if (action.type === 'none') return;
+    e.preventDefault();
+    e.stopPropagation();
+    switch (action.type) {
+      case 'move':
+        moveActive(action.index);
+        break;
+      case 'expand':
+      case 'collapse':
+        // Both flip the SAME store toggle — treeKeyAction only ever emits
+        // 'expand' when the dir is currently collapsed (and 'collapse' when
+        // currently expanded), so a plain flip always lands in the direction
+        // the action name promises.
+        toggleDir(action.path);
+        break;
+      case 'open':
+        // Exactly the click contract (CodePage's onOpenFile: search param +
+        // bumpOpenFileNonce) — Enter on a file must open it the same way a
+        // click does, per the design brief.
+        onOpenFile(action.path);
+        break;
+      case 'toggle-select': {
+        const row = rows[action.index];
+        if (row) toggleNodeSelection(row.node, selected, enabledTypes, onToggleIds, onAddFileFiltered);
+        break;
+      }
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex flex-col gap-2 border-b border-border px-3 py-2">
@@ -268,6 +376,17 @@ export function TreeView({
               type="search"
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
+              onKeyDown={(e) => {
+                // Filter -> tree handoff (Task K, #13): ArrowDown moves focus
+                // straight into the tree's currently-active row instead of
+                // doing nothing (a bare text input has no ArrowDown
+                // behavior of its own to preserve) — the natural next key a
+                // user reaches for right after narrowing the filter.
+                if (e.key === 'ArrowDown' && rows.length > 0) {
+                  e.preventDefault();
+                  moveActive(safeActiveIndex);
+                }
+              }}
               placeholder="Filter by path or symbol…"
               aria-label="Filter tree by path or symbol"
               className="pl-7"
@@ -310,7 +429,13 @@ export function TreeView({
           {search ? 'No files match that filter.' : 'No issues match the current filters.'}
         </p>
       ) : (
-        <div ref={parentRef} className="min-h-0 flex-1 overflow-auto">
+        <div
+          ref={parentRef}
+          role="tree"
+          aria-label="Code files"
+          className="min-h-0 flex-1 overflow-auto"
+          onKeyDown={handleTreeKeyDown}
+        >
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index]!;
@@ -328,6 +453,10 @@ export function TreeView({
                 >
                   <TreeNodeRow
                     row={row}
+                    index={virtualRow.index}
+                    active={virtualRow.index === safeActiveIndex}
+                    registerRowRef={registerRowRef}
+                    onActivate={setActiveIndex}
                     selected={selected}
                     enabledTypes={enabledTypes}
                     onToggleExpand={toggleDir}

@@ -14,21 +14,38 @@ import type { Issue, IssueType } from '../../../../src/core/types.js';
 import { isFixable, isIgnorable, isLikelyTestFile, typeLabel } from '../../lib/filters.js';
 import { pluralizeType } from '../../lib/pluralize.js';
 import {
-  collectFileIssues,
-  idsToToggleForNode,
   nodeSelectionState,
   scopedActionableIds,
+  toggleNodeSelection,
   type DirNode,
   type FileNode,
+  type FlatRow,
 } from '../../lib/tree.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js';
 
-export type FlatRow =
-  | { kind: 'dir'; node: DirNode; depth: number; expanded: boolean }
-  | { kind: 'file'; node: FileNode; depth: number };
+// Re-exported for callers that only ever imported FlatRow from here (Task 3
+// originally defined it in this file) — the real definition moved to
+// lib/tree.ts for Task K/#13 so the React-free treeKeyAction helper could use
+// it too; nothing here should define it again.
+export type { FlatRow } from '../../lib/tree.js';
 
 export interface TreeNodeRowProps {
   row: FlatRow;
+  /**
+   * This row's own index into TreeView's flattened `rows` — needed for the
+   * roving-tabindex contract below (Task K, #13): registering this row's DOM
+   * node for keyboard-driven focus/scrollToIndex, and reporting a click as
+   * "the user just activated row N" so mouse -> keyboard handoff picks up
+   * from wherever they clicked rather than snapping back to the tree's own
+   * last-remembered index.
+   */
+  index: number;
+  /** True on exactly one row at a time (TreeView's activeIndex) — drives roving tabIndex (0 here, -1 elsewhere) per the ARIA tree pattern. */
+  active: boolean;
+  /** Registers/unregisters this row's root DOM node under `index` so TreeView can imperatively .focus() it after a keyboard move scrolls it into view (virtualization means the node doesn't exist until then). */
+  registerRowRef: (index: number, el: HTMLDivElement | null) => void;
+  /** Fired on click (in addition to the row's own open/toggle-expand action) so activeIndex tracks the mouse, not just the keyboard. */
+  onActivate: (index: number) => void;
   selected: ReadonlySet<string>;
   enabledTypes: ReadonlySet<IssueType>;
   onToggleExpand: (path: string) => void;
@@ -179,6 +196,20 @@ export function TestFileHint() {
   );
 }
 
+// ARIA choice (Task K, #13's design brief explicitly calls this out as a
+// pick-and-document decision): a treeitem row with a selection checkbox
+// keeps that checkbox as its OWN accessible control — a real native
+// `<input type="checkbox">` with its own aria-label/checked/indeterminate
+// state — rather than mirroring tri-state selection onto the row's
+// aria-checked. The APG's checkbox-tree pattern (a tree where every treeitem
+// doubles as a tristate checkbox, no separate control) doesn't fit here: this
+// tree's checkbox and its row are two INDEPENDENT actions with different
+// targets (the checkbox selects issues into the fix/ignore cart; the row
+// itself opens a file or expands a dir), so collapsing them into one
+// aria-checked on the treeitem would misdescribe the row's primary action to
+// assistive tech. Native `<input>` semantics already give screen readers
+// checked/unchecked/mixed for free — see the `state==='some'`
+// `indeterminate` line below.
 export function TriStateCheckbox({
   state,
   disabled,
@@ -230,6 +261,10 @@ const ROW_BASE =
 
 export function TreeNodeRow({
   row,
+  index,
+  active,
+  registerRowRef,
+  onActivate,
   selected,
   enabledTypes,
   onToggleExpand,
@@ -239,39 +274,51 @@ export function TreeNodeRow({
 }: TreeNodeRowProps) {
   const indent = 6 + row.depth * 16;
 
-  // Shared checkbox-click semantics for both dir and file rows: a fully-
-  // checked node (relative to enabledTypes) clears via the ordinary toggle;
-  // anything else adds the enabled-type actionable issues under it via
-  // addFileFiltered — a pure add that never drops a cart item belonging to a
-  // currently-disabled type (see selection.ts's addFileFiltered doc comment
-  // for why this is what makes the cart survive filter toggles).
+  // Shared checkbox-click semantics for both dir and file rows — see
+  // toggleNodeSelection's own doc comment (lib/tree.ts). Kept as a thin
+  // per-row wrapper (rather than calling toggleNodeSelection directly at each
+  // call site below) purely to close over onToggleIds/onAddFileFiltered/
+  // selected/enabledTypes once.
   function handleCheckboxChange(node: DirNode | FileNode) {
-    const state = nodeSelectionState(node, selected, enabledTypes);
-    if (state === 'all') {
-      onToggleIds(idsToToggleForNode(node, selected, enabledTypes));
-    } else {
-      onAddFileFiltered(collectFileIssues(node), enabledTypes);
-    }
+    toggleNodeSelection(node, selected, enabledTypes, onToggleIds, onAddFileFiltered);
   }
 
+  // Roving tabindex (ARIA tree pattern, Task K/#13): exactly the active row
+  // is in the Tab order (tabIndex 0); every other row is -1 so Tab skips the
+  // whole tree in one stop and TreeView's own keydown handler — not the
+  // browser's default Tab-through-everything — owns in-tree movement. Enter/
+  // Space no longer have their own onKeyDown here (that used to treat both
+  // identically): TreeView's container-level handler now decides via
+  // treeKeyAction, since Space's meaning changed (toggles the row's own
+  // checkbox, not "same as Enter") and needs the full row list to do so.
+  const roving = {
+    ref: (el: HTMLDivElement | null) => registerRowRef(index, el),
+    tabIndex: active ? 0 : -1,
+    'data-active': active || undefined,
+  } as const;
+
   if (row.kind === 'dir') {
-    const { node, expanded } = row;
+    const { node, expanded, setSize, posInSet } = row;
     const state = nodeSelectionState(node, selected, enabledTypes);
     const disabled = scopedActionableIds(node, enabledTypes).length === 0;
     const FolderIcon = expanded ? FolderOpen : Folder;
     return (
       <div
-        role="button"
-        tabIndex={0}
-        aria-label={expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+        {...roving}
+        role="treeitem"
+        aria-level={row.depth + 1}
+        aria-setsize={setSize}
+        aria-posinset={posInSet}
+        // Just the item's own name here — role="treeitem" already announces
+        // "expanded"/"collapsed" via aria-expanded below (per APG); baking
+        // "Collapse "/"Expand " into the accessible NAME, as the pre-Task-K
+        // role="button" version did, duplicated that state in the label.
+        aria-label={`${node.name}/`}
         aria-expanded={expanded}
         data-testid={`tree-dir-${node.path}`}
-        onClick={() => onToggleExpand(node.path)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onToggleExpand(node.path);
-          }
+        onClick={() => {
+          onActivate(index);
+          onToggleExpand(node.path);
         }}
         className={ROW_BASE}
         style={{ paddingLeft: indent }}
@@ -307,23 +354,23 @@ export function TreeNodeRow({
     );
   }
 
-  const { node } = row;
+  const { node, setSize, posInSet } = row;
   const state = nodeSelectionState(node, selected, enabledTypes);
   const disabled = scopedActionableIds(node, enabledTypes).length === 0;
   const FileIcon = iconForPath(node.path);
   return (
     <div
-      role="button"
-      tabIndex={0}
+      {...roving}
+      role="treeitem"
+      aria-level={row.depth + 1}
+      aria-setsize={setSize}
+      aria-posinset={posInSet}
       aria-label={node.name}
       data-testid={`tree-file-${node.path}`}
       title={node.path}
-      onClick={() => onOpenFile(node.path)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpenFile(node.path);
-        }
+      onClick={() => {
+        onActivate(index);
+        onOpenFile(node.path);
       }}
       className={ROW_BASE}
       style={{ paddingLeft: indent }}

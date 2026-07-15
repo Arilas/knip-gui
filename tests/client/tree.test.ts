@@ -10,8 +10,9 @@ import {
   filterByScope,
   idsToToggleForNode,
   nodeSelectionState,
+  treeKeyAction,
 } from '../../client/src/lib/tree.js';
-import type { DirNode, FileNode, TreeNode } from '../../client/src/lib/tree.js';
+import type { DirNode, FileNode, FlatRow, TreeNode } from '../../client/src/lib/tree.js';
 
 let idSeq = 0;
 function issue(partial: Partial<Issue> & Pick<Issue, 'type' | 'filePath'>): Issue {
@@ -397,5 +398,194 @@ describe('autoExpandDepth', () => {
   it('returns "top" once visibleFileCount exceeds the 200-file threshold', () => {
     const tree = buildTree([issue({ type: 'files', filePath: 'src/a.ts' })]);
     expect(autoExpandDepth(tree, 201)).toBe('top');
+  });
+});
+
+// Task K (#13): treeKeyAction is the pure "what should this keypress do"
+// decision for the ARIA tree pattern — TreeView.tsx supplies the impure
+// bits (scrollToIndex, focus(), the store writes) but never decides on its
+// own what a key means, so every branch (boundaries, dir-vs-file, expanded
+// state, parent lookup) is exercised here without touching React at all.
+// Rows are built by hand (not via buildTree+the component's own flatten(),
+// which isn't exported) so each test can pin an exact depth/expanded/
+// position combination independent of any particular directory shape.
+describe('treeKeyAction', () => {
+  function dirNodeStub(path: string): DirNode {
+    return {
+      kind: 'dir',
+      name: path,
+      path,
+      children: [],
+      issueIds: [],
+      actionableIds: [],
+      actionableIdsByType: {},
+      counts: {},
+      totalCount: 0,
+    };
+  }
+
+  function fileNodeStub(path: string): FileNode {
+    return {
+      kind: 'file',
+      name: path,
+      path,
+      fileIssues: [],
+      issueIds: [],
+      actionableIds: [],
+      actionableIdsByType: {},
+      counts: {},
+    };
+  }
+
+  function dirRow(path: string, depth: number, expanded: boolean, setSize = 1, posInSet = 1): FlatRow {
+    return { kind: 'dir', node: dirNodeStub(path), depth, expanded, setSize, posInSet };
+  }
+
+  function fileRow(path: string, depth: number, setSize = 1, posInSet = 1): FlatRow {
+    return { kind: 'file', node: fileNodeStub(path), depth, setSize, posInSet };
+  }
+
+  // Mirrors a real flatten() pass over:
+  //   src/            (dir, expanded)
+  //     nested/       (dir, expanded)
+  //       deep.ts     (file)
+  //     used.ts       (file)
+  //   zeta.ts         (file)
+  const rows: FlatRow[] = [
+    dirRow('src', 0, true, 2, 1), // 0 — siblings: src/, zeta.ts
+    dirRow('src/nested', 1, true, 2, 1), // 1 — siblings: nested/, used.ts
+    fileRow('src/nested/deep.ts', 2, 1, 1), // 2
+    fileRow('src/used.ts', 1, 2, 2), // 3
+    fileRow('zeta.ts', 0, 2, 2), // 4
+  ];
+
+  it('returns none for an empty row list, regardless of key', () => {
+    expect(treeKeyAction('ArrowDown', { rows: [], activeIndex: 0 })).toEqual({ type: 'none' });
+    expect(treeKeyAction('Enter', { rows: [], activeIndex: 0 })).toEqual({ type: 'none' });
+  });
+
+  it('returns none when activeIndex points past the end of rows (defensive)', () => {
+    expect(treeKeyAction('ArrowDown', { rows, activeIndex: rows.length })).toEqual({ type: 'none' });
+  });
+
+  it('returns none for a key the tree does not handle (no typeahead by design)', () => {
+    expect(treeKeyAction('a', { rows, activeIndex: 0 })).toEqual({ type: 'none' });
+    expect(treeKeyAction('PageDown', { rows, activeIndex: 0 })).toEqual({ type: 'none' });
+  });
+
+  describe('ArrowDown / ArrowUp', () => {
+    it('moves one row down', () => {
+      expect(treeKeyAction('ArrowDown', { rows, activeIndex: 0 })).toEqual({ type: 'move', index: 1 });
+    });
+
+    it('clamps at the last row', () => {
+      expect(treeKeyAction('ArrowDown', { rows, activeIndex: rows.length - 1 })).toEqual({ type: 'none' });
+    });
+
+    it('moves one row up', () => {
+      expect(treeKeyAction('ArrowUp', { rows, activeIndex: 3 })).toEqual({ type: 'move', index: 2 });
+    });
+
+    it('clamps at the first row', () => {
+      expect(treeKeyAction('ArrowUp', { rows, activeIndex: 0 })).toEqual({ type: 'none' });
+    });
+  });
+
+  describe('Home / End', () => {
+    it('Home moves to the first row', () => {
+      expect(treeKeyAction('Home', { rows, activeIndex: 3 })).toEqual({ type: 'move', index: 0 });
+    });
+
+    it('Home is a no-op already on the first row', () => {
+      expect(treeKeyAction('Home', { rows, activeIndex: 0 })).toEqual({ type: 'none' });
+    });
+
+    it('End moves to the last row', () => {
+      expect(treeKeyAction('End', { rows, activeIndex: 0 })).toEqual({ type: 'move', index: rows.length - 1 });
+    });
+
+    it('End is a no-op already on the last row', () => {
+      expect(treeKeyAction('End', { rows, activeIndex: rows.length - 1 })).toEqual({ type: 'none' });
+    });
+  });
+
+  describe('ArrowRight', () => {
+    it('expands a collapsed dir without moving', () => {
+      const collapsed: FlatRow[] = [dirRow('src', 0, false, 2, 1), fileRow('zeta.ts', 0, 2, 2)];
+      expect(treeKeyAction('ArrowRight', { rows: collapsed, activeIndex: 0 })).toEqual({
+        type: 'expand',
+        path: 'src',
+      });
+    });
+
+    it('moves to the first child of an already-expanded dir', () => {
+      expect(treeKeyAction('ArrowRight', { rows, activeIndex: 0 })).toEqual({ type: 'move', index: 1 });
+      expect(treeKeyAction('ArrowRight', { rows, activeIndex: 1 })).toEqual({ type: 'move', index: 2 });
+    });
+
+    it('is a no-op on a file row (no children to move into)', () => {
+      expect(treeKeyAction('ArrowRight', { rows, activeIndex: 2 })).toEqual({ type: 'none' });
+      expect(treeKeyAction('ArrowRight', { rows, activeIndex: 4 })).toEqual({ type: 'none' });
+    });
+
+    it('is a no-op on an expanded dir with no rows after it (defensive, empty children)', () => {
+      const trailingDir: FlatRow[] = [fileRow('a.ts', 0, 2, 1), dirRow('z', 0, true, 2, 2)];
+      expect(treeKeyAction('ArrowRight', { rows: trailingDir, activeIndex: 1 })).toEqual({ type: 'none' });
+    });
+  });
+
+  describe('ArrowLeft', () => {
+    it('collapses an expanded dir without moving', () => {
+      expect(treeKeyAction('ArrowLeft', { rows, activeIndex: 0 })).toEqual({ type: 'collapse', path: 'src' });
+      expect(treeKeyAction('ArrowLeft', { rows, activeIndex: 1 })).toEqual({
+        type: 'collapse',
+        path: 'src/nested',
+      });
+    });
+
+    it('moves a file row to its parent dir row', () => {
+      expect(treeKeyAction('ArrowLeft', { rows, activeIndex: 2 })).toEqual({ type: 'move', index: 1 }); // deep.ts -> nested/
+      expect(treeKeyAction('ArrowLeft', { rows, activeIndex: 3 })).toEqual({ type: 'move', index: 0 }); // used.ts -> src/
+    });
+
+    it('moves a collapsed dir row to its parent dir row', () => {
+      const collapsedNested: FlatRow[] = [
+        dirRow('src', 0, true, 1, 1),
+        dirRow('src/nested', 1, false, 2, 1),
+        fileRow('src/used.ts', 1, 2, 2),
+      ];
+      expect(treeKeyAction('ArrowLeft', { rows: collapsedNested, activeIndex: 1 })).toEqual({
+        type: 'move',
+        index: 0,
+      });
+    });
+
+    it('is a no-op on a top-level row with no parent (collapsed dir or file)', () => {
+      const topLevel: FlatRow[] = [dirRow('src', 0, false, 2, 1), fileRow('zeta.ts', 0, 2, 2)];
+      expect(treeKeyAction('ArrowLeft', { rows: topLevel, activeIndex: 0 })).toEqual({ type: 'none' });
+      expect(treeKeyAction('ArrowLeft', { rows, activeIndex: 4 })).toEqual({ type: 'none' }); // zeta.ts
+    });
+  });
+
+  describe('Enter', () => {
+    it('opens a file (same contract as a row click)', () => {
+      expect(treeKeyAction('Enter', { rows, activeIndex: 3 })).toEqual({ type: 'open', path: 'src/used.ts' });
+    });
+
+    it('collapses an already-expanded dir', () => {
+      expect(treeKeyAction('Enter', { rows, activeIndex: 0 })).toEqual({ type: 'collapse', path: 'src' });
+    });
+
+    it('expands a collapsed dir', () => {
+      const collapsed: FlatRow[] = [dirRow('src', 0, false, 1, 1)];
+      expect(treeKeyAction('Enter', { rows: collapsed, activeIndex: 0 })).toEqual({ type: 'expand', path: 'src' });
+    });
+  });
+
+  describe('Space', () => {
+    it('toggles the active row\'s selection checkbox, for both a dir row and a file row', () => {
+      expect(treeKeyAction(' ', { rows, activeIndex: 0 })).toEqual({ type: 'toggle-select', index: 0 });
+      expect(treeKeyAction(' ', { rows, activeIndex: 3 })).toEqual({ type: 'toggle-select', index: 3 });
+    });
   });
 });

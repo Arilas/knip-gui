@@ -359,3 +359,140 @@ export function idsToToggleForNode(
   if (state === 'all') return actionableIds;
   return actionableIds.filter((id) => !selected.has(id));
 }
+
+// Shared dir/file checkbox toggle semantics (Task 3's TreeNode.tsx originally
+// inlined this, Task K/#13 lifted it here so TreeView's Space-key handler can
+// reuse the EXACT same "all -> clear, otherwise -> add" logic rather than
+// re-deriving it — a fully-checked node clears via the ordinary toggle;
+// anything else adds the enabled-type actionable issues under it via
+// addFileFiltered, a pure add that never drops a cart item belonging to a
+// currently-disabled type (see selection.ts's addFileFiltered doc comment).
+// Safe to call on a node with zero actionable ids (a disabled checkbox, or —
+// for the keyboard path — a row whose checkbox happens to be disabled):
+// addFileFiltered/idsToToggleForNode both already no-op on an empty set, so
+// this never needs its own disabled-guard.
+export function toggleNodeSelection(
+  node: DirNode | FileNode,
+  selected: ReadonlySet<string>,
+  enabledTypes: ReadonlySet<IssueType>,
+  onToggleIds: (ids: string[]) => void,
+  onAddFileFiltered: (fileIssues: Issue[], enabled: ReadonlySet<IssueType>) => void,
+): void {
+  const state = nodeSelectionState(node, selected, enabledTypes);
+  if (state === 'all') {
+    onToggleIds(idsToToggleForNode(node, selected, enabledTypes));
+  } else {
+    onAddFileFiltered(collectFileIssues(node), enabledTypes);
+  }
+}
+
+// One flattened, virtualization-ready row (TreeView.tsx's flatten() builds
+// these; TreeNode.tsx renders them) — kind mirrors TreeNode, `depth` drives
+// indent + aria-level, `setSize`/`posInSet` are aria-setsize/aria-posinset
+// (1-indexed position among this row's own siblings under the SAME parent,
+// computed at flatten time from `node.children`'s index — see flatten()'s own
+// comment for why that's simpler than re-deriving siblings from depth alone
+// after the fact). Lives here (not TreeNode.tsx, where it used to be defined)
+// because treeKeyAction, below, needs it and is intentionally React-free.
+export type FlatRow =
+  | { kind: 'dir'; node: DirNode; depth: number; expanded: boolean; setSize: number; posInSet: number }
+  | { kind: 'file'; node: FileNode; depth: number; setSize: number; posInSet: number };
+
+export interface TreeKeyContext {
+  rows: FlatRow[];
+  activeIndex: number;
+}
+
+// What a keypress on the tree means — TreeView.tsx supplies the impure parts
+// (virtualizer.scrollToIndex, DOM .focus(), the store writes) but every
+// "which row/dir does this affect, and how" decision funnels through here so
+// it's covered by a plain unit test rather than a rendered-component one.
+export type TreeKeyAction =
+  | { type: 'move'; index: number }
+  | { type: 'expand'; path: string }
+  | { type: 'collapse'; path: string }
+  | { type: 'open'; path: string }
+  | { type: 'toggle-select'; index: number }
+  | { type: 'none' };
+
+// Nearest PRECEDING row with a strictly smaller depth than `rows[index]` —
+// its parent. Works without any explicit parent pointer on FlatRow because
+// flatten() is a DFS pre-order walk: a node's children are always emitted
+// immediately after it, before its own next sibling, so scanning backward for
+// the first shallower row can only land on an ancestor, never a cousin.
+// Returns -1 for a top-level row (nothing shallower exists — the synthetic
+// tree root is never itself flattened into `rows`, see buildTree's doc
+// comment).
+function findParentIndex(rows: FlatRow[], index: number): number {
+  const depth = rows[index]!.depth;
+  for (let i = index - 1; i >= 0; i--) {
+    if (rows[i]!.depth < depth) return i;
+  }
+  return -1;
+}
+
+/**
+ * Pure ARIA-tree-pattern key handler (Task K, #13): given the currently
+ * flattened, VISIBLE row list and which one is active, decides what a
+ * keypress should do. Deliberately has NO typeahead (a letter key falls
+ * through to the `default: 'none'` case below) — out of scope per the design
+ * brief, and letting it fall through here (rather than special-casing it)
+ * is what lets a global single-letter shortcut (e.g. `r` for rescan) still
+ * fire while a tree row has focus, since TreeView only preventDefault/
+ * stopPropagation on a non-'none' result.
+ */
+export function treeKeyAction(key: string, ctx: TreeKeyContext): TreeKeyAction {
+  const { rows, activeIndex } = ctx;
+  const row = rows[activeIndex];
+  if (!row) return { type: 'none' };
+
+  switch (key) {
+    case 'ArrowDown': {
+      const next = Math.min(activeIndex + 1, rows.length - 1);
+      return next === activeIndex ? { type: 'none' } : { type: 'move', index: next };
+    }
+    case 'ArrowUp': {
+      const prev = Math.max(activeIndex - 1, 0);
+      return prev === activeIndex ? { type: 'none' } : { type: 'move', index: prev };
+    }
+    case 'Home':
+      return activeIndex === 0 ? { type: 'none' } : { type: 'move', index: 0 };
+    case 'End': {
+      const last = rows.length - 1;
+      return activeIndex === last ? { type: 'none' } : { type: 'move', index: last };
+    }
+    case 'ArrowRight': {
+      if (row.kind !== 'dir') return { type: 'none' }; // a file has no children to open/enter
+      if (!row.expanded) return { type: 'expand', path: row.node.path };
+      // Already expanded: the next row is its first child IFF flatten()
+      // actually descended into it (depth === row.depth + 1) — false only
+      // for the (buildTree never produces this, but stay defensive) case of
+      // an expanded dir with zero children.
+      const child = rows[activeIndex + 1];
+      return child && child.depth === row.depth + 1 ? { type: 'move', index: activeIndex + 1 } : { type: 'none' };
+    }
+    case 'ArrowLeft': {
+      if (row.kind === 'dir' && row.expanded) return { type: 'collapse', path: row.node.path };
+      // A file, or an already-collapsed dir: APG's tree pattern moves focus
+      // to the parent rather than doing nothing (that's reserved for a
+      // top-level row with no parent at all).
+      const parentIndex = findParentIndex(rows, activeIndex);
+      return parentIndex === -1 ? { type: 'none' } : { type: 'move', index: parentIndex };
+    }
+    case 'Enter': {
+      // Exactly the row's own click contract: a file opens (TreeView's
+      // onOpenFile — search param + nonce bump), a dir's expand state flips.
+      if (row.kind === 'file') return { type: 'open', path: row.node.path };
+      return row.expanded ? { type: 'collapse', path: row.node.path } : { type: 'expand', path: row.node.path };
+    }
+    case ' ':
+      // Space is deliberately NOT the same as Enter (unlike the pre-Task-K
+      // per-row handler this replaces): it toggles the row's OWN selection
+      // checkbox regardless of dir/file or expand state, never opens/
+      // expands anything — see toggleNodeSelection, which TreeView's handler
+      // calls with this row's node.
+      return { type: 'toggle-select', index: activeIndex };
+    default:
+      return { type: 'none' };
+  }
+}
