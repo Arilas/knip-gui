@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { apiErrorMessage } from '../../api.js';
 import { defaultBranchName } from '../../lib/apply-flow.js';
+import { pluralizeWord } from '../../lib/pluralize.js';
 import { useActivityStore } from '../../state/activity.js';
 import { useGitBranchMutation, useGitCommitMutation, useGitStatus } from '../../state/queries.js';
 import { Button } from '../ui/button.js';
@@ -38,6 +39,12 @@ export function CommitBar({ paths, defaultMessage, onLeave }: CommitBarProps) {
   const [message, setMessage] = useState(defaultMessage);
   const [sha, setSha] = useState<string | null>(null);
   const [commitError, setCommitError] = useState<string | null>(null);
+  // The branch name we've already created this session, if any. `git checkout -b`
+  // is not idempotent — if the branch was created but the commit then failed, a
+  // naive retry re-runs checkout -b <same name> and exits 128 ("already exists"),
+  // trapping the user. Tracking what we created lets a retry skip re-creation
+  // (and still create a DIFFERENT name if the user edits it before retrying).
+  const [createdBranch, setCreatedBranch] = useState<string | null>(null);
 
   const status = gitStatusQuery.data;
   const busy = branchMutation.isPending || commitMutation.isPending;
@@ -50,8 +57,10 @@ export function CommitBar({ paths, defaultMessage, onLeave }: CommitBarProps) {
   async function handleCommit() {
     setCommitError(null);
     try {
-      if (createBranch) {
-        await branchMutation.mutateAsync(branchName.trim());
+      const wantBranch = branchName.trim();
+      if (createBranch && createdBranch !== wantBranch) {
+        await branchMutation.mutateAsync(wantBranch);
+        setCreatedBranch(wantBranch);
       }
       const result = await commitMutation.mutateAsync({ message: message.trim(), paths });
       setSha(result.sha);
@@ -70,8 +79,8 @@ export function CommitBar({ paths, defaultMessage, onLeave }: CommitBarProps) {
     <div data-testid="review-commit-bar" className="flex shrink-0 flex-col gap-3 border-t border-border bg-background p-3">
       {otherDirtyFiles.length > 0 && !sha && (
         <p className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-          Your working tree also has {otherDirtyFiles.length} other uncommitted change(s) — only the {paths.length}{' '}
-          file(s) just applied will be staged and committed.
+          Your working tree also has {pluralizeWord(otherDirtyFiles.length, 'other uncommitted change')} — only the{' '}
+          {pluralizeWord(paths.length, 'file')} just applied will be staged and committed.
         </p>
       )}
 
@@ -117,8 +126,8 @@ export function CommitBar({ paths, defaultMessage, onLeave }: CommitBarProps) {
             className="max-w-xl font-mono text-sm"
             aria-label="Commit message"
           />
-          <p className="text-xs text-muted-foreground">
-            {paths.length} file(s): {paths.join(', ')}
+          <p className="max-h-20 overflow-y-auto text-xs text-muted-foreground">
+            {pluralizeWord(paths.length, 'file')}: {paths.join(', ')}
           </p>
           {commitError && (
             <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
@@ -140,7 +149,7 @@ export function CommitBar({ paths, defaultMessage, onLeave }: CommitBarProps) {
             </Button>
             <Button
               type="button"
-              disabled={busy || !message.trim() || paths.length === 0}
+              disabled={busy || !message.trim() || paths.length === 0 || (createBranch && !branchName.trim())}
               onClick={handleCommit}
               data-testid="review-commit"
             >

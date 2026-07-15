@@ -19,6 +19,25 @@ export const ISSUE_TYPES = [
 
 export type IssueType = (typeof ISSUE_TYPES)[number];
 
+// The issue types the ignore engine can suppress via knip config or a member-
+// precise @public tag (compileIgnorePlan in src/fix/compiler.ts). The SINGLE
+// source of truth for "is this ignorable", shared by the server (which guards
+// its per-type ignore switch with it) and the client (filters.ts's isIgnorable /
+// the SelectionDock's Ignore button). Anything not listed here — unlisted,
+// unresolved, duplicates, nsExports, nsTypes, catalog, cycles — has no config
+// affordance and reports 'not-ignorable'.
+export const IGNORABLE_ISSUE_TYPES: ReadonlySet<IssueType> = new Set<IssueType>([
+  'files',
+  'dependencies',
+  'devDependencies',
+  'optionalPeerDependencies',
+  'binaries',
+  'exports',
+  'types',
+  'enumMembers',
+  'namespaceMembers',
+]);
+
 export type FixMode =
   | 'delete-file'
   | 'strip-export'

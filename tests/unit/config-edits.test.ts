@@ -240,6 +240,17 @@ describe('findKnipConfig', () => {
     expect(findKnipConfig(dir)).toEqual({ kind: 'knip.jsonc', path });
   });
 
+  it('prefers knip.jsonc over .knip.json (matching knip real resolution order)', () => {
+    // knip reads files in the order knip.json, knip.jsonc, .knip.json, ... so with
+    // both knip.jsonc and .knip.json present it reads knip.jsonc. The writer must
+    // edit that same file, not the lower-precedence dotfile.
+    dir = mkdtempSync(join(tmpdir(), 'knip-gui-config-'));
+    const jsoncPath = join(dir, 'knip.jsonc');
+    writeFileSync(jsoncPath, '{\n  // comment\n}\n');
+    writeFileSync(join(dir, '.knip.json'), '{}\n');
+    expect(findKnipConfig(dir)).toEqual({ kind: 'knip.jsonc', path: jsoncPath });
+  });
+
   it('finds package.json#knip when there is no dedicated config file', () => {
     dir = mkdtempSync(join(tmpdir(), 'knip-gui-config-'));
     const path = join(dir, 'package.json');

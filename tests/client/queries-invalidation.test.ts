@@ -38,6 +38,7 @@ vi.mock('../../client/src/api.js', () => ({
 
 import { postScan } from '../../client/src/api.js';
 import {
+  gitStatusQueryKey,
   ignoresQueryKey,
   reportQueryKey,
   useFixApplyMutation,
@@ -128,6 +129,32 @@ describe('apply-mutation query invalidation', () => {
   ] as const)('%s invalidates the file query prefix', async (_label, useHook, arg) => {
     const keys = await invalidatedKeysAfter(useHook, arg);
     expect(keys).toContainEqual(['file']);
+  });
+
+  // Regression: working-tree writes must refresh git status too, or GitFooter's
+  // clean/dirty dot and the "N uncommitted files" commit affordance stay stale
+  // until an unrelated refetch (window refocus).
+  it.each([
+    ['fix apply', useFixApplyMutation, 'plan-1'],
+    ['ignore apply', useIgnoreApplyMutation, 'plan-1'],
+    ['ignore-remove apply', useIgnoreRemoveApplyMutation, 'plan-1'],
+    ['sweep', useSweepMutation, {}],
+  ] as const)('%s invalidates git status', async (_label, useHook, arg) => {
+    const keys = await invalidatedKeysAfter(useHook, arg);
+    expect(keys).toContainEqual(gitStatusQueryKey);
+  });
+
+  it('fix apply invalidates on failure too (onSettled, not onSuccess)', async () => {
+    const { postFixApply } = await import('../../client/src/api.js');
+    vi.mocked(postFixApply).mockRejectedValueOnce(new Error('apply failed'));
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    const result = renderHook(useFixApplyMutation, queryClient);
+    await act(async () => {
+      await result.current.mutateAsync('plan-1' as never).catch(() => {});
+    });
+    const keys = spy.mock.calls.map(([filters]) => (filters as { queryKey?: unknown } | undefined)?.queryKey);
+    expect(keys).toContainEqual(reportQueryKey);
   });
 
   it('scan invalidates the report on success', async () => {

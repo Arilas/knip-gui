@@ -1,0 +1,22 @@
+{
+  // Typechecks the code the main build configs skip: tests (which import both
+  // src/ and client/src/), scripts, and the root tool configs. Vitest and
+  // Playwright transpile without typechecking, so a signature change that breaks
+  // a test would otherwise only surface at runtime (or not at all). noEmit — this
+  // config exists purely to run tsc over these files.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // vite/client for the client code the tests import (api.ts reads
+    // import.meta.env); node for the server/test runtime.
+    "types": ["node", "vite/client"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx"
+  },
+  "include": ["tests", "scripts", "playwright.config.ts", "vitest.config.ts"]
+}

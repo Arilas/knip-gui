@@ -29,11 +29,16 @@ export async function startCli(opts: { dir: string; port: number; open: boolean;
   const { app, token, store } = createServer({ projectDir: dir, production });
 
   let actualPort = port;
-  const server = await new Promise<ReturnType<typeof serve>>((res) => {
+  const server = await new Promise<ReturnType<typeof serve>>((res, rej) => {
     const s = serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, (info) => {
       actualPort = info.port;
       res(s);
     });
+    // serve()'s callback only fires on success; a bind failure (EADDRINUSE on an
+    // explicit --port) is emitted as an 'error' event that would otherwise be an
+    // uncaught exception with a raw stack. Surface it as a rejection so startCli's
+    // caller can print a friendly message.
+    (s as { once?: (event: string, cb: (e: unknown) => void) => void }).once?.('error', rej);
   });
   const url = `http://127.0.0.1:${actualPort}`;
   console.log(`knip-gui running at ${url}`);
@@ -72,13 +77,14 @@ export async function startCli(opts: { dir: string; port: number; open: boolean;
     token,
     close: () =>
       new Promise<void>((res, rej) => {
-        // Reap a stalled knip child (a stuck/slow scan) before tearing the
-        // server down: aborting the active scan's signal kills its execFile
-        // child immediately (see runScan/ReportStore.abortActiveScan), and
+        // Reap a stalled knip child (a stuck/slow scan or an in-flight
+        // `knip --fix` sweep) before tearing the server down: aborting the
+        // active signals kills their execFile children immediately (see
+        // runScan/runSweep/ReportStore.abortActive), and
         // closeAllConnections forces any lingering keep-alive socket — e.g.
         // the fire-and-forget initial-scan request still parked mid-response
         // — shut so server.close()'s callback isn't left waiting on it.
-        store.abortActiveScan();
+        store.abortActive();
         // Only http.Server/https.Server (not Http2Server, which ServerType
         // also allows for) has closeAllConnections — guard for the type, we
         // only ever actually get a plain http.Server here since serve() below
@@ -130,7 +136,14 @@ if (isMain()) {
     open: !values['no-open'],
     production: values.production,
   }).catch((e) => {
-    console.error(e);
+    const code = (e as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'EADDRINUSE') {
+      console.error(`port ${port} is already in use — pass a different --port (or omit it for a random free port)`);
+    } else if (code === 'EACCES') {
+      console.error(`port ${port} needs elevated privileges — pass a --port ≥ 1024`);
+    } else {
+      console.error(e);
+    }
     process.exit(1);
   });
 }

@@ -2,10 +2,10 @@
 // overhaul: extracted out of the old Overview.tsx, deleted this task, and
 // rebuilt on shadcn's AlertDialog, which centers itself by default —
 // `AlertDialogContent`'s `fixed top-1/2 left-1/2 -translate-x-1/2
-// -translate-y-1/2`). Reachable from Dashboard's header `⋯` menu. Sweep isn't
-// self-latched server-side (see queries.ts's useBusy doc comment), so the
-// confirm/cancel actions stay disabled while `busy` is true, same as before.
-import { useState } from 'react';
+// -translate-y-1/2`). Reachable from Dashboard's header `⋯` menu. The confirm/
+// cancel actions stay disabled while `busy` is true (the sweep endpoint is also
+// latched server-side; this is the UX-level guard).
+import { useEffect, useState } from 'react';
 import type { SweepCapabilities } from '../../api.js';
 import {
   AlertDialog,
@@ -36,6 +36,17 @@ export function SweepDialog({ open, onOpenChange, onConfirm, capabilities, busy 
   const [fixTypes, setFixTypes] = useState<string[]>([]);
   const [allowRemoveFiles, setAllowRemoveFiles] = useState(false);
 
+  // The dialog stays mounted in Dashboard, so reset to defaults each time it
+  // opens — otherwise a prior sweep's fix-type picks and (more consequentially)
+  // its one-time "Allow removing unused files" consent silently carry into the
+  // next, unrelated sweep.
+  useEffect(() => {
+    if (open) {
+      setFixTypes([]);
+      setAllowRemoveFiles(false);
+    }
+  }, [open]);
+
   if (!capabilities) return null;
 
   return (
@@ -50,7 +61,11 @@ export function SweepDialog({ open, onOpenChange, onConfirm, capabilities, busy 
 
         {capabilities.fixType && (
           <fieldset className="flex flex-col gap-2 text-sm">
-            <legend className="mb-1 text-xs font-medium text-muted-foreground">Fix types</legend>
+            <legend className="mb-1 text-xs font-medium text-muted-foreground">Fix types (optional)</legend>
+            <p className="mb-1 text-xs text-muted-foreground">
+              Leave all unchecked to fix every issue type. Check specific types to limit the sweep
+              to just those.
+            </p>
             {SWEEP_FIX_TYPES.map((type) => (
               <label key={type} className="flex items-center gap-2">
                 <Checkbox
@@ -84,7 +99,7 @@ export function SweepDialog({ open, onOpenChange, onConfirm, capabilities, busy 
             disabled={busy}
             onClick={() => onConfirm({ fixTypes: fixTypes.length > 0 ? fixTypes : undefined, allowRemoveFiles })}
           >
-            {busy ? 'Sweeping…' : 'Run sweep'}
+            {busy ? 'Sweeping…' : fixTypes.length > 0 ? `Fix ${fixTypes.length} selected` : 'Fix all types'}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

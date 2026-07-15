@@ -58,6 +58,51 @@ describe('stripExport / deleteDeclaration: JSDoc-attached declaration', () => {
   });
 });
 
+describe('stripExport / deleteDeclaration: exported function overload sets', () => {
+  // knip reports ONE 'exports' issue for an overloaded function, but TS requires
+  // every overload signature AND the implementation to agree on `export`
+  // (TS2383). A fix that touches only the first statement leaves a non-compiling
+  // file, so both transforms must sweep the whole set.
+  const content =
+    'export function f(x: string): void;\n' +
+    'export function f(x: number): void;\n' +
+    'export function f(x: unknown): void {}\n' +
+    'export const keep = 1;\n';
+
+  it('stripExport removes `export ` from every signature and the implementation', () => {
+    const result = stripExport({ filePath: 'a.ts', content, symbol: 'f' });
+    expect(expectOk(result)).toBe(
+      'function f(x: string): void;\n' +
+        'function f(x: number): void;\n' +
+        'function f(x: unknown): void {}\n' +
+        'export const keep = 1;\n',
+    );
+  });
+
+  it('stripExport handles a pos pointing at the first signature', () => {
+    // pos inside the first signature's `f` identifier (offset of `f` in `export function f`).
+    const result = stripExport({ filePath: 'a.ts', content, symbol: 'f', pos: content.indexOf('f(') });
+    expect(expectOk(result)).toBe(
+      'function f(x: string): void;\n' +
+        'function f(x: number): void;\n' +
+        'function f(x: unknown): void {}\n' +
+        'export const keep = 1;\n',
+    );
+  });
+
+  it('deleteDeclaration removes every signature and the implementation', () => {
+    const result = deleteDeclaration({ filePath: 'a.ts', content, symbol: 'f' });
+    expect(expectOk(result)).toBe('export const keep = 1;\n');
+  });
+
+  it('a single (non-overloaded) exported function is unaffected by the overload path', () => {
+    const single = 'export function only(x: number): number {\n  return x;\n}\n';
+    expect(expectOk(stripExport({ filePath: 'a.ts', content: single, symbol: 'only' }))).toBe(
+      'function only(x: number): number {\n  return x;\n}\n',
+    );
+  });
+});
+
 describe('stripExport: export list bindings (comma hygiene)', () => {
   const content =
     'function a() { return 1; }\nfunction b() { return 2; }\nfunction c() { return 3; }\nexport { a, b, c };\n';

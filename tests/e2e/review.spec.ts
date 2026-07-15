@@ -116,7 +116,7 @@ test('multi-file fix: rail distinguishes ok from a file edited on disk mid-flow;
   // The commit bar's paths exclude the stale file — only forms.ts staged.
   const commitBar = page.getByTestId('review-commit-bar');
   await expect(commitBar).toBeVisible();
-  await expect(commitBar).toContainText('1 file(s): src/forms.ts');
+  await expect(commitBar).toContainText('1 file: src/forms.ts');
   await expect(commitBar).not.toContainText('shapes.ts');
 
   await page.getByTestId('review-skip').click();

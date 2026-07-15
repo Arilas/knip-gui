@@ -91,6 +91,7 @@ export function PackagesPage({ issues }: PackagesPageProps) {
           <Input
             type="search"
             placeholder="Filter by name or path…"
+            aria-label="Filter packages by name or path"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="max-w-64"

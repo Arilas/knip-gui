@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
-import type { FixMode, Issue } from '../core/types.js';
+import { IGNORABLE_ISSUE_TYPES, type FixMode, type Issue } from '../core/types.js';
 import {
   addIgnores,
   findKnipConfig,
@@ -316,6 +316,14 @@ export async function compileIgnorePlan(
     const issue = issueById.get(issueId);
     if (!issue) {
       items.push({ issueId, ok: false, reason: 'unknown-issue' });
+      continue;
+    }
+
+    // Ignorability is decided by the shared IGNORABLE_ISSUE_TYPES set (also used
+    // by the client's isIgnorable) — the switch below only ever needs cases for
+    // types this guard admits; the `default` is an unreachable safety net.
+    if (!IGNORABLE_ISSUE_TYPES.has(issue.type)) {
+      items.push({ issueId, ok: false, reason: 'not-ignorable' });
       continue;
     }
 

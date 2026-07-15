@@ -25,7 +25,8 @@
 // >= 2 failure class (KnipError w/ code:'knip-failed', a numeric exitCode)
 // that the real-world "knip exited with 7" bug report hit, whatever knip's
 // own fatal error actually was in that case.
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
@@ -37,7 +38,8 @@ const fixtureSrc = fileURLToPath(new URL('../fixtures/single/', import.meta.url)
 const tmpTestsDir = fileURLToPath(new URL('../../.tmp-tests/', import.meta.url));
 
 let workDir: string;
-let child: ChildProcessWithoutNullStreams;
+// stdio ['ignore','pipe','pipe'] → stdin null, stdout/stderr readable.
+let child: ChildProcessByStdio<null, Readable, Readable>;
 let baseURL: string;
 
 test.beforeAll(async () => {

@@ -11,7 +11,20 @@ import { useMemo, useState } from 'react';
 import { Check, ChevronsUpDown, FolderGit2 } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
 import { cn } from '../../lib/utils.js';
+import { pluralizeWord } from '../../lib/pluralize.js';
 import { useBusy, useReport, useScanMutation } from '../../state/queries.js';
+import { useSelectionStore } from '../../state/selection.js';
+import { useUiStore } from '../../state/ui.js';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../ui/alert-dialog.js';
 import { Button } from '../ui/button.js';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../ui/command.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.js';
@@ -33,9 +46,17 @@ interface Entry {
 
 export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps) {
   const [open, setOpen] = useState(false);
+  // Target scope of a switch awaiting confirmation because it would discard a
+  // non-empty selection (the rescan prunes out-of-scope ids). null = no prompt.
+  const [pendingScope, setPendingScope] = useState<string | null>(null);
   const { data } = useReport();
   const scanMutation = useScanMutation();
   const busy = useBusy();
+  const selectionCount = useSelectionStore((s) => s.selected.size);
+  // Never let a scoped rescan land while the Review page is open — it prunes the
+  // selection under a frozen "Fix N issues" title and can leave a compiled plan
+  // pointing at a report that no longer matches.
+  const reviewing = useUiStore((s) => s.page === 'review');
 
   const currentScope = data?.report?.scope ?? ALL_WORKSPACES;
 
@@ -51,10 +72,20 @@ export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps
 
   const current = entries.find((e) => e.value === currentScope) ?? entries[0];
 
+  function runSwitch(value: string) {
+    scanMutation.mutate(value === ALL_WORKSPACES ? undefined : value);
+  }
+
   function select(value: string) {
     setOpen(false);
     if (value === currentScope) return;
-    scanMutation.mutate(value === ALL_WORKSPACES ? undefined : value);
+    // A scope change rescans, which prunes any selected issues outside the new
+    // scope — warn before silently discarding a non-empty cart.
+    if (selectionCount > 0) {
+      setPendingScope(value);
+      return;
+    }
+    runSwitch(value);
   }
 
   return (
@@ -67,8 +98,8 @@ export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps
           aria-expanded={open}
           aria-label="Switch workspace"
           data-testid="workspace-switcher"
-          disabled={busy}
-          title={current?.label}
+          disabled={busy || reviewing}
+          title={reviewing ? 'Finish or cancel the review first' : current?.label}
           className="w-full justify-between group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
         >
           <span className="flex min-w-0 items-center gap-2">
@@ -102,6 +133,29 @@ export function WorkspaceSwitcher({ workspaces, issues }: WorkspaceSwitcherProps
           </CommandList>
         </Command>
       </PopoverContent>
+
+      <AlertDialog open={pendingScope !== null} onOpenChange={(next) => !next && setPendingScope(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Switch workspace?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have {pluralizeWord(selectionCount, 'issue')} selected. Switching workspaces
+              re-scans and clears any selection outside the new scope.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingScope(null)}>Keep selection</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingScope !== null) runSwitch(pendingScope);
+                setPendingScope(null);
+              }}
+            >
+              Switch anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Popover>
   );
 }

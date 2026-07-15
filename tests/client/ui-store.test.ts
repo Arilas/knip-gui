@@ -163,7 +163,6 @@ describe('startReview / clearReview', () => {
     useUiStore.getState().navigate('code');
     useUiStore.getState().startReview({
       kind: 'fix',
-      planId: 'plan-1',
       summary: '2 exports, 1 file',
       frozenCount: 3,
       returnTo: 'code',
@@ -171,7 +170,6 @@ describe('startReview / clearReview', () => {
     expect(useUiStore.getState().page).toBe('review');
     expect(useUiStore.getState().review).toEqual({
       kind: 'fix',
-      planId: 'plan-1',
       summary: '2 exports, 1 file',
       frozenCount: 3,
       returnTo: 'code',

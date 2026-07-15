@@ -2,6 +2,7 @@ import MagicString from 'magic-string';
 import {
   expandEndWithTrailingNewline,
   expandStartWithLeadingComments,
+  findExportedFunctionSites,
   findTopLevelDeclarationSpan,
   locateExport,
   parseSource,
@@ -40,6 +41,14 @@ export function deleteDeclaration(input: TransformInput): TransformResult {
   };
 
   if (site.kind === 'declaration') {
+    // Exported function overload set: delete every signature and the implementation,
+    // not just the located one, or the leftover statements reference a now-missing
+    // export (and fail TS2383 if any `export` survives).
+    const fnSites = findExportedFunctionSites(program, symbol);
+    if (fnSites.length > 1) {
+      for (const fn of fnSites) removeWithComments(fn.deleteStart, fn.statementEnd);
+      return { ok: true, newContent: s.toString() };
+    }
     if (site.declarators && site.declarators.length > 1 && site.declaratorIndex !== undefined) {
       removeListItem(s, site.declarators, site.declaratorIndex);
     } else {

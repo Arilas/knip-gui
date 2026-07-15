@@ -3,14 +3,14 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
-import { KnipError, runScan } from '../core/knip-runner.js';
-import { normalize } from '../core/normalize.js';
-import { getWorkspaceDirs } from '../core/workspaces.js';
+import { runScan } from '../core/knip-runner.js';
 import { PlanStore } from '../fix/plan-store.js';
 import { runSweep } from '../fix/sweep.js';
 import { registerFixRoutes } from './routes-fix.js';
 import { registerGitRoutes } from './routes-git.js';
 import { registerIgnoresRoutes } from './routes-ignores.js';
+import { readJsonObject } from './body.js';
+import { runScanIntoStore } from './scan-runner.js';
 import { ReportStore } from './store.js';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -38,6 +38,23 @@ const ASSET_CONTENT_TYPES: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
 };
 
+// A Host header is loopback when its hostname (port stripped) is 127.0.0.1,
+// localhost, or ::1 — the only hostnames a legitimate local client uses. A
+// missing Host is treated as loopback so in-process test requests that omit it
+// aren't rejected; real browsers always send one.
+function isLoopbackHost(host: string | undefined): boolean {
+  if (!host) return true;
+  let hostname = host;
+  if (hostname.startsWith('[')) {
+    const end = hostname.indexOf(']');
+    hostname = end === -1 ? hostname : hostname.slice(1, end);
+  } else {
+    const colon = hostname.indexOf(':');
+    if (colon !== -1) hostname = hostname.slice(0, colon);
+  }
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+}
+
 function fallbackShell(token: string): string {
   return (
     `<!doctype html><html><head><meta charset="utf-8"><title>knip-gui</title>` +
@@ -64,6 +81,19 @@ export function createServer(opts: {
   const planStore = new PlanStore();
   const app = new Hono();
 
+  // DNS-rebinding defense. The server binds 127.0.0.1, but a malicious page can
+  // rebind its own hostname to 127.0.0.1 and drive same-origin requests (which
+  // carry no Origin header, so the /api/* origin check below never fires) to read
+  // the token off `GET /` and then read arbitrary project files. The browser still
+  // sends the ORIGINAL hostname in Host, so rejecting any non-loopback Host closes
+  // that hole. Applied to every route (the shell hands out the token, so it must be
+  // guarded too). Requests with no Host (browsers always send one over HTTP/1.1)
+  // are treated as loopback so in-process test harnesses that omit it still work.
+  app.use('*', async (c, next) => {
+    if (!isLoopbackHost(c.req.header('host'))) return c.text('forbidden host', 403);
+    await next();
+  });
+
   app.use('/api/*', async (c, next) => {
     if (c.req.header('x-knip-gui-token') !== token) return c.json({ error: 'unauthorized' }, 401);
     const origin = c.req.header('origin');
@@ -72,6 +102,12 @@ export function createServer(opts: {
     }
     await next();
   });
+
+  // Any route that throws (a route with no try/catch, an fs error deep in a
+  // transform) returns a JSON `{ error }` envelope instead of Hono's default
+  // text/plain 500 — the client's apiFetch does res.json() and can only surface a
+  // string `error`, so a text body would degrade to a generic "request failed".
+  app.onError((err, c) => c.json({ error: err instanceof Error ? err.message : String(err) }, 500));
 
   // Serves the Vite-built SPA shell with the real session token substituted
   // for the `__KNIP_GUI_TOKEN__` placeholder baked into the build (see
@@ -104,34 +140,20 @@ export function createServer(opts: {
   });
 
   app.post('/api/scan', async (c) => {
-    // Check-and-latch must be synchronous (no await between the status check
-    // and setScanning), otherwise two concurrent requests both pass the guard
-    // and both spawn a scan. Body parsing happens after latching, inside the
-    // try block, so no failure path can leave the store stuck in 'scanning'.
+    // Check-and-latch must be synchronous (no await between the status check and
+    // setScanning), otherwise two concurrent requests both pass the guard and both
+    // spawn a scan. readJsonObject can't throw and runScanIntoStore owns the
+    // begin/end-scan lifecycle + error landing, so no path leaves the store stuck.
     if (store.status === 'scanning') return c.json({ error: 'scan in progress' }, 409);
     store.setScanning();
-    const controller = store.beginScan();
-    try {
-      const body = await c.req.json().catch(() => ({}));
-      const workspace = typeof body.workspace === 'string' ? body.workspace : undefined;
-      // Recorded before the scan runs (and kept even if it fails) so a
-      // subsequent rescan reuses this scope instead of widening to the full
-      // project — see ReportStore.lastScanScope.
-      store.lastScanScope = workspace;
-      const raw = await scan(projectDir, { workspace, production, signal: controller.signal });
-      const workspaces = await getWorkspaceDirs(projectDir);
-      const issues = normalize(raw, workspaces);
-      store.setReady({ issues, scannedAt: new Date().toISOString(), workspaces, scope: workspace, production });
-      return c.json({ status: 'ready', issueCount: issues.length });
-    } catch (e) {
-      const err = e instanceof KnipError
-        ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr, exitCode: e.exitCode }
-        : { code: 'internal', message: String(e) };
-      store.setError(err);
-      return c.json({ status: 'error', error: err }, 500);
-    } finally {
-      store.endScan(controller);
-    }
+    const body = await readJsonObject(c);
+    const workspace = typeof body.workspace === 'string' ? body.workspace : undefined;
+    // Recorded (and kept even if the scan fails) so a subsequent rescan reuses
+    // this scope instead of widening to the full project — see lastScanScope.
+    store.lastScanScope = workspace;
+    const result = await runScanIntoStore({ store, scan, projectDir, production, workspace });
+    if (!result.ok) return c.json({ status: 'error', error: result.error }, 500);
+    return c.json({ status: 'ready', issueCount: result.issueCount });
   });
 
   app.get('/api/report', (c) =>

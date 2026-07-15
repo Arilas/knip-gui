@@ -15,7 +15,10 @@ export interface SweepCapabilities {
   workspace: boolean;
 }
 
-export function runSweep(projectDir: string, opts: SweepOptions = {}): Promise<{ ok: boolean; stderr?: string }> {
+export function runSweep(
+  projectDir: string,
+  opts: SweepOptions & { signal?: AbortSignal } = {},
+): Promise<{ ok: boolean; stderr?: string }> {
   const knip = resolveKnip(projectDir);
   if (!knip) {
     return Promise.resolve({ ok: false, stderr: 'knip not found in project' });
@@ -32,8 +35,15 @@ export function runSweep(projectDir: string, opts: SweepOptions = {}): Promise<{
     execFile(
       process.execPath,
       args,
-      { cwd: projectDir, maxBuffer: 64 * 1024 * 1024 },
+      // `signal` lets the CLI's close() kill an in-flight `knip --fix` on shutdown
+      // (it may be actively rewriting/deleting project files) instead of orphaning it.
+      { cwd: projectDir, maxBuffer: 64 * 1024 * 1024, signal: opts.signal },
       (error, _stdout, stderr) => {
+        // A deliberate abort (server shutdown) surfaces as AbortError — not a real
+        // sweep failure; report it distinctly so callers don't treat it as a crash.
+        if (error?.name === 'AbortError') {
+          return resolvePromise({ ok: false, stderr: 'sweep aborted' });
+        }
         // Same exit-code discrimination as resolveKnip's runScan: 0 (clean)
         // and 1 (issues remain even after fixing what could be fixed) both
         // count as a successful sweep run; >=2 is a real knip error, and a
@@ -60,9 +70,10 @@ export async function probeSweepCapabilities(projectDir: string): Promise<SweepC
 
   const knip = resolveKnip(projectDir);
   if (!knip) {
-    const result: SweepCapabilities = { fix: false, fixType: false, allowRemoveFiles: false, workspace: false };
-    capabilitiesCache.set(cacheKey, result);
-    return result;
+    // Do NOT cache this: knip absence is transient (the user may `npm i -D knip`
+    // against a long-lived server), and a permanently-cached all-false would keep
+    // sweep disabled until restart. Only successful probes below are cached.
+    return { fix: false, fixType: false, allowRemoveFiles: false, workspace: false };
   }
 
   const helpText = await new Promise<string>((resolvePromise) => {

@@ -69,7 +69,6 @@ export { CODE_TYPES, PACKAGE_TYPES };
 
 export interface ReviewRequest {
   kind: 'fix' | 'ignore';
-  planId?: string;
   /** Frozen at startReview time — pluralized, e.g. "3 exports, 1 file" (see lib/pluralize.ts). */
   summary: string;
   /** Frozen selection count at startReview time — the count actually shown, immune to the live selection changing under the Review page. */

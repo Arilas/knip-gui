@@ -18,6 +18,7 @@ async function initRepo(dir: string): Promise<void> {
   await git(dir, ['init', '-b', 'main']);
   await git(dir, ['config', 'user.name', 'Test User']);
   await git(dir, ['config', 'user.email', 'test@example.com']);
+  await git(dir, ['config', 'commit.gpgsign', 'false']);
   await git(dir, ['add', '-A']);
   await git(dir, ['commit', '-m', 'initial']);
 }

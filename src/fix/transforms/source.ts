@@ -274,6 +274,37 @@ export function locateExport(
   return { site };
 }
 
+// Collects every top-level `export function NAME` statement sharing one name. A TS
+// function overload set is N signature declarations (parsed as TSDeclareFunction)
+// plus one implementation (FunctionDeclaration); knip reports a single 'exports'
+// issue for the name, but TS requires every signature AND the implementation to
+// agree on `export` (TS2383), so a fix that touches only the first statement leaves
+// a non-compiling file. Returns every matching site; callers use the multi-element
+// result to sweep the whole set and otherwise fall through to the single-site path.
+export function findExportedFunctionSites(
+  program: Program,
+  symbol: string,
+): Extract<ExportSite, { kind: 'declaration' }>[] {
+  const sites: Extract<ExportSite, { kind: 'declaration' }>[] = [];
+  for (const stmt of program.body) {
+    if (stmt.type !== 'ExportNamedDeclaration' || !stmt.declaration) continue;
+    const decl = stmt.declaration;
+    if (decl.type !== 'FunctionDeclaration' && decl.type !== 'TSDeclareFunction') continue;
+    if (decl.id && decl.id.type === 'Identifier' && decl.id.name === symbol) {
+      // Functions can't carry decorators, so deleteStart == exportStart == stmt.start.
+      sites.push({
+        kind: 'declaration',
+        name: symbol,
+        exportStart: stmt.start,
+        declStart: decl.start,
+        statementEnd: stmt.end,
+        deleteStart: stmt.start,
+      });
+    }
+  }
+  return sites;
+}
+
 // Finds a plain (non-exported) top-level declaration statement by its local name —
 // used by deleteDeclaration for the `export { a, b }` case, where the exported
 // binding and its declaration are two separate top-level statements.
@@ -341,14 +372,26 @@ export function expandStartWithLeadingComments(content: string, comments: Commen
     for (const comment of comments) {
       if (comment.end > cursor) continue;
       const between = content.slice(comment.end, cursor);
-      if (/^[ \t]*\r?\n[ \t]*$/.test(between)) {
-        cursor = comment.start;
-        changed = true;
-        break;
-      }
+      if (!/^[ \t]*\r?\n[ \t]*$/.test(between)) continue;
+      // The comment must also START its own line. Otherwise it's a TRAILING
+      // comment on the previous statement (`const keep = 1; // note`) that merely
+      // happens to sit one line above us — sweeping it into our deletion would eat
+      // a neighbor's comment (confirmed bug). Only whitespace may precede it.
+      if (!startsOwnLine(content, comment.start)) continue;
+      cursor = comment.start;
+      changed = true;
+      break;
     }
   }
   return cursor;
+}
+
+// True when only horizontal whitespace separates `pos` from the start of its line
+// (i.e. nothing but indentation precedes it) — the test for "this comment/token
+// begins its own line" rather than trailing other code.
+export function startsOwnLine(content: string, pos: number): boolean {
+  const lineStart = content.lastIndexOf('\n', pos - 1) + 1;
+  return /^[ \t]*$/.test(content.slice(lineStart, pos));
 }
 
 // Extends `end` through one trailing newline (LF or CRLF), if present, so deleting a

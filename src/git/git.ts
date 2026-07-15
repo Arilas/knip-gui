@@ -176,8 +176,15 @@ export async function gitCommitPaths(
   // of an UNTRACKED file fails with "pathspec ... did not match any file(s)
   // known to git" until the file is in the index (verified) — and it also
   // stages deletions (`git add` of a removed path records the removal).
-  await execGit(projectDir, ['add', '--', ...paths]);
-  await execGit(projectDir, ['commit', '-m', message, '--', ...paths]);
+  // `:(literal)` prefix disables git pathspec magic so a path is matched byte-for-
+  // byte, never interpreted. Without it, `assertContained` (a filesystem-path check)
+  // passes strings like `:/` (repo-root magic), `:(top)`, or a bare `*` that git then
+  // expands to widen the commit past the requested files — defeating the scoping this
+  // function exists to guarantee. A literal path that isn't a real file simply fails
+  // to match instead of escaping scope.
+  const specs = paths.map((p) => `:(literal)${p}`);
+  await execGit(projectDir, ['add', '--', ...specs]);
+  await execGit(projectDir, ['commit', '-m', message, '--', ...specs]);
   const { stdout } = await execGit(projectDir, ['rev-parse', 'HEAD']);
   return { sha: stdout.trim() };
 }

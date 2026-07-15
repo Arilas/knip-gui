@@ -28,7 +28,8 @@ afterAll(async () => {
 });
 
 async function pollReport(
-  app: { request: (path: string, init?: RequestInit) => Promise<Response> },
+  // Hono's app.request returns Response | Promise<Response>; await handles both.
+  app: { request: (path: string, init?: RequestInit) => Promise<Response> | Response },
   headers: Record<string, string>,
   timeoutMs = 30_000,
 ): Promise<{ status: string; report?: { issues: Issue[] } }> {
@@ -47,6 +48,7 @@ describe('end-to-end fix loop against real knip', () => {
     await git(workDir, ['init', '-b', 'main']);
     await git(workDir, ['config', 'user.name', 'Test User']);
     await git(workDir, ['config', 'user.email', 'test@example.com']);
+    await git(workDir, ['config', 'commit.gpgsign', 'false']);
     await git(workDir, ['add', '-A']);
     await git(workDir, ['commit', '-m', 'initial fixture import']);
 

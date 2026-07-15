@@ -1,5 +1,6 @@
 import type { Hono } from 'hono';
 import { GitError, gitCommitPaths, gitCreateBranch, gitStatus } from '../git/git.js';
+import { readJsonObject } from './body.js';
 
 export interface GitRoutesCtx {
   projectDir: string;
@@ -18,12 +19,20 @@ export function registerGitRoutes(app: Hono, ctx: GitRoutesCtx): void {
   const { projectDir } = ctx;
 
   app.get('/api/git/status', async (c) => {
-    const status = await gitStatus(projectDir);
-    return c.json(status);
+    // gitStatus returns {isRepo:false} for a non-repo, but an unexpected git
+    // failure (a corrupt repo, git missing) throws GitError — catch it here so
+    // this route returns the same JSON error envelope as the others instead of
+    // falling through to a generic 500 the client can't parse.
+    try {
+      const status = await gitStatus(projectDir);
+      return c.json(status);
+    } catch (e) {
+      return c.json(gitErrorBody(e), 500);
+    }
   });
 
   app.post('/api/git/branch', async (c) => {
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonObject(c);
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     if (!name) return c.json({ error: 'name is required' }, 400);
     try {
@@ -35,7 +44,7 @@ export function registerGitRoutes(app: Hono, ctx: GitRoutesCtx): void {
   });
 
   app.post('/api/git/commit', async (c) => {
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonObject(c);
     const message = typeof body.message === 'string' ? body.message.trim() : '';
     const paths = Array.isArray(body.paths)
       ? body.paths.filter((p: unknown): p is string => typeof p === 'string')

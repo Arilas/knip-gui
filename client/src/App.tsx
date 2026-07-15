@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { KeyRound } from 'lucide-react';
+import { KeyRound, Loader2 } from 'lucide-react';
 import { ApiError, setOnUnauthorized } from './api.js';
 import { AppSidebar } from './components/app-shell/AppSidebar.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
@@ -131,10 +131,10 @@ function AppShell() {
     if (page === 'activity') return <ActivityPage />;
     if (page === 'review') return review ? <ReviewPage issues={issues} review={review} /> : null;
 
-    if (isLoading) return <p className="p-4 text-sm text-muted-foreground">Loading report…</p>;
+    if (isLoading) return <p className="p-4 text-sm text-muted-foreground" role="status">Loading report…</p>;
     if (error) {
       return (
-        <p className="p-4 text-sm text-destructive">
+        <p className="p-4 text-sm text-destructive" role="status">
           Failed to load the report: {error instanceof Error ? error.message : String(error)}
         </p>
       );
@@ -143,7 +143,22 @@ function AppShell() {
       return <SetupScreen error={data.error!} />;
     }
     if (data?.status === 'error') {
-      return <p className="p-4 text-sm text-destructive">{data.error?.message ?? 'The last scan failed.'}</p>;
+      return <p className="p-4 text-sm text-destructive" role="status">{data.error?.message ?? 'The last scan failed.'}</p>;
+    }
+    // The very first scan hasn't produced a report yet (status 'idle' before it
+    // starts, 'scanning' while it runs, both with no report). Without this the
+    // pages fall through to their "no issues — knip is happy" empty states and
+    // falsely tell the user their project is clean mid-scan. A rescan is exempt:
+    // it keeps status 'scanning' but data.report still holds the previous report,
+    // so the pages stay visible.
+    if (!data?.report && (data?.status === 'scanning' || data?.status === 'idle')) {
+      return (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center" role="status">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+          <p className="text-sm font-medium">Scanning your project…</p>
+          <p className="max-w-sm text-xs text-muted-foreground">Running knip. This can take a moment on a large project.</p>
+        </div>
+      );
     }
 
     switch (page) {

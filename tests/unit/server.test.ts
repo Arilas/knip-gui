@@ -37,6 +37,29 @@ describe('server security', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain(token);
   });
+
+  it('rejects a non-loopback Host header on the token-serving shell (DNS-rebind guard)', async () => {
+    const { app } = makeServer();
+    const res = await app.request('/', { headers: { host: 'evil.example.com' } });
+    expect(res.status).toBe(403);
+    expect(await res.text()).not.toContain('knip-gui-token');
+  });
+
+  it('rejects a non-loopback Host header on the API even with a valid token', async () => {
+    const { app, token } = makeServer();
+    const res = await app.request('/api/report', {
+      headers: { 'x-knip-gui-token': token, host: 'attacker.test:6173' },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('allows loopback Host variants', async () => {
+    const { app } = makeServer();
+    for (const host of ['127.0.0.1:6173', 'localhost:6173', '[::1]:6173']) {
+      const res = await app.request('/', { headers: { host } });
+      expect(res.status, host).toBe(200);
+    }
+  });
 });
 
 describe('static client serving', () => {
@@ -116,6 +139,17 @@ describe('scan + report + file', () => {
     expect(rep.report.issues).toHaveLength(1);
     expect(rep.report.issues[0].symbol).toBe('unusedHelper');
     expect(rep.report.workspaces).toEqual(['.']);
+  });
+
+  it('a malformed (null) scan body does not clobber the store — treated as no workspace', async () => {
+    // Regression: a body of literal `null` parses fine, but `body.workspace` on it
+    // threw a TypeError that was caught and flipped the store to 'error'.
+    const { app, token } = makeServer();
+    const h = { 'x-knip-gui-token': token, 'content-type': 'application/json' };
+    const res = await app.request('/api/scan', { method: 'POST', headers: h, body: 'null' });
+    expect(res.status).toBe(200);
+    const rep = await (await app.request('/api/report', { headers: h })).json();
+    expect(rep.status).toBe('ready');
   });
 
   it('scan failure surfaces error payload', async () => {

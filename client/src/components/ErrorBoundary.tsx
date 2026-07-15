@@ -32,13 +32,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     const { error } = this.state;
     if (!error) return this.props.children;
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-3 bg-white p-6 text-center text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+      <div className="flex h-screen flex-col items-center justify-center gap-3 bg-background p-6 text-center text-foreground">
         <p className="text-sm font-medium">Something went wrong.</p>
-        <p className="max-w-md text-xs text-gray-500 dark:text-gray-400">{error.message}</p>
+        <p className="max-w-md text-xs text-muted-foreground">{error.message}</p>
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="rounded bg-gray-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-gray-100 dark:text-gray-900"
+          className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
         >
           Reload
         </button>

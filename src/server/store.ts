@@ -21,6 +21,13 @@ export class ReportStore {
    * cancel it without the server needing any other handle back to the CLI.
    */
   private activeAbort?: AbortController;
+  /**
+   * The AbortController backing an in-flight `knip --fix` sweep (set by the sweep
+   * route), or undefined when none is running. Separate from `activeAbort` because
+   * a sweep is followed by its own rescan, and the CLI's close() must be able to
+   * reap either an in-flight sweep child or an in-flight scan child on shutdown.
+   */
+  private activeSweepAbort?: AbortController;
 
   setScanning() { this.status = 'scanning'; this.error = undefined; }
   setReady(report: Report) { this.status = 'ready'; this.report = report; this.error = undefined; }
@@ -38,8 +45,21 @@ export class ReportStore {
     if (this.activeAbort === controller) this.activeAbort = undefined;
   }
 
-  /** No-op if nothing is in flight. */
-  abortActiveScan(): void {
+  /** Call once per sweep attempt, right before invoking `sweep()`; pass the returned controller's `.signal` through. */
+  beginSweep(): AbortController {
+    const controller = new AbortController();
+    this.activeSweepAbort = controller;
+    return controller;
+  }
+
+  /** Call in the same attempt's `finally`, with the same controller `beginSweep` returned. */
+  endSweep(controller: AbortController): void {
+    if (this.activeSweepAbort === controller) this.activeSweepAbort = undefined;
+  }
+
+  /** Reap both an in-flight scan and an in-flight sweep child (CLI shutdown). No-op if nothing is running. */
+  abortActive(): void {
     this.activeAbort?.abort();
+    this.activeSweepAbort?.abort();
   }
 }

@@ -70,6 +70,7 @@ test.beforeAll(async () => {
   git(['init', '-q', '-b', 'main']);
   git(['config', 'user.name', 'knip-gui e2e']);
   git(['config', 'user.email', 'e2e@knip-gui.local']);
+  git(['config', 'commit.gpgsign', 'false']);
   git(['add', '-A']);
   git(['commit', '-q', '-m', 'initial fixture import']);
 

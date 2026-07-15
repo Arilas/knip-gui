@@ -228,7 +228,10 @@ function WholeFileBanner({
   onToggleIds: (ids: string[]) => void;
 }) {
   const actionable = isFixable(issue).ok || isIgnorable(issue).ok;
-  const message = issue.type === 'files' ? 'This whole file is unused.' : `This file has an unused ${issue.type} with no specific line.`;
+  const message =
+    issue.type === 'files'
+      ? 'This whole file is unused.'
+      : `This file has an unused ${TYPE_BADGE_LABELS[issue.type] ?? issue.type} with no specific line.`;
   // The flask hint only ever applies to the whole-file 'files' issue type —
   // an unused export/type/etc. with no line info on an otherwise-live test
   // file isn't the "knip can't see your test runner" false positive this
@@ -271,7 +274,7 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
 
   if (filePath === null) {
     return (
-      <div className="flex flex-1 items-center justify-center p-4 text-center text-sm text-gray-500 dark:text-gray-400">
+      <div className="flex flex-1 items-center justify-center p-4 text-center text-sm text-muted-foreground">
         Select a file from the tree to view its source.
       </div>
     );
@@ -279,7 +282,7 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
 
   if (fileQuery.isLoading) {
     return (
-      <div className="p-4 text-sm text-gray-500 dark:text-gray-400" aria-label="Loading file">
+      <div className="p-4 text-sm text-muted-foreground" aria-label="Loading file">
         Loading {filePath}…
       </div>
     );
@@ -295,10 +298,10 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
       );
     }
     if (err instanceof ApiError && err.status === 404) {
-      return <div className="p-4 text-sm text-red-600 dark:text-red-400">File not found: {filePath}</div>;
+      return <div className="p-4 text-sm text-destructive">File not found: {filePath}</div>;
     }
     return (
-      <div className="p-4 text-sm text-red-600 dark:text-red-400">
+      <div className="p-4 text-sm text-destructive">
         Failed to load {filePath}
         {err instanceof Error ? `: ${err.message}` : ''}
       </div>
@@ -326,12 +329,12 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
         <WholeFileBanner key={issue.id} issue={issue} filePath={filePath} selected={selected} onToggleIds={onToggleIds} />
       ))}
       {highlightNote && (
-        <p className="border-b border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
+        <p className="border-b border-border bg-muted px-3 py-1 text-xs text-muted-foreground">
           {highlightNote}
         </p>
       )}
       {html === undefined ? (
-        <div className="p-4 text-sm text-gray-500 dark:text-gray-400">Highlighting…</div>
+        <div className="p-4 text-sm text-muted-foreground">Highlighting…</div>
       ) : (
         <CodeBlock
           html={html}

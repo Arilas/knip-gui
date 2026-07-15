@@ -5,6 +5,7 @@ import {
   findTopLevelDeclarationSpan,
   locateExport,
   parseSource,
+  startsOwnLine,
   type TransformInput,
   type TransformResult,
 } from '../fix/transforms/source.js';
@@ -158,6 +159,10 @@ function findAdjacentJSDoc(content: string, comments: Comment[], start: number):
     const between = content.slice(comment.end, start);
     if (
       /^[ \t]*\r?\n[ \t]*$/.test(between) &&
+      // Must start its own line — a same-line trailing JSDoc on the previous
+      // statement (`const keep = 1; /** doc */`) is not OUR JSDoc; merging
+      // @public into it would mutate a neighbor's doc comment.
+      startsOwnLine(content, comment.start) &&
       comment.type === 'Block' &&
       comment.value.startsWith('*')
     ) {

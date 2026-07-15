@@ -28,6 +28,9 @@ async function initRepo(dir: string): Promise<void> {
   await git(dir, ['init', '-b', 'main']);
   await git(dir, ['config', 'user.name', 'Test User']);
   await git(dir, ['config', 'user.email', 'test@example.com']);
+  // Never inherit the developer's commit-signing setup (GPG/1Password): a signing
+  // hook that prompts or fails would hang/break these throwaway-repo commits.
+  await git(dir, ['config', 'commit.gpgsign', 'false']);
 }
 
 async function commitAll(dir: string, message: string): Promise<void> {
@@ -208,6 +211,24 @@ describe('gitCommitPaths', () => {
     const after = await gitStatus(dir);
     expect(after.dirty).toBe(true);
     expect(after.dirtyFiles).toEqual(['untouched.txt']);
+  });
+
+  it('treats paths as literal pathspecs — magic like ":/" cannot widen commit scope', async () => {
+    // Defense in depth: git pathspec magic (`:/` = repo root, `:(top)`, bare `*`)
+    // would otherwise slip past the string/realpath containment check and sweep
+    // unrelated files into the commit. `:(literal)` prefixing neutralizes it, so a
+    // path that isn't a real file just fails to match rather than escaping scope.
+    const dir = await makeTmpDir('knip-gui-git-literal-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'base.txt'), 'base', 'utf8');
+    await commitAll(dir, 'initial');
+    await writeFile(join(dir, 'unrelated.txt'), 'must not be committed', 'utf8');
+
+    await expect(gitCommitPaths(dir, [':/'], 'sneaky')).rejects.toBeInstanceOf(GitError);
+
+    // The magic path committed nothing; unrelated.txt is still dirty.
+    const after = await gitStatus(dir);
+    expect(after.dirtyFiles).toEqual(['unrelated.txt']);
   });
 
   it('never sweeps a PRE-STAGED unrelated file into the commit (pathspec-scoped commit)', async () => {

@@ -1,11 +1,12 @@
 import type { Hono } from 'hono';
-import { KnipError, runScan } from '../core/knip-runner.js';
-import { normalize } from '../core/normalize.js';
-import { getWorkspaceDirs } from '../core/workspaces.js';
+import { runScan } from '../core/knip-runner.js';
 import { compileFixPlan, compileIgnorePlan } from '../fix/compiler.js';
+import type { FixMode } from '../core/types.js';
 import { applyPatches } from '../fix/patch.js';
 import type { PlanStore } from '../fix/plan-store.js';
 import { probeSweepCapabilities, runSweep } from '../fix/sweep.js';
+import { readJsonObject } from './body.js';
+import { runScanIntoStore } from './scan-runner.js';
 import type { ReportStore, StoreError } from './store.js';
 
 export interface FixRoutesCtx {
@@ -19,35 +20,21 @@ export interface FixRoutesCtx {
   production: boolean;
 }
 
-function toStoreError(e: unknown): StoreError {
-  return e instanceof KnipError
-    ? { code: e.code ?? 'knip-failed', message: e.message, stderr: e.stderr, exitCode: e.exitCode }
-    : { code: 'internal', message: String(e) };
-}
-
-// Runs a scan and lands the outcome in the store — the shared core of both the
-// awaited (sweep) and fire-and-forget (fix/ignore apply) rescan paths. Caller
-// is responsible for having already set the store to 'scanning' before calling.
-async function performRescan(
+// Runs a rescan and lands the outcome in the store — the shared core of both the
+// awaited (sweep) and fire-and-forget (fix/ignore apply) rescan paths. Reuses the
+// last scan's workspace rather than silently widening back to a full-project scan
+// (Plan 2 carried-over obligation). Caller must have already set the store to
+// 'scanning' before calling.
+function performRescan(
   ctx: FixRoutesCtx,
 ): Promise<{ ok: true; issueCount: number } | { ok: false; error: StoreError }> {
-  const controller = ctx.store.beginScan();
-  try {
-    // Reuse the last scan's workspace rather than silently widening back to a
-    // full-project scan (Plan 2 carried-over obligation).
-    const scope = ctx.store.lastScanScope;
-    const raw = await ctx.scan(ctx.projectDir, { workspace: scope, production: ctx.production, signal: controller.signal });
-    const workspaces = await getWorkspaceDirs(ctx.projectDir);
-    const issues = normalize(raw, workspaces);
-    ctx.store.setReady({ issues, scannedAt: new Date().toISOString(), workspaces, scope, production: ctx.production });
-    return { ok: true, issueCount: issues.length };
-  } catch (e) {
-    const err = toStoreError(e);
-    ctx.store.setError(err);
-    return { ok: false, error: err };
-  } finally {
-    ctx.store.endScan(controller);
-  }
+  return runScanIntoStore({
+    store: ctx.store,
+    scan: ctx.scan,
+    projectDir: ctx.projectDir,
+    production: ctx.production,
+    workspace: ctx.store.lastScanScope,
+  });
 }
 
 // Fire-and-forget rescan after a fix/ignore apply, mirroring the CLI's
@@ -76,21 +63,21 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
 
   app.post('/api/fix/preview', async (c) => {
     if (store.status !== 'ready' || !store.report) return c.json({ error: 'no report available' }, 409);
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonObject(c);
     const issueIds = Array.isArray(body.issueIds) ? body.issueIds : [];
     // Patches (which can carry full post-fix file content) are deliberately
     // withheld from the response — only planId, diffs and items go over the wire.
     const plan = await compileFixPlan(projectDir, store.report.issues, {
       issueIds,
-      modeOverrides: body.modeOverrides,
+      modeOverrides: body.modeOverrides as Record<string, FixMode> | undefined,
     });
     planStore.put(plan);
     return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items });
   });
 
   app.post('/api/fix/apply', async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const plan = planStore.take(body.planId);
+    const body = await readJsonObject(c);
+    const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
     if (!plan) return c.json({ error: 'unknown or already-applied plan' }, 404);
     const results = await applyPatches(projectDir, plan.patches);
     const failedItems = plan.items.filter((i) => !i.ok);
@@ -100,7 +87,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
 
   app.post('/api/ignore/preview', async (c) => {
     if (store.status !== 'ready' || !store.report) return c.json({ error: 'no report available' }, 409);
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonObject(c);
     const issueIds = Array.isArray(body.issueIds) ? body.issueIds : [];
     const plan = await compileIgnorePlan(projectDir, store.report.issues, issueIds);
     planStore.put(plan);
@@ -108,8 +95,8 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   });
 
   app.post('/api/ignore/apply', async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const plan = planStore.take(body.planId);
+    const body = await readJsonObject(c);
+    const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
     if (!plan) return c.json({ error: 'unknown or already-applied plan' }, 404);
     const results = await applyPatches(projectDir, plan.patches);
     const failedItems = plan.items.filter((i) => !i.ok);
@@ -125,21 +112,34 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     if (store.status === 'scanning' || sweeping) return c.json({ error: 'scan in progress' }, 409);
     sweeping = true;
     try {
-      const body = await c.req.json().catch(() => ({}));
+      const body = await readJsonObject(c);
       // No explicit workspace on the sweep request falls back to the last scan's
       // scope rather than defaulting to a full-project sweep.
       const workspace = typeof body.workspace === 'string' ? body.workspace : store.lastScanScope;
-      const sweepResult = await sweep(projectDir, {
-        workspace,
-        fixTypes: Array.isArray(body.fixTypes) ? body.fixTypes : undefined,
-        allowRemoveFiles: !!body.allowRemoveFiles,
-      });
+      // Track the sweep child so the CLI's close() can reap a still-running
+      // `knip --fix` on shutdown (it can be actively rewriting/deleting files).
+      const controller = store.beginSweep();
+      let sweepResult: { ok: boolean; stderr?: string };
+      try {
+        sweepResult = await sweep(projectDir, {
+          workspace,
+          fixTypes: Array.isArray(body.fixTypes) ? body.fixTypes : undefined,
+          allowRemoveFiles: !!body.allowRemoveFiles,
+          signal: controller.signal,
+        });
+      } finally {
+        store.endSweep(controller);
+      }
       if (!sweepResult.ok) return c.json({ error: 'sweep failed', stderr: sweepResult.stderr }, 500);
 
       store.lastScanScope = workspace;
       store.setScanning();
       const result = await performRescan(ctx);
-      if (!result.ok) return c.json({ error: result.error }, 500);
+      // Flatten the StoreError to a string `error` (plus structured detail) so the
+      // client's apiErrorMessage — which only reads a string `error` — can surface it.
+      if (!result.ok) {
+        return c.json({ error: result.error.message, code: result.error.code, stderr: result.error.stderr }, 500);
+      }
       return c.json({ issueCount: result.issueCount });
     } finally {
       sweeping = false;

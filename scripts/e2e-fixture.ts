@@ -102,6 +102,7 @@ async function main(): Promise<void> {
   git(['init', '-b', 'main']);
   git(['config', 'user.name', 'knip-gui e2e']);
   git(['config', 'user.email', 'e2e@knip-gui.local']);
+  git(['config', 'commit.gpgsign', 'false']);
   git(['add', '-A']);
   git(['commit', '-m', 'initial fixture import']);
   console.log(`e2e fixture ready at ${workDir}`);

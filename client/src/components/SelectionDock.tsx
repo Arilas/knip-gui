@@ -130,7 +130,7 @@ export function SelectionDock({ issues }: SelectionDockProps) {
           onClick={() => onStartReview('ignore')}
           data-testid="selbar-ignore"
         >
-          Ignore
+          Ignore…
         </Button>
         <Button type="button" size="sm" disabled={busy} onClick={() => onStartReview('fix')} data-testid="selbar-fix">
           Fix…

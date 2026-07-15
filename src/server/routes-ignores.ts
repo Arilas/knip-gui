@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import { compileRemoveIgnoresPlan } from '../fix/compiler.js';
 import { applyPatches } from '../fix/patch.js';
 import { listIgnores } from '../ignore/config-writer.js';
+import { readJsonObject } from './body.js';
 import { triggerBackgroundRescan, type FixRoutesCtx } from './routes-fix.js';
 
 // Ignored page's server surface (Task 5, UX overhaul): list the project's
@@ -20,7 +21,7 @@ export function registerIgnoresRoutes(app: Hono, ctx: FixRoutesCtx): void {
   });
 
   app.post('/api/ignores/remove/preview', async (c) => {
-    const body = await c.req.json().catch(() => ({}));
+    const body = await readJsonObject(c);
     const entries = Array.isArray(body.entries) ? body.entries : [];
     // Patches are withheld from the response, same as /api/fix/preview and
     // /api/ignore/preview — only planId, diffs and items go over the wire.
@@ -30,8 +31,8 @@ export function registerIgnoresRoutes(app: Hono, ctx: FixRoutesCtx): void {
   });
 
   app.post('/api/ignores/remove/apply', async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const plan = planStore.take(body.planId);
+    const body = await readJsonObject(c);
+    const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
     if (!plan) return c.json({ error: 'unknown or already-applied plan' }, 404);
     const results = await applyPatches(projectDir, plan.patches);
     const failedItems = plan.items.filter((i) => !i.ok);

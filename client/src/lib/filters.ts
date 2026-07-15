@@ -3,7 +3,7 @@
 // task) now that navigation is sidebar-driven and facet pages are gone.
 // No React, no store — safe to unit-test directly (see
 // tests/client/filters.test.ts).
-import type { Issue, IssueType } from '../../../src/core/types.js';
+import { IGNORABLE_ISSUE_TYPES, type Issue, type IssueType } from '../../../src/core/types.js';
 
 // File-located issue types (dependency-shaped types excluded) — the set the
 // Code page's filter chips cover. Canonical source for state/ui.ts's
@@ -83,22 +83,9 @@ export function isFixable(issue: Issue): Fixability {
   return { ok: false, reason: UNFIXABLE_REASONS[issue.type] ?? 'not fixable' };
 }
 
-// Only these types are ignorable — mirrors compileIgnorePlan's switch
-// (src/fix/compiler.ts): everything else (unlisted, unresolved, duplicates,
-// nsExports, nsTypes, catalog, cycles) falls through to its default 'not-
-// ignorable' case there.
-const IGNORABLE_TYPES = new Set<IssueType>([
-  'files',
-  'dependencies',
-  'devDependencies',
-  'optionalPeerDependencies',
-  'binaries',
-  'exports',
-  'types',
-  'enumMembers',
-  'namespaceMembers',
-]);
-
+// Ignorability is defined once in core (IGNORABLE_ISSUE_TYPES) and consumed by
+// both the server's ignore engine and here — no more hand-kept mirror of
+// compileIgnorePlan's switch that could silently drift.
 const UNIGNORABLE_REASONS: Partial<Record<IssueType, string>> = {
   unlisted: 'unlisted dependencies cannot be suppressed via config',
   unresolved: 'unresolved imports cannot be suppressed via config',
@@ -110,7 +97,7 @@ const UNIGNORABLE_REASONS: Partial<Record<IssueType, string>> = {
 };
 
 export function isIgnorable(issue: Issue): Fixability {
-  if (IGNORABLE_TYPES.has(issue.type)) return { ok: true };
+  if (IGNORABLE_ISSUE_TYPES.has(issue.type)) return { ok: true };
   return { ok: false, reason: UNIGNORABLE_REASONS[issue.type] ?? 'not ignorable' };
 }
 

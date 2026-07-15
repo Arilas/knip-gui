@@ -26,7 +26,8 @@ import {
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { IssueType } from '../../../../src/core/types.js';
-import { getSweepCapabilities } from '../../api.js';
+import { toast } from 'sonner';
+import { apiErrorMessage, getSweepCapabilities } from '../../api.js';
 import { filterRows, sortRows, typeTotals, visibleColumns, workspaceRows, type SortKey } from '../../lib/dashboard.js';
 import { CODE_TYPES, PACKAGE_TYPES, typeLabel } from '../../lib/filters.js';
 import { useActivityStore } from '../../state/activity.js';
@@ -116,6 +117,12 @@ export function Dashboard() {
   function sortIndicator(key: SortKey): string {
     if (key !== sortKey) return '';
     return sortDir === 'asc' ? '↑' : '↓';
+  }
+
+  // Screen-reader sort state on the column header (matches PackagesPage's table).
+  function ariaSort(key: SortKey): 'ascending' | 'descending' | undefined {
+    if (key !== sortKey) return undefined;
+    return sortDir === 'asc' ? 'ascending' : 'descending';
   }
 
   function onTileClick(type: IssueType) {
@@ -221,6 +228,7 @@ export function Dashboard() {
             <Input
               type="search"
               placeholder="Search workspaces…"
+              aria-label="Search workspaces"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="max-w-64"
@@ -248,7 +256,7 @@ export function Dashboard() {
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
-                  <TableHead>
+                  <TableHead aria-sort={ariaSort('workspace')}>
                     <button
                       type="button"
                       className="flex items-center gap-1 font-medium"
@@ -259,7 +267,7 @@ export function Dashboard() {
                     </button>
                   </TableHead>
                   {columns.map((type) => (
-                    <TableHead key={type} className="text-right">
+                    <TableHead key={type} className="text-right" aria-sort={ariaSort(type)}>
                       <button
                         type="button"
                         className="ml-auto flex items-center gap-1 font-medium"
@@ -271,7 +279,7 @@ export function Dashboard() {
                       </button>
                     </TableHead>
                   ))}
-                  <TableHead className="text-right">
+                  <TableHead className="text-right" aria-sort={ariaSort('total')}>
                     <button
                       type="button"
                       className="ml-auto flex items-center gap-1 font-medium"
@@ -367,6 +375,9 @@ export function Dashboard() {
                 at: new Date().toISOString(),
               });
             },
+            // A failed sweep was previously silent — no toast, dialog just
+            // un-busied. Surface the error and keep the dialog open to retry.
+            onError: (e) => toast.error(apiErrorMessage(e)),
           });
         }}
       />

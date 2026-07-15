@@ -64,3 +64,13 @@ export function pluralizeType(count: number, type: IssueType): string {
   const noun = SINGULAR_NOUN[type];
   return `${count} ${count === 1 ? noun : pluralizeNoun(noun)}`;
 }
+
+/**
+ * Generic count + plain-word formatter for nouns that aren't an IssueType
+ * ("1 file" / "2 files", "1 change" / "3 changes"). `plural` defaults to the
+ * singular + "s"; pass it explicitly for irregular words. Kills the "(s)"
+ * parenthetical the Review commit bar used to render.
+ */
+export function pluralizeWord(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}

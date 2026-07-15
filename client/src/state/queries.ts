@@ -1,10 +1,9 @@
 // react-query wiring: server data (report, git status) as queries, api.ts
 // calls as mutations, and a `useBusy` flag that's true while any
-// scan/sweep/apply mutation is in flight OR the report is mid-scan. This is
-// the client-side serialization the sweep endpoint needs (it isn't
-// self-latched server-side — see Plan 3's carried-over obligations) and is
-// consumed by TopBar's Re-run/workspace-switch controls and Overview's sweep
-// button.
+// scan/sweep/apply mutation is in flight OR the report is mid-scan. `useBusy`
+// drives the sidebar's Re-run/workspace-switch controls and the sweep button
+// (a UX affordance — the scan and sweep endpoints are ALSO latched server-side,
+// so this is defense in depth, not the only guard).
 import { useIsMutating, useMutation, useQuery, useQueryClient, type Mutation } from '@tanstack/react-query';
 import type { IgnoreEntry } from '../../../src/ignore/config-writer.js';
 import {
@@ -32,8 +31,8 @@ export const fileQueryKey = (path: string) => ['file', path] as const;
 export const ignoresQueryKey = ['ignores'] as const;
 
 // Mutation keys that participate in the busy flag — every mutation that can
-// leave the server mid-scan or mid-write (scan itself, the unlatched sweep
-// run, and fix/ignore apply, which trigger a background rescan).
+// leave the server mid-scan or mid-write (scan itself, the sweep run, and
+// fix/ignore apply, which trigger a background rescan).
 const BUSY_MUTATION_KEYS = ['scan', 'sweep', 'fixApply', 'ignoreApply', 'ignoreRemoveApply'];
 
 export function useReport() {
@@ -78,6 +77,24 @@ function invalidateFileQueries(queryClient: ReturnType<typeof useQueryClient>): 
   queryClient.invalidateQueries({ queryKey: ['file'] });
 }
 
+// Every mutation that rewrites the working tree (fix/ignore/ignore-remove apply,
+// sweep) must refresh the report, the open file, AND git status — the last was
+// missing, so GitFooter kept showing a clean tree / hid the "N uncommitted files"
+// affordance after an apply until an unrelated refetch (window refocus) happened.
+// `ignores: true` additionally refreshes the Ignored page/badge for config-writing
+// applies. Called `onSettled` (not `onSuccess`): even a failed/partial apply can
+// have written files and left the report mid-rescan, so the caches must refresh
+// on failure too, matching the scan/sweep policy.
+function invalidateAfterWrite(
+  queryClient: ReturnType<typeof useQueryClient>,
+  opts: { ignores?: boolean } = {},
+): void {
+  queryClient.invalidateQueries({ queryKey: reportQueryKey });
+  queryClient.invalidateQueries({ queryKey: gitStatusQueryKey });
+  invalidateFileQueries(queryClient);
+  if (opts.ignores) queryClient.invalidateQueries({ queryKey: ignoresQueryKey });
+}
+
 export function useScanMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -106,13 +123,7 @@ export function useSweepMutation() {
     // onSettled, not onSuccess-only (mirrors useScanMutation's Task 6 fix): a
     // sweep that itself fails must not leave the report query showing stale
     // cached data with no visible sign the sweep failed.
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: reportQueryKey });
-      // A sweep is `knip --fix` across the whole project — just as capable
-      // of rewriting the currently-open file's content as a single fix/
-      // ignore apply (see invalidateFileQueries' doc comment above).
-      invalidateFileQueries(queryClient);
-    },
+    onSettled: () => invalidateAfterWrite(queryClient),
   });
 }
 
@@ -128,10 +139,7 @@ export function useFixApplyMutation() {
   return useMutation({
     mutationKey: ['fixApply'],
     mutationFn: (planId: string) => postFixApply(planId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: reportQueryKey });
-      invalidateFileQueries(queryClient);
-    },
+    onSettled: () => invalidateAfterWrite(queryClient),
   });
 }
 
@@ -147,20 +155,9 @@ export function useIgnoreApplyMutation() {
   return useMutation({
     mutationKey: ['ignoreApply'],
     mutationFn: (planId: string) => postIgnoreApply(planId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: reportQueryKey });
-      // An ignore apply can write ignore entries into the knip config — the
-      // file useIgnores reads. AppSidebar's Ignored badge consumes that query
-      // and never unmounts, so without this invalidation the badge undercounts
-      // until the user happens to visit the Ignored page (Task 5 review
-      // finding, live-reproduced). Mirrors useIgnoreRemoveApplyMutation.
-      queryClient.invalidateQueries({ queryKey: ignoresQueryKey });
-      // See invalidateFileQueries' doc comment: an ignore apply can also
-      // rewrite the open file's own content (an inserted `@public` tag), not
-      // just the knip config — the code pane must reflect that on the very
-      // next reopen, not a stale pre-apply cache entry (Task 4, v0.3).
-      invalidateFileQueries(queryClient);
-    },
+    // ignores:true also refreshes the Ignored page/AppSidebar badge, which never
+    // unmounts and otherwise undercounts until the user visits it (Task 5 finding).
+    onSettled: () => invalidateAfterWrite(queryClient, { ignores: true }),
   });
 }
 
@@ -186,11 +183,7 @@ export function useIgnoreRemoveApplyMutation() {
   return useMutation({
     mutationKey: ['ignoreRemoveApply'],
     mutationFn: (planId: string) => postIgnoreRemoveApply(planId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: reportQueryKey });
-      queryClient.invalidateQueries({ queryKey: ignoresQueryKey });
-      invalidateFileQueries(queryClient);
-    },
+    onSettled: () => invalidateAfterWrite(queryClient, { ignores: true }),
   });
 }
 

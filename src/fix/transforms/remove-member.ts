@@ -198,6 +198,9 @@ function removeEnumMember(
   if (!cur) return;
   const isLast = index === members.length - 1;
   if (isLast) {
+    // The last-member range starts at the previous member's own line-trailing end,
+    // so cur's own leading comment (which sits between prev and cur) is already
+    // swept in; prev's trailing comment stays put.
     const prev = members[index - 1];
     const from = prev ? lineTrailingEnd(content, comments, prev.end) : cur.start;
     const to = lineTrailingEnd(content, comments, cur.end);
@@ -205,7 +208,11 @@ function removeEnumMember(
   } else {
     const next = members[index + 1];
     if (!next) return;
-    s.remove(cur.start, next.start);
+    // Take cur's own-line leading JSDoc/comments with it — otherwise they orphan
+    // onto the following member. expandStartWithLeadingComments' own-line guard
+    // keeps a same-line trailing comment on the PREVIOUS member out of the range.
+    const from = expandStartWithLeadingComments(content, comments, cur.start);
+    s.remove(from, next.start);
   }
 }
 

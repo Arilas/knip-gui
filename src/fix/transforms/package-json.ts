@@ -28,7 +28,10 @@ export function removeDependency(
   const key = KEY_BY_ISSUE_TYPE[issueType];
   const pkg = parse(content);
   const section = pkg?.[key];
-  if (section == null || typeof section !== 'object' || !(depName in section)) {
+  // Object.hasOwn, not `in`: a dep literally named `constructor`/`toString`/etc.
+  // is inherited from Object.prototype and would spuriously pass `in`, turning a
+  // real not-found into a silent ok:true no-op.
+  if (section == null || typeof section !== 'object' || !Object.hasOwn(section, depName)) {
     return { ok: false, reason: 'not-found' };
   }
 
@@ -37,7 +40,7 @@ export function removeDependency(
 
   if (issueType === 'optionalPeerDependencies') {
     const meta = pkg?.peerDependenciesMeta;
-    if (meta != null && typeof meta === 'object' && depName in meta) {
+    if (meta != null && typeof meta === 'object' && Object.hasOwn(meta, depName)) {
       newContent = applyEdits(
         newContent,
         modify(newContent, ['peerDependenciesMeta', depName], undefined, { formattingOptions }),

@@ -39,18 +39,23 @@ export type KnipConfigKind = 'knip.json' | 'knip.jsonc' | 'package.json' | 'code
 // non-`.config` siblings since they're the identical file format (jsonc-parser
 // doesn't care about the filename, only json vs jsonc dialect). Nothing is skipped
 // from KNIP_CONFIG_LOCATIONS.
-const JSON_CONFIG_NAMES = ['knip.json', '.knip.json'];
-const JSONC_CONFIG_NAMES = ['knip.jsonc', '.knip.jsonc'];
+// Dedicated JSON/JSONC config files in knip's REAL resolution order
+// (KNIP_CONFIG_LOCATIONS): knip.json, knip.jsonc, .knip.json, .knip.jsonc. The
+// order matters — with both knip.jsonc and .knip.json present, knip reads
+// knip.jsonc, so the writer must edit that same file. Each maps to its jsonc
+// dialect `kind` (dotfile variants fold into their non-dotted sibling's kind).
+const DEDICATED_CONFIG_NAMES: { name: string; kind: 'knip.json' | 'knip.jsonc' }[] = [
+  { name: 'knip.json', kind: 'knip.json' },
+  { name: 'knip.jsonc', kind: 'knip.jsonc' },
+  { name: '.knip.json', kind: 'knip.json' },
+  { name: '.knip.jsonc', kind: 'knip.jsonc' },
+];
 const CODE_CONFIG_NAMES = ['knip.ts', 'knip.js', 'knip.config.ts', 'knip.config.js'];
 
 export function findKnipConfig(projectDir: string): { kind: KnipConfigKind; path?: string } {
-  for (const name of JSON_CONFIG_NAMES) {
+  for (const { name, kind } of DEDICATED_CONFIG_NAMES) {
     const path = join(projectDir, name);
-    if (existsSync(path)) return { kind: 'knip.json', path };
-  }
-  for (const name of JSONC_CONFIG_NAMES) {
-    const path = join(projectDir, name);
-    if (existsSync(path)) return { kind: 'knip.jsonc', path };
+    if (existsSync(path)) return { kind, path };
   }
   const pkgPath = join(projectDir, 'package.json');
   if (existsSync(pkgPath)) {
@@ -84,6 +89,9 @@ function getAtPath(root: unknown, path: readonly (string | number)[]): unknown {
   let cur = root;
   for (const segment of path) {
     if (cur == null || typeof cur !== 'object') return undefined;
+    // Own-property only: a workspace/key literally named `constructor` etc. must
+    // not resolve to an inherited Object.prototype member.
+    if (!Object.hasOwn(cur, segment)) return undefined;
     cur = (cur as Record<string | number, unknown>)[segment];
   }
   return cur;

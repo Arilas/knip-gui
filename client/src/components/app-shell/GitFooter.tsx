@@ -12,6 +12,7 @@
 import { GitCommitVertical, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
 import { useBusy, useGitStatus, useReport, useScanMutation } from '../../state/queries.js';
+import { useUiStore } from '../../state/ui.js';
 import { CommitDialog } from '../flows/CommitDialog.js';
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
@@ -22,6 +23,10 @@ export function GitFooter() {
   const { data: gitStatus } = useGitStatus();
   const scanMutation = useScanMutation();
   const busy = useBusy();
+  // A rescan while the Review page is open prunes the selection under a frozen
+  // review and can invalidate its compiled plan — gate Re-run the same way the
+  // workspace switcher is gated.
+  const reviewing = useUiStore((s) => s.page === 'review');
   const [commitDialogOpen, setCommitDialogOpen] = useState(false);
   const dirtyCount = gitStatus?.dirtyFiles?.length ?? 0;
 
@@ -90,7 +95,8 @@ export function GitFooter() {
         variant="outline"
         size="sm"
         data-testid="rerun-button"
-        disabled={busy}
+        disabled={busy || reviewing}
+        title={reviewing ? 'Finish or cancel the review first' : undefined}
         onClick={() => scanMutation.mutate(currentScope)}
         className="w-full justify-center group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:p-0"
       >
