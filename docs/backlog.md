@@ -7,6 +7,56 @@ every item below against the current code; status notes are inline where
 something changed, and resolved items are struck through rather than
 deleted so the history stays legible.
 
+## Delivered in the post-v0.3 research fix pass (2026-07-15)
+
+A multi-agent audit + live dogfood pass, then a whole-branch fix (commit
+`f2fe82b`). Verified: 563 unit/integration + 17 e2e pass, typecheck clean
+(server/client/tests), production-only `npm pack` install boots and serves.
+
+- **Correctness (transforms):** exported function overloads no longer break the
+  build — strip-export/delete-declaration sweep the whole overload set instead
+  of the first signature only (was TS2383); comment-adjacency transforms
+  (`expandStartWithLeadingComments`, `insertPublicTag`, enum member removal) no
+  longer eat/merge a neighbor's trailing/leading comment (shared own-line-start
+  guard); workspace globs expand `**` / mid-pattern `*`, apply `!` exclusions,
+  and read `pnpm-workspace.yaml` only under the `packages:` key (was
+  mis-attributing every issue to root `package.json`); `Object.hasOwn` replaces
+  `in`/prototype lookups; `findKnipConfig` precedence matches knip's real order.
+- **Security:** loopback `Host`-header guard closes DNS-rebinding token theft;
+  commit/add paths are `:(literal)`-prefixed so pathspec magic can't widen a
+  scoped commit.
+- **Server robustness:** malformed/null request bodies no longer clobber a ready
+  store (shared `readJsonObject`); occupied `--port` exits with a friendly
+  message; sweeps are abortable + reaped on shutdown; `app.onError` returns a
+  JSON error envelope; the sweep-failure body is a string the client can show;
+  `/api/git/status` has a try/catch; the duplicated scan pipeline is unified into
+  `runScanIntoStore`.
+- **Client races:** working-tree writes invalidate `['git-status']` (footer was
+  stale until refocus); apply mutations moved to `onSettled`; the Review page is
+  guarded against a concurrent rescan/workspace-switch; CommitBar branch creation
+  is idempotent on retry + guards an empty branch name; switching workspaces
+  warns before discarding a selection; the sweep dialog resets between opens and
+  toasts on failure.
+- **Publish readiness:** 17 client/build-only packages moved to
+  `devDependencies` (runtime needs only 7 — verified via omit-dev install);
+  `prepublishOnly` build; `IGNORABLE_ISSUE_TYPES` exported from core so
+  client/server ignorability can't drift; `tsconfig.tests.json` typechecks
+  tests/scripts.
+- **UX / a11y:** real "Scanning…" state instead of a false "knip is happy"
+  during the first scan; the sweep dialog's inverted-checkbox trap (all-unchecked
+  = fix everything) fixed with explicit copy + a scope-stating button; whole-file
+  banner uses readable type labels; theme tokens replace hardcoded
+  gray/red/white; aria-labels + `aria-sort`; the `(s)` pluralization in CommitBar
+  removed.
+- **Tests:** throwaway-repo tests disable `commit.gpgsign` — was silently hanging
+  the `e2e-loop` integration test on any machine that signs commits
+  (GPG/1Password).
+
+Still open after this pass (see also the sections below): tree arrow-key ARIA
+navigation, browser-history/URL routing, the all-stale-apply dead-end message,
+`/api/scan` not checking the sweeping latch, PlanStore cap/TTL, and the
+`maxBuffer`-overflow error code — none re-verified as fixed here.
+
 ## Delivered in v0.3 (Task 6 final review + dogfood)
 
 New e2e coverage: `tests/e2e/workspace-switcher.spec.ts` (real scoped rescan
@@ -189,7 +239,10 @@ sidebar badge below).
   first `await`, cleared in `finally`) mirroring `/api/scan`'s own
   check-then-latch pattern.
 - Tighten Origin check to the server's exact origin (port) now that the SPA origin
-  is fixed.
+  is fixed. **Partly addressed** (2026-07-15): a `Host`-header loopback guard now
+  fronts every route, which is the stronger fix — it also covers the
+  header-absent same-origin GET the Origin regex never saw (the DNS-rebinding
+  path). Pinning the Origin regex to the exact port is still a possible follow-up.
 - ~~`close()` doesn't reap an in-flight knip child process.~~ **Delivered**
   (v0.3 Task 1): `src/cli.ts`'s `close()` calls `store.abortActiveScan()`
   (which aborts the active scan's `AbortSignal`, killing its `execFile`

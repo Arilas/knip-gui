@@ -28,7 +28,12 @@ and opens a browser at a local URL.
 
 The server binds to `127.0.0.1` only. Every API request requires a per-session
 token embedded in the served page, and cross-origin requests are rejected — so
-web pages you have open cannot drive the API.
+web pages you have open cannot drive the API. Requests whose `Host` header
+isn't a loopback address are rejected outright, which closes the DNS-rebinding
+path (a malicious page rebinding its own hostname to `127.0.0.1` to read the
+token off the served shell and then read project files). Commits are scoped to
+the exact paths knip-gui touched via literal pathspecs, so nothing else in your
+working tree is ever swept into a commit.
 
 ## Status
 
@@ -75,12 +80,19 @@ See [docs/backlog.md](docs/backlog.md) for known rough edges and future candidat
 ```bash
 npm install
 npm test          # vitest (unit + integration against fixture projects, and
-                   # client-logic tests under a jsdom project) — 540+ tests
-npm run typecheck  # server tsc + client tsc, no emit
+                   # client-logic tests under a jsdom project) — 560+ tests
+npm run typecheck  # server tsc + client tsc + tests/scripts tsc, no emit
 npm run build      # emits dist/ (server) and dist/client/ (Vite SPA build);
                    # this is what `files: ["dist"]` publishes and what
                    # `npx knip-gui` serves
 ```
+
+Only seven packages are runtime `dependencies` (`hono`, `@hono/node-server`,
+`oxc-parser`, `magic-string`, `diff`, `jsonc-parser`, `open`) — the entire
+React/Tailwind/shiki client toolchain is a `devDependency`, since the shipped
+package serves a prebuilt, self-contained `dist/client/` bundle. So
+`npx knip-gui` installs a small server, not a UI framework. `prepublishOnly`
+runs the build so a stale `dist/` can't be published.
 
 ### End-to-end tests (Playwright)
 
