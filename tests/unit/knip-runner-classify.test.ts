@@ -46,6 +46,23 @@ describe('classifyExecError', () => {
     expect(result?.code).toBe('report-too-large');
   });
 
+  it('keeps a numeric-exit failure as "knip-failed" even when its message mentions maxBuffer', () => {
+    // For ordinary non-zero exits Node builds error.message as
+    // "Command failed: <cmd>\n<stderr>" — so a genuine knip crash whose
+    // stderr happens to contain the substring "maxBuffer" must NOT be
+    // reclassified as report-too-large (a real overflow never carries a
+    // numeric exit code; Node kills the child before it can exit).
+    const err = fakeError({
+      name: 'Error',
+      message: 'Command failed: node knip.js\nRangeError: tune your maxBuffer settings',
+      code: 2 as unknown as string,
+    });
+    const result = classifyExecError(err, 'RangeError: tune your maxBuffer settings');
+    expect(result?.code).toBe('knip-failed');
+    expect(result?.exitCode).toBe(2);
+    expect(result?.message).toBe('knip exited with 2');
+  });
+
   it('maps a numeric exit code >= 2 to "knip-failed" with exitCode set', () => {
     const err = fakeError({ name: 'Error', message: 'Command failed', code: 2 as unknown as string });
     const result = classifyExecError(err, 'stderr text');

@@ -83,7 +83,9 @@ export function classifyExecError(error: ExecFileException | null, stderr: strin
   // execFile's native `signal` support (Node >= 15.9) kills the child and
   // hands the callback an AbortError rather than a normal exit — surface
   // that distinctly so callers (e.g. the CLI's close()) don't mistake a
-  // deliberate cancellation for a real knip failure.
+  // deliberate cancellation for a real knip failure. Checked first on
+  // purpose: a deliberate cancellation wins over any coincidental
+  // "maxBuffer" substring in the error message.
   if (error.name === 'AbortError') {
     return new KnipError('scan aborted', { code: 'aborted', stderr });
   }
@@ -94,8 +96,16 @@ export function classifyExecError(error: ExecFileException | null, stderr: strin
   // otherwise catch it as an opaque non-numeric-code 'knip-failed', per the
   // original — now preserved-behavior — fallback). Older Node releases
   // didn't set this ERR_* code at all, only a message mentioning maxBuffer,
-  // hence the OR.
-  if (exitCode === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || error.message?.includes('maxBuffer')) {
+  // hence the message fallback — but only for non-numeric exit codes: an
+  // ordinary non-zero exit builds error.message as
+  // "Command failed: <cmd>\n<stderr>", so a genuine knip crash whose stderr
+  // merely mentions "maxBuffer" must stay a 'knip-failed' with its real
+  // exitCode (a true overflow never has a numeric code — Node kills the
+  // child before it can exit).
+  if (
+    exitCode === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ||
+    (typeof exitCode !== 'number' && error.message.includes('maxBuffer'))
+  ) {
     const maxMb = MAX_SCAN_BUFFER_BYTES / (1024 * 1024);
     return new KnipError(
       `knip's JSON report exceeded ${maxMb} MB — narrow the scan (--workspace) or scan a smaller project`,
