@@ -65,10 +65,13 @@ export function CodePage({ issues, file }: CodePageProps) {
   // `workspaces` mirrors the pattern router.tsx/CommandPalette already use to
   // feed this hook; the chip itself never renders the picker list, only calls
   // `.select(scope)` directly, so entries/currentScope beyond `currentScope`
-  // (below) are unused here but harmless to compute.
+  // (below) are unused here but harmless to compute. The chip clearing itself
+  // after a successful promote needs no wiring here: runSwitch's success path
+  // clears codeScope for EVERY real scope switch, whoever initiated it (see
+  // use-workspace-switch.ts's invariant comment).
   const { data } = useReport();
   const workspaces = data?.report?.workspaces ?? [ALL_WORKSPACES];
-  const workspaceSwitch = useWorkspaceSwitch(workspaces, issues, () => setCodeScope(undefined));
+  const workspaceSwitch = useWorkspaceSwitch(workspaces, issues);
   // Hidden once the real scan scope already matches the chip — promoting an
   // already-scoped view would be a same-scope no-op (select() also guards
   // this, but hiding avoids showing a dead-looking enabled button).

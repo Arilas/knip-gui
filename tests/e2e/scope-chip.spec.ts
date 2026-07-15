@@ -212,3 +212,58 @@ test('typing in the search box filters WITHIN the chip scope; promote prompts fo
   await expect(page.getByTestId('rerun-button')).toBeEnabled({ timeout: 15_000 });
   await expect(switcher).toHaveAttribute('title', 'All workspaces');
 });
+
+// Cross-flow pin (#29 review finding): the chip must clear on ANY successful
+// real scope switch, not just its own promote button — runSwitch's success
+// path clears it at the choke point every switch flows through (see
+// use-workspace-switch.ts's invariant comment). Without this, a sidebar
+// switch to packages/lib while the chip said packages/app would leave the
+// new, server-narrowed report filtered by the OLD workspace: an empty tree
+// behind a chip that lies. Also pins the promote button hiding when
+// report.scope already equals the chip's scope (a same-scope promote would
+// be a dead no-op button).
+test('a sidebar workspace switch clears the chip; promote is hidden when the real scope already matches', async ({
+  page,
+}) => {
+  await page.goto(BASE_URL);
+  await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('workspace-row-packages/app')).toBeVisible();
+
+  // Chip = packages/app via the Dashboard click...
+  await page.getByTestId('workspace-open-packages/app').click();
+  const chip = page.getByTestId('scope-chip');
+  await expect(chip).toContainText('packages/app');
+  await expect(page.getByTestId('tree-file-packages/app/orphan.ts')).toBeVisible();
+
+  // ...then a REAL scope switch to packages/lib via the SIDEBAR switcher —
+  // a different useWorkspaceSwitch instance than the chip's own, which is
+  // exactly what the per-instance onSwitched seam this replaced would miss.
+  const switcher = page.getByTestId('workspace-switcher');
+  await switcher.click();
+  await page.locator('[data-slot="command-input"]').fill('lib');
+  await page.getByTestId('workspace-option-packages/lib').click();
+  await expect(page.getByTestId('rerun-button')).toBeEnabled({ timeout: 15_000 });
+  await expect(switcher).toHaveAttribute('title', 'packages/lib');
+
+  // The chip is gone and the tree shows the NEW scope's files — not an empty
+  // tree filtered by the stale packages/app chip.
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+  await expect(page.getByTestId('tree-file-packages/lib/extra.ts')).toBeVisible();
+
+  // Promote-hidden pin: with the real scope now packages/lib, a Dashboard
+  // click on packages/lib sets a chip whose scope MATCHES report.scope —
+  // the chip renders (with its X) but the promote button must not.
+  await page.getByTestId('nav-dashboard').click();
+  await page.getByTestId('workspace-open-packages/lib').click();
+  await expect(chip).toContainText('packages/lib');
+  await expect(page.getByTestId('scope-chip-clear')).toBeVisible();
+  await expect(page.getByTestId('scope-chip-promote')).toHaveCount(0);
+
+  // Courtesy reset: clear the chip, restore All workspaces.
+  await page.getByTestId('scope-chip-clear').click();
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+  await switcher.click();
+  await page.getByTestId('workspace-option-.').click();
+  await expect(page.getByTestId('rerun-button')).toBeEnabled({ timeout: 15_000 });
+  await expect(switcher).toHaveAttribute('title', 'All workspaces');
+});

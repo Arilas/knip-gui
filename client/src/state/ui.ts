@@ -42,16 +42,24 @@
 // from the report it already has. CodePage's chip offers a one-click "Scan
 // only this workspace" PROMOTE action that hands off to that real hook
 // (`useWorkspaceSwitch().select(scope)`, reusing its discard-selection
-// confirm rather than duplicating it) — a successful promote clears codeScope
-// via the hook's optional `onSwitched` callback, since a real, rescanned scope
-// makes the view filter redundant (see use-workspace-switch.ts).
+// confirm rather than duplicating it).
+//
+// Lifecycle invariant: codeScope is cleared by exactly two things — the
+// chip's own X, and ANY successful real scope switch (promote, sidebar
+// WorkspaceSwitcher, CommandPalette — all funnel through
+// use-workspace-switch.ts's runSwitch, whose success path calls
+// setCodeScope(undefined); see the invariant comment there for why a
+// re-scoped report makes a leftover chip actively wrong, not just
+// redundant). It deliberately SURVIVES everything else: plain navigation
+// (Code -> Dashboard -> Code keeps the chip, same as codeFilters/codeSearch
+// survive), filter-chip toggles, searches, and same-scope rescans
+// (GitFooter's Re-run, sweeps, applies — none go through runSwitch).
 //
 // Deliberately NOT mirrored to the URL, unlike `ws`/`report.scope`: `ws` is
 // worth bookmarking because reloading it replays a real scan that reproduces
-// the exact same state from nothing. codeScope has no such replay value — it's
-// a pure narrowing of the CURRENT client-side issue list, superseded instantly
-// by a promote, and reset to "no chip" the moment a plain nav or filter click
-// would reasonably expect a full tree. It's session-only, same as
+// the exact same state from nothing. codeScope has no such replay value —
+// it's a pure narrowing of the CURRENT client-side issue list, superseded by
+// any real scope switch per the invariant above. It's session-only, same as
 // codeFilters/packagesFilters/codeSearch above.
 //
 // Root '.' (ALL_WORKSPACES, hooks/use-workspace-switch.ts) never produces a
@@ -141,9 +149,9 @@ export interface UiState {
   // place. A keystroke in the search box must never affect anything else.
   setCodeSearch: (search: string) => void;
   // Sets/clears the workspace scope chip — Dashboard's cell/row click, the
-  // chip's X, and (indirectly, via the workspace-switch hook's onSwitched)
-  // a successful promote all funnel through this one setter. Normalizes root
-  // ('.') to `undefined` so callers can pass a raw workspace value (as
+  // chip's X, and any successful real scope switch (use-workspace-switch.ts's
+  // runSwitch success path) all funnel through this one setter. Normalizes
+  // root ('.') to `undefined` so callers can pass a raw workspace value (as
   // Dashboard does) without special-casing root themselves.
   setCodeScope: (ws?: string) => void;
   // See openFileNonce above — CodePage's tree-row click calls this so

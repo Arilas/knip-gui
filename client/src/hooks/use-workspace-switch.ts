@@ -15,6 +15,7 @@ import { useNavigate, useRouterState } from '@tanstack/react-router';
 import type { Issue } from '../../../src/core/types.js';
 import { useBusy, useReport, useScanMutation } from '../state/queries.js';
 import { useSelectionStore } from '../state/selection.js';
+import { useUiStore } from '../state/ui.js';
 
 // The scope value meaning "the whole project" — matches Report.scope's own
 // convention (absent/'.' = unscoped).
@@ -43,19 +44,7 @@ export interface UseWorkspaceSwitchResult {
   cancelSwitch: () => void;
 }
 
-export function useWorkspaceSwitch(
-  workspaces: string[],
-  issues: Issue[],
-  // Task W (#29): fired after a switch this hook initiated actually LANDS
-  // (scanMutation's onSuccess, not just on click) — the Code page's scope
-  // chip uses this to clear itself on a successful promote, since a real,
-  // rescanned `report.scope` supersedes the client-side view filter the chip
-  // stood in for. Deliberately onSuccess, not onSettled: a failed rescan never
-  // actually adopted the scope, so the chip (and the option to retry the
-  // promote) should stay. Optional and unused by WorkspaceSwitcher/
-  // CommandPalette, whose behavior is unchanged.
-  onSwitched?: () => void,
-): UseWorkspaceSwitchResult {
+export function useWorkspaceSwitch(workspaces: string[], issues: Issue[]): UseWorkspaceSwitchResult {
   const [pendingScope, setPendingScope] = useState<string | null>(null);
   const { data } = useReport();
   const scanMutation = useScanMutation();
@@ -88,7 +77,22 @@ export function useWorkspaceSwitch(
     // way per phase (see router.tsx), so a pushed entry would only get
     // snapped back.
     navigate({ to: '.', search: (prev) => ({ ...prev, ws }), replace: true });
-    scanMutation.mutate(ws, { onSuccess: () => onSwitched?.() });
+    // INVARIANT (Task W, #29 review): any SUCCESSFUL real scope switch clears
+    // the Code page's scope chip, whoever initiated it — chip promote, sidebar
+    // WorkspaceSwitcher, or CommandPalette. The chip is a client-side view
+    // filter over the current report; once the report itself is re-scoped,
+    // a leftover chip would silently filter the new report by the OLD
+    // workspace (e.g. chip=packages/app + switch to packages/lib → an empty
+    // tree behind a chip that lies). Cleared here, at the one choke point
+    // every switch flows through, rather than via per-call-site callbacks —
+    // a hook-instance seam only covered switches initiated by THAT instance.
+    // getState() (not a subscription): this is a fire-time write, and the
+    // hook must not re-render its consumers on unrelated codeScope changes.
+    // onSuccess, not onSettled: a failed rescan never adopted the new scope,
+    // so the chip is still accurate and should survive for a retry. Same-
+    // scope rescans (GitFooter's Re-run, sweeps, fix/ignore applies) don't
+    // go through runSwitch at all, so an innocent rescan keeps the chip.
+    scanMutation.mutate(ws, { onSuccess: () => useUiStore.getState().setCodeScope(undefined) });
   }
 
   function select(value: string) {
