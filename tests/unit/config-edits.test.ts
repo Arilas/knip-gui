@@ -206,6 +206,90 @@ describe('addIgnores', () => {
   });
 });
 
+describe('addIgnores / removeIgnores refuse an already-malformed config (#5)', () => {
+  it('addIgnores refuses truncated JSON with the offending line/column', () => {
+    // Offset 12 (the end of the string, where a value/close-bracket was expected)
+    // is on line 1: `{"ignore": [` is 12 chars, so column 13.
+    const content = '{"ignore": [';
+    const edits: IgnoreEdit[] = [{ kind: 'ignore', value: 'src/orphan.ts' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    expect(result).toEqual({
+      ok: false,
+      reason: 'config has a JSON syntax error at line 1, column 13 — fix it by hand before editing',
+    });
+  });
+
+  it('addIgnores refuses truncated JSON on a later line with the correct line/column', () => {
+    const content = '{\n  "entry": ["src/index.ts"],\n  "ignore": [\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignore', value: 'src/orphan.ts' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/^config has a JSON syntax error at line 4, column \d+ — fix it by hand before editing$/);
+    }
+  });
+
+  it('removeIgnores refuses the same truncated JSON with the offending line/column', () => {
+    const content = '{"ignore": [';
+    const entries: IgnoreEntry[] = [{ kind: 'ignore', value: 'src/orphan.ts' }];
+    const result = removeIgnores(content, 'knip.json', entries);
+    expect(result).toEqual({
+      ok: false,
+      reason: 'config has a JSON syntax error at line 1, column 13 — fix it by hand before editing',
+    });
+  });
+
+  it('does not edit anything when refusing — content is untouched (no partial writes)', () => {
+    const content = '{"ignore": [';
+    const edits: IgnoreEdit[] = [{ kind: 'ignore', value: 'a' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    expect(result).toEqual({ ok: false, reason: expect.stringContaining('JSON syntax error') });
+  });
+
+  it('comments + trailing comma still edit fine for knip.json (parsed with JSONC semantics regardless of extension)', () => {
+    const content =
+      '{\n  // entry files\n  "entry": ["src/index.ts"],\n  "ignore": ["**/fixtures/**"], // keep fixtures out\n}\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignoreDependencies', value: 'left-pad' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    // jsonc-parser's modify/applyEdits re-homes a trailing same-line comment onto
+    // whichever property ends up last after the edit (pre-existing `modify`
+    // behavior, unrelated to this task) — the comment survives, just relocated.
+    expect(expectOk(result)).toBe(
+      '{\n  // entry files\n  "entry": ["src/index.ts"],\n  "ignore": [\n    "**/fixtures/**"\n  ],\n  "ignoreDependencies": [\n    "left-pad"\n  ], // keep fixtures out\n}\n',
+    );
+  });
+
+  it('comments + trailing comma still edit fine for knip.jsonc', () => {
+    const content =
+      '{\n  // entry files\n  "entry": ["src/index.ts"],\n  "ignore": ["**/fixtures/**"], // keep fixtures out\n}\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignoreDependencies', value: 'left-pad' }];
+    const result = addIgnores(content, 'knip.jsonc', edits);
+    expect(expectOk(result)).toBe(
+      '{\n  // entry files\n  "entry": ["src/index.ts"],\n  "ignore": [\n    "**/fixtures/**"\n  ],\n  "ignoreDependencies": [\n    "left-pad"\n  ], // keep fixtures out\n}\n',
+    );
+  });
+
+  it('comments + trailing comma still edit fine for package.json#knip', () => {
+    const content =
+      '{\n  "name": "pkg",\n  "knip": {\n    // entry files\n    "entry": ["src/index.ts"],\n    "ignore": ["**/fixtures/**"], // keep fixtures out\n  },\n}\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignoreDependencies', value: 'left-pad' }];
+    const result = addIgnores(content, 'package.json', edits);
+    expect(expectOk(result)).toBe(
+      '{\n  "name": "pkg",\n  "knip": {\n    // entry files\n    "entry": ["src/index.ts"],\n    "ignore": [\n      "**/fixtures/**"\n    ],\n    "ignoreDependencies": [\n      "left-pad"\n    ], // keep fixtures out\n  },\n}\n',
+    );
+  });
+
+  it('a valid edit is byte-identical to before this change (existing passing case, unchanged)', () => {
+    // Same fixture/expectation as the "appends to an existing array" case above —
+    // confirms the up-front assertParsable() guard doesn't alter output for
+    // already-valid content.
+    const content = '{\n  "ignoreDependencies": [\n    "left-pad"\n  ]\n}\n';
+    const edits: IgnoreEdit[] = [{ kind: 'ignoreDependencies', value: 'chalk' }];
+    const result = addIgnores(content, 'knip.json', edits);
+    expect(expectOk(result)).toBe('{\n  "ignoreDependencies": [\n    "left-pad",\n    "chalk"\n  ]\n}\n');
+  });
+});
+
 describe('findKnipConfig', () => {
   let dir: string;
 

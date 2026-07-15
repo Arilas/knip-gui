@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { applyEdits, modify, parse } from 'jsonc-parser';
+import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser';
 import { detectFormatting } from '../core/jsonc-format.js';
 import type { TransformResult } from '../fix/transforms/source.js';
 
@@ -97,6 +97,42 @@ function getAtPath(root: unknown, path: readonly (string | number)[]): unknown {
   return cur;
 }
 
+// Fixed for ALL THREE config kinds — knip itself parses knip.json, knip.jsonc,
+// AND package.json#knip with the same JSONC-flavored parser regardless of file
+// extension (comments and trailing commas are valid in any of them), so this
+// writer's syntax check must accept exactly what knip accepts. Getting this
+// wrong in either direction is bad: too strict (e.g. rejecting comments in a
+// `.json`-named file) would refuse edits knip itself parses fine; too loose
+// would let real corruption through. `disallowComments: false` is already the
+// `parse()` default (spelled out here so the intent survives a future default
+// change), `allowTrailingComma: true` is not the default and must be explicit.
+const VALIDATE_OPTIONS = { allowTrailingComma: true, disallowComments: false };
+
+// jsonc-parser's `parse` silently RECOVERS from malformed input — it only
+// returns `undefined` for content so broken there's no salvageable tree at
+// all, and otherwise just drops the offending token(s) and keeps going. Left
+// unchecked, `addIgnores`/`removeIgnores` would edit that recovered-but-wrong
+// tree and write back something that further compounds the damage instead of
+// failing cleanly. Called ONCE up front (before any edit), not per-edit-loop-
+// iteration, so a config that's malformed from the start is refused outright
+// rather than silently "fixed" by the first successful edit in a batch.
+// Line/column are 1-based and computed from the first error's byte offset —
+// ParseError only carries an offset, not line/col — by counting newlines
+// before it (line) and the distance back to the preceding newline (column).
+function assertParsable(content: string): { ok: true } | { ok: false; reason: string } {
+  const errors: ParseError[] = [];
+  parse(content, errors, VALIDATE_OPTIONS);
+  if (errors.length === 0) return { ok: true };
+  const { offset } = errors[0]!; // non-null: guarded by the length check above
+  const before = content.slice(0, offset);
+  const line = 1 + (before.match(/\n/g)?.length ?? 0);
+  const column = offset - before.lastIndexOf('\n'); // 1-based; lastIndexOf is -1 when offset is on line 1
+  return {
+    ok: false,
+    reason: `config has a JSON syntax error at line ${line}, column ${column} — fix it by hand before editing`,
+  };
+}
+
 // Appends each edit's `value` to the array at its target path — creating the array
 // (and any missing intermediate objects, e.g. `workspaces['pkg']`) if absent, and
 // deduping against values already present. Uses jsonc-parser's `modify`/`applyEdits`
@@ -106,12 +142,19 @@ export function addIgnores(
   configKind: 'knip.json' | 'knip.jsonc' | 'package.json',
   edits: IgnoreEdit[],
 ): TransformResult {
+  const parsable = assertParsable(content);
+  if (!parsable.ok) return parsable;
+
   const formattingOptions = detectFormatting(content);
   let newContent = content;
 
   for (const edit of edits) {
     const path = ignorePath(configKind, edit);
-    const root = parse(newContent);
+    // Same VALIDATE_OPTIONS as the up-front assertParsable check, so a config
+    // this writer already accepted as parsable is read back identically
+    // between edits (belt-and-braces: `root === undefined` here should be
+    // unreachable post-assertParsable, but costs nothing to keep).
+    const root = parse(newContent, undefined, VALIDATE_OPTIONS);
     if (root === undefined) return { ok: false, reason: 'invalid-json' };
     const existing = getAtPath(root, path);
     // knip's own schema allows `ignore` (only `ignore` — not
@@ -150,12 +193,17 @@ export function removeIgnores(
   configKind: 'knip.json' | 'knip.jsonc' | 'package.json',
   entries: IgnoreEntry[],
 ): TransformResult {
+  const parsable = assertParsable(content);
+  if (!parsable.ok) return parsable;
+
   const formattingOptions = detectFormatting(content);
   let newContent = content;
 
   for (const entry of entries) {
     const path = ignorePath(configKind, entry);
-    const root = parse(newContent);
+    // See addIgnores' matching comment: same VALIDATE_OPTIONS as the up-front
+    // assertParsable check, kept identical for belt-and-braces consistency.
+    const root = parse(newContent, undefined, VALIDATE_OPTIONS);
     if (root === undefined) return { ok: false, reason: 'invalid-json' };
     const existing = getAtPath(root, path);
     if (!Array.isArray(existing) || !existing.includes(entry.value)) {
