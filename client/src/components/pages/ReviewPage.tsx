@@ -195,14 +195,25 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   // until PlanStore's own TTL/LRU eviction reclaims it. Fire-and-forget: a
   // failed DELETE must never block navigation or surface an error — the TTL
   // is the backstop, this call is purely an optimization.
-  // Deliberately NOT called from the apply:error path: by the time apply
-  // fails, planStore.take() (routes-fix.ts) has already removed the plan
-  // from the store (it takes before attempting the patches), so 'failed'
-  // after an apply attempt has no plan left to release — only 'previewed'
-  // (and 'failed' after a preview failure, which never had a plan to begin
-  // with) do, and the status guard below covers exactly that.
+  // Also fires on 'failed' when the failure came from an apply attempt
+  // (flow.previous.status === 'applying', which carries the same planId the
+  // plan was previewed with) — an apply can fail BEFORE planStore.take() ever
+  // runs (the busy-latch 409 in routes-fix.ts checks tryBeginOp('fix-apply')/
+  // ('ignore-apply') before take()), which leaves the plan sitting in
+  // PlanStore exactly like an abandoned 'previewed' page would. Releasing
+  // unconditionally on this branch is still safe for failures that happened
+  // AFTER take() (the 404 "unknown or already-applied plan" branch, or any
+  // later error) — take() already removed the plan there, so the DELETE is
+  // a benign no-op (PlanStore.delete on a missing id just returns
+  // `{ deleted: false }`). 'failed' after a *preview* failure
+  // (flow.previous.status === 'previewing') is excluded: compileFixPlan/
+  // compileIgnorePlan never got far enough to produce a plan, so there's
+  // nothing to release.
   function releasePlanIfPreviewed() {
     if (flow.status === 'previewed') deleteFixPlan(flow.planId).catch(() => {});
+    else if (flow.status === 'failed' && flow.previous.status === 'applying') {
+      deleteFixPlan(flow.previous.planId).catch(() => {});
+    }
   }
 
   function handleLeave() {
@@ -372,6 +383,7 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
         <div className="flex gap-2">
           <Button
             type="button"
+            size="sm"
             data-testid="review-all-stale-rescan"
             disabled={busy}
             onClick={() => {
@@ -381,7 +393,7 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
           >
             Rescan
           </Button>
-          <Button type="button" variant="outline" onClick={handleLeave}>
+          <Button type="button" variant="outline" size="sm" onClick={handleLeave}>
             Back
           </Button>
         </div>

@@ -7,7 +7,7 @@ import type { PlanStore } from '../fix/plan-store.js';
 import { probeSweepCapabilities, runSweep } from '../fix/sweep.js';
 import { readJsonObject } from './body.js';
 import { runScanIntoStore } from './scan-runner.js';
-import type { ReportStore, StoreError } from './store.js';
+import { BUSY_OP_LABELS, type ReportStore, type StoreError } from './store.js';
 
 export interface FixRoutesCtx {
   projectDir: string;
@@ -80,7 +80,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     // Same synchronous check-and-latch reasoning as /api/scan and /api/sweep: no
     // await before tryBeginOp, or a concurrent request could slip through.
     if (!store.tryBeginOp('fix-apply')) {
-      return c.json({ error: `${store.activeOp} in progress`, op: store.activeOp }, 409);
+      return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
     }
     const body = await readJsonObject(c);
     const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
@@ -128,7 +128,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   app.post('/api/ignore/apply', async (c) => {
     // Same synchronous check-and-latch reasoning as /api/fix/apply above.
     if (!store.tryBeginOp('ignore-apply')) {
-      return c.json({ error: `${store.activeOp} in progress`, op: store.activeOp }, 409);
+      return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
     }
     const body = await readJsonObject(c);
     const plan = planStore.take(typeof body.planId === 'string' ? body.planId : '');
@@ -158,7 +158,7 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     // scan or apply request arriving mid-rescan must still see 'sweep' as the
     // blocking op, not slip in once the sweep child exits.
     if (!store.tryBeginOp('sweep')) {
-      return c.json({ error: `${store.activeOp} in progress`, op: store.activeOp }, 409);
+      return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
     }
     try {
       const body = await readJsonObject(c);

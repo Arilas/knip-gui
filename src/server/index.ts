@@ -11,7 +11,7 @@ import { registerGitRoutes } from './routes-git.js';
 import { registerIgnoresRoutes } from './routes-ignores.js';
 import { readJsonObject } from './body.js';
 import { runScanIntoStore } from './scan-runner.js';
-import { ReportStore } from './store.js';
+import { BUSY_OP_LABELS, ReportStore } from './store.js';
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -165,7 +165,7 @@ export function createServer(opts: {
     // throw and runScanIntoStore owns the begin/end-scan lifecycle + error
     // landing, so the only thing this route itself must guarantee is endOp().
     if (!store.tryBeginOp('scan')) {
-      return c.json({ error: `${store.activeOp} in progress`, op: store.activeOp }, 409);
+      return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
     }
     try {
       store.setScanning();

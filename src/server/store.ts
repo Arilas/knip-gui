@@ -8,6 +8,20 @@ export interface StoreError { code: string; message: string; stderr?: string; ex
 // than sharing one 'apply' so a 409 can name exactly which route is running.
 export type BusyOp = 'scan' | 'sweep' | 'fix-apply' | 'ignore-apply' | 'ignore-remove-apply';
 
+// Human-facing text for each BusyOp, used ONLY in 409 `error` strings (toasts).
+// The hyphenated raw op names ('fix-apply', 'ignore-remove-apply', ...) are a
+// machine-readable contract (task A1 — tests assert the structured `op` field
+// verbatim), so routes must keep returning `op: store.activeOp` unchanged;
+// this map exists purely so the prose alongside it doesn't leak the hyphens
+// ("ignore-remove-apply in progress") into something a user actually reads.
+export const BUSY_OP_LABELS: Record<BusyOp, string> = {
+  scan: 'scan',
+  sweep: 'sweep',
+  'fix-apply': 'fix apply',
+  'ignore-apply': 'ignore apply',
+  'ignore-remove-apply': 'ignore removal',
+};
+
 export class ReportStore {
   status: 'idle' | 'scanning' | 'ready' | 'error' = 'idle';
   report?: Report;
