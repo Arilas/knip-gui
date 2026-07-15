@@ -60,6 +60,46 @@ test('"/" focuses the Code page tree filter input, navigating there first if els
   await expect(page.getByTestId('tree-search')).toBeFocused();
 });
 
+test('shortcuts are inert behind an AlertDialog; ⌘K never stacks the palette over it (#25 review)', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });
+
+  // SweepDialog is a Radix AlertDialog (role="alertdialog", NOT role="dialog")
+  // — exactly the element class the original dialog-only guard query missed.
+  // Nothing here confirms the sweep, so this test mutates nothing.
+  await page.getByTestId('dashboard-menu-trigger').click();
+  await page.getByTestId('dashboard-sweep-item').click();
+  const confirm = page.getByRole('alertdialog');
+  await expect(confirm).toBeVisible();
+
+  // `r` must NOT start a rescan behind the confirm (the mutating shortcut is
+  // the dangerous one — an unconfirmed scan under a still-open prompt).
+  // react-query flips the busy gate synchronously on mutate, so a short settle
+  // then "still enabled" is a sound negative assertion.
+  await page.keyboard.press('r');
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('rerun-button')).toBeEnabled();
+
+  // A digit must not navigate away underneath the dialog either.
+  await page.keyboard.press('2');
+  await page.waitForTimeout(300);
+  await expect(page).toHaveURL(/\/dashboard$/);
+
+  // ⌘K must refuse to stack the palette on top of the open confirm.
+  await page.keyboard.press('Meta+k');
+  await page.waitForTimeout(300);
+  await expect(page.getByPlaceholder('Search pages, files, workspaces, actions…')).toBeHidden();
+  await expect(confirm).toBeVisible();
+
+  // Dismiss without confirming; shortcuts work again.
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toBeHidden();
+  await page.keyboard.press('2');
+  await expect(page).toHaveURL(/\/code$/);
+});
+
 test('"r" triggers a rescan (same gate as the sidebar Re-run button)', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByText(/^Scanned /)).toBeVisible({ timeout: 30_000 });

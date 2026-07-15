@@ -24,14 +24,24 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }
 
-// Any dialog currently open — checked structurally via role="dialog" rather
-// than threading every dialog's own open state in here, so a future dialog
-// doesn't have to opt into this guard. This also naturally covers the
-// command palette's own [role="dialog"] while it's open (on top of the
-// `paletteOpen ||` below, which covers the render/paint gap between React
-// flipping the state and Radix's portal actually committing the node).
-function isAnyDialogOpen(): boolean {
-  return document.querySelector('[role="dialog"]') !== null;
+// Any dialog OTHER than the palette currently open — checked structurally
+// rather than threading every dialog's own open state in here, so a future
+// dialog doesn't have to opt into this guard. Both Radix roles matter (#25
+// review critical): plain Dialogs (CommitDialog) render role="dialog", but
+// AlertDialogs (the workspace-switch discard-selection confirm, SweepDialog)
+// render role="alertdialog" — the original dialog-only selector let
+// `r`/digits/`/` fire straight through those confirms (e.g. an unconfirmed
+// rescan behind the "Switch workspace?" prompt). The palette's own dialog is
+// excluded via :not(:has(cmdk's input)) — the palette is tracked by the
+// hook's paletteOpen STATE instead, because shortcutAction treats "palette
+// open" and "some other dialog open" differently (⌘K closes the former,
+// refuses to stack over the latter). The WorkspaceSwitcher popover's cmdk
+// input can't false-positive here: a Popover renders no role="dialog"/
+// "alertdialog" node for the selector to match in the first place.
+function isOtherDialogOpen(): boolean {
+  return (
+    document.querySelector('[role="dialog"]:not(:has([data-slot="command-input"])), [role="alertdialog"]') !== null
+  );
 }
 
 // Bounded retry via rAF rather than a fixed setTimeout: the input's mount
@@ -81,7 +91,7 @@ export function useGlobalShortcuts(): UseGlobalShortcutsResult {
         shiftKey: event.shiftKey,
         isTypingTarget: isTypingTarget(event.target),
       };
-      const action = shortcutAction(keyInfo, { dialogOpen: paletteOpen || isAnyDialogOpen(), pathname });
+      const action = shortcutAction(keyInfo, { paletteOpen, dialogOpen: isOtherDialogOpen(), pathname });
       if (!action) return;
       // Every recognized shortcut owns its key: ⌘K would otherwise fall
       // through to the browser's own address-bar-focus binding in some

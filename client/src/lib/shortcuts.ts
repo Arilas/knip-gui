@@ -20,8 +20,17 @@ export interface ShortcutKeyInfo {
 }
 
 export interface ShortcutContext {
-  /** The command palette itself, or any OTHER dialog (AlertDialog confirm,
-   *  CommitDialog, …), is currently open. */
+  /** The command palette itself is open (the hook's own React state — no DOM
+   *  probing needed, and no render/commit gap: setState flips it synchronously
+   *  with the toggle action). Split from `dialogOpen` (#25 review) because ⌘K
+   *  treats them differently: it always CLOSES an open palette, but must not
+   *  OPEN one over an unrelated dialog. */
+  paletteOpen: boolean;
+  /** Any OTHER dialog is open — a plain Dialog (role="dialog": CommitDialog)
+   *  OR a Radix AlertDialog (role="alertdialog": the workspace-switch
+   *  discard-selection confirm, SweepDialog). The hook's DOM query must cover
+   *  BOTH roles (#25 review critical: the original `[role="dialog"]`-only
+   *  selector let `r`/digits/`/` fire behind every AlertDialog confirm). */
   dialogOpen: boolean;
   /** Current route pathname — consulted only for the /review mutation gate. */
   pathname: string;
@@ -47,16 +56,19 @@ export function shortcutAction(key: ShortcutKeyInfo, ctx: ShortcutContext): Shor
   const lower = key.key.toLowerCase();
 
   // ⌘K/Ctrl+K — standard command-palette convention (VSCode/Linear/Raycast):
-  // the toggle combo always wins. It works mid-typing (jumping OUT of
-  // whatever field has focus is the whole point of the shortcut) and with
-  // another dialog already open (toggling only adds/removes the palette
-  // overlay; it never mutates anything, so there's nothing for the
-  // dialog-open guard below to protect) and on /review (also non-mutating).
-  // Every other shortcut stays fully gated below.
+  // works mid-typing (jumping OUT of whatever field has focus is the whole
+  // point of the shortcut) and on /review (non-mutating). The one asymmetry
+  // (#25 review): it always CLOSES an already-open palette, but never OPENS
+  // one while an unrelated dialog (CommitDialog, an AlertDialog confirm) is
+  // up — that would stack a second modal on top with nothing dismissing the
+  // first. Every other shortcut stays fully gated below.
   const isPaletteCombo = (key.metaKey || key.ctrlKey) && !key.altKey && !key.shiftKey && lower === 'k';
-  if (isPaletteCombo) return { kind: 'toggle-palette' };
+  if (isPaletteCombo) {
+    if (!ctx.paletteOpen && ctx.dialogOpen) return null;
+    return { kind: 'toggle-palette' };
+  }
 
-  if (ctx.dialogOpen) return null;
+  if (ctx.paletteOpen || ctx.dialogOpen) return null;
   if (key.metaKey || key.ctrlKey || key.altKey || key.shiftKey) return null;
   if (key.isTypingTarget) return null;
 
