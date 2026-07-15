@@ -37,6 +37,11 @@ export class PlanStore {
 
   put(plan: FixPlan): void {
     this.pruneExpired();
+    // Drop any existing entry for this id first: a re-put is a refresh
+    // (position + timestamp), not growth, so it must not trip the eviction
+    // loop below into throwing out an unrelated older entry. Map.set alone
+    // wouldn't do — it overwrites in place, keeping the old insertion slot.
+    this.plans.delete(plan.planId);
     // Map preserves insertion order, so the first key is the oldest — evict it
     // before inserting the new one rather than after, so the map never
     // transiently exceeds maxPlans by more than the entry being added.
@@ -74,6 +79,8 @@ export class PlanStore {
   }
 
   private pruneExpired(): void {
+    // Deleting during Map iteration is spec-safe (already-visited entries only)
+    // and intentional — no snapshot copy needed.
     const now = this.now();
     for (const [id, entry] of this.plans) {
       if (now - entry.at >= this.ttlMs) this.plans.delete(id);

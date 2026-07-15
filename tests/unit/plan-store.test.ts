@@ -27,6 +27,33 @@ describe('PlanStore', () => {
     expect(store.take('p3')).toEqual(fakePlan('p3'));
   });
 
+  it('re-put of an existing planId refreshes position/timestamp and does NOT evict an unrelated entry', () => {
+    let now = 0;
+    const store = new PlanStore({ maxPlans: 2, ttlMs: 1000, now: () => now });
+    store.put(fakePlan('p1'));
+    now = 10;
+    store.put(fakePlan('p2'));
+    now = 20;
+    store.put(fakePlan('p2')); // same key: overwrite, must not count as growth and evict p1
+    expect(store.take('p1')).toEqual(fakePlan('p1'));
+
+    // The re-put also moved p2 to newest: its timestamp is 20, so at now=1015
+    // (995 after the re-put but 1005 after the original put) it is still live.
+    now = 1015;
+    expect(store.take('p2')).toEqual(fakePlan('p2'));
+  });
+
+  it('re-put refreshes insertion order, so the stale-positioned entry is no longer first out', () => {
+    const store = new PlanStore({ maxPlans: 2 });
+    store.put(fakePlan('p1'));
+    store.put(fakePlan('p2'));
+    store.put(fakePlan('p1')); // p1 is now newest; p2 becomes the oldest
+    store.put(fakePlan('p3')); // evicts p2, not p1
+    expect(store.take('p2')).toBeUndefined();
+    expect(store.take('p1')).toEqual(fakePlan('p1'));
+    expect(store.take('p3')).toEqual(fakePlan('p3'));
+  });
+
   it('does not evict on mere growth up to the cap', () => {
     const store = new PlanStore({ maxPlans: 2 });
     store.put(fakePlan('p1'));
