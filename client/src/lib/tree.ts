@@ -325,6 +325,63 @@ export function nodeSelectionState(
   return selectedCount === actionableIds.length ? 'all' : 'some';
 }
 
+export interface SelectionSummary {
+  state: 'none' | 'some' | 'all';
+  /** True when the node has zero enabled-type actionable ids — its checkbox renders disabled. */
+  disabled: boolean;
+}
+
+/**
+ * Every node's tri-state + disabled flag in ONE post-order walk (#35):
+ * TreeNode.tsx used to call nodeSelectionState + scopedActionableIds per
+ * rendered row — each O(subtree), so a root-level dir row cost O(total
+ * issues) on every render of every mounted row. This walk computes the
+ * identical answers for the whole tree in O(total issues) once, for
+ * TreeView to memoize and hand each row as two primitives.
+ *
+ * Semantics are exactly nodeSelectionState's (only fixable-or-ignorable ids
+ * count; enabledTypes restricts to enabled-type ids; zero actionable ids
+ * reads 'none') and `disabled` is exactly `scopedActionableIds(node,
+ * enabledTypes).length === 0` — pinned node-for-node by the equivalence
+ * test in tests/client/tree.test.ts. Dir counts are SUMS of child results,
+ * never a re-scan of the dir's own rolled-up id arrays — that per-node
+ * re-scan is the O(subtree) cost this exists to remove.
+ *
+ * Keyed by node.path: a filesystem path can never be both a file and a dir
+ * within one scan, so paths are unique across both kinds. The synthetic
+ * root ('') gets an entry; it's never rendered as a row.
+ */
+export function buildSelectionSummaries(
+  tree: DirNode,
+  selectedIds: ReadonlySet<string>,
+  enabledTypes?: ReadonlySet<IssueType>,
+): Map<string, SelectionSummary> {
+  const summaries = new Map<string, SelectionSummary>();
+  function walk(node: TreeNode): { total: number; selectedCount: number } {
+    let total = 0;
+    let selectedCount = 0;
+    if (node.kind === 'file') {
+      for (const [type, ids] of Object.entries(node.actionableIdsByType) as [IssueType, string[]][]) {
+        if (enabledTypes && !enabledTypes.has(type)) continue;
+        total += ids.length;
+        for (const id of ids) if (selectedIds.has(id)) selectedCount += 1;
+      }
+    } else {
+      for (const child of node.children) {
+        const result = walk(child);
+        total += result.total;
+        selectedCount += result.selectedCount;
+      }
+    }
+    const state: SelectionSummary['state'] =
+      total === 0 || selectedCount === 0 ? 'none' : selectedCount === total ? 'all' : 'some';
+    summaries.set(node.path, { state, disabled: total === 0 });
+    return { total, selectedCount };
+  }
+  walk(tree);
+  return summaries;
+}
+
 /** Every issue id under a node (itself, for a file; its full subtree, for a dir). */
 export function collectIds(node: TreeNode): string[] {
   return node.issueIds;

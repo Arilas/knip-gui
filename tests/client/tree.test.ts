@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Issue, IssueType } from '../../src/core/types.js';
 import {
   autoExpandDepth,
+  buildSelectionSummaries,
   buildTree,
   collectActionableIds,
   collectFileIssues,
@@ -10,6 +11,7 @@ import {
   filterByScope,
   idsToToggleForNode,
   nodeSelectionState,
+  scopedActionableIds,
   treeKeyAction,
 } from '../../client/src/lib/tree.js';
 import type { DirNode, FileNode, FlatRow, TreeNode } from '../../client/src/lib/tree.js';
@@ -242,6 +244,78 @@ describe('nodeSelectionState', () => {
       expect(nodeSelectionState(src, new Set([fileIssue.id]), enabled)).toBe('all');
       expect(nodeSelectionState(src, new Set([exp.id]), enabled)).toBe('none');
     });
+  });
+});
+
+describe('buildSelectionSummaries (#35: one post-order walk replacing per-row nodeSelectionState/scopedActionableIds)', () => {
+  const a = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'a', fixable: true, fixModes: ['strip-export'] });
+  const b = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'b', fixable: true, fixModes: ['strip-export'] });
+  const c = issue({ type: 'files', filePath: 'src/orphan.ts', fixable: true, fixModes: ['delete-file'] });
+  const unfixable = issue({ type: 'nsExports', filePath: 'lib/dead.ts', symbol: 'ns', fixable: false, fixModes: [] });
+
+  it('computes none/some/all per file and rolls up through dirs', () => {
+    const tree = buildTree([a, b, c]);
+    const some = buildSelectionSummaries(tree, new Set([a.id]));
+    expect(some.get('src/used.ts')).toEqual({ state: 'some', disabled: false });
+    expect(some.get('src/orphan.ts')).toEqual({ state: 'none', disabled: false });
+    expect(some.get('src')).toEqual({ state: 'some', disabled: false });
+
+    const all = buildSelectionSummaries(tree, new Set([a.id, b.id, c.id]));
+    expect(all.get('src/used.ts')).toEqual({ state: 'all', disabled: false });
+    expect(all.get('src')).toEqual({ state: 'all', disabled: false });
+
+    expect(buildSelectionSummaries(tree, new Set()).get('src')).toEqual({ state: 'none', disabled: false });
+  });
+
+  it('marks zero-actionable nodes disabled, and never counts an unfixable id as selected', () => {
+    const tree = buildTree([a, unfixable]);
+    const summaries = buildSelectionSummaries(tree, new Set([unfixable.id]));
+    expect(summaries.get('lib/dead.ts')).toEqual({ state: 'none', disabled: true });
+    expect(summaries.get('lib')).toEqual({ state: 'none', disabled: true });
+    expect(summaries.get('src/used.ts')).toEqual({ state: 'none', disabled: false });
+  });
+
+  it('scopes to enabledTypes exactly like nodeSelectionState (a disabled-type id never counts, even selected)', () => {
+    const exp = issue({ type: 'exports', filePath: 'src/used.ts', symbol: 'e', fixable: true, fixModes: ['strip-export'] });
+    const enumM = issue({ type: 'enumMembers', filePath: 'src/used.ts', symbol: 'm', fixable: true, fixModes: ['remove-member'] });
+    const tree = buildTree([exp, enumM]);
+    const enabled = new Set<IssueType>(['enumMembers']);
+    expect(buildSelectionSummaries(tree, new Set([exp.id, enumM.id]), enabled).get('src/used.ts')).toEqual({
+      state: 'all',
+      disabled: false,
+    });
+    expect(buildSelectionSummaries(tree, new Set([exp.id]), enabled).get('src/used.ts')).toEqual({
+      state: 'none',
+      disabled: false,
+    });
+    // Every actionable issue at the node is of a DISABLED type -> the
+    // checkbox disables (mirrors scopedActionableIds().length === 0).
+    expect(buildSelectionSummaries(tree, new Set(), new Set<IssueType>(['files'])).get('src/used.ts')).toEqual({
+      state: 'none',
+      disabled: true,
+    });
+  });
+
+  it('agrees with nodeSelectionState + scopedActionableIds on EVERY node (the exact per-row calls it replaces)', () => {
+    const t = issue({ type: 'types', filePath: 'src/deep/nested/shapes.ts', symbol: 'T', fixable: true, fixModes: ['strip-export'] });
+    const tree = buildTree([a, b, c, unfixable, t]);
+    const cases: [ReadonlySet<string>, ReadonlySet<IssueType> | undefined][] = [
+      [new Set(), undefined],
+      [new Set([a.id, c.id]), undefined],
+      [new Set([a.id, b.id]), new Set<IssueType>(['exports'])],
+      [new Set([a.id, t.id]), new Set<IssueType>(['files', 'types'])],
+    ];
+    for (const [selectedIds, enabled] of cases) {
+      const summaries = buildSelectionSummaries(tree, selectedIds, enabled);
+      const check = (node: TreeNode): void => {
+        expect(summaries.get(node.path)).toEqual({
+          state: nodeSelectionState(node, selectedIds, enabled),
+          disabled: scopedActionableIds(node, enabled).length === 0,
+        });
+        if (node.kind === 'dir') node.children.forEach(check);
+      };
+      tree.children.forEach(check);
+    }
   });
 });
 
