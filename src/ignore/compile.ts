@@ -126,6 +126,9 @@ export async function compileIgnorePlan(
       // whole batch) so a single bad edit — e.g. a workspace's `ignore` key
       // already holding a non-array value — fails only its own issue and
       // doesn't discard edits that already succeeded earlier in the batch.
+      // Sequential per-edit reads/parses (chainTextEdits, not a batch fn) are
+      // deliberate here too: the knip config is a tiny JSON/YAML doc, so
+      // re-parsing per op is cheap. Batching these parses is #36.
       const { content: current, changed, results } = chainTextEdits(contentBefore, configEdits, (text, { edit }) =>
         addIgnores(text, configKind, [edit]),
       );
@@ -171,6 +174,9 @@ export async function compileIgnorePlan(
     memberIndexes.forEach((original, j) => { resultByOp[original] = memberOut.results[j]!; });
     topIndexes.forEach((original, j) => { resultByOp[original] = topOut.results[j]!; });
 
+    // No cross-batch dedupe needed: the two batches' anchors are disjoint by
+    // construction (locateExport can't resolve members; locateMemberAnchor
+    // can't resolve top-level exports), so their edit ranges never collide.
     const edits = [...memberOut.edits, ...topOut.edits];
     const newContent = edits.length > 0 ? applyEdits(contentBefore, edits) : contentBefore;
     ops.forEach((op, i) => {

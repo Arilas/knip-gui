@@ -262,6 +262,9 @@ export async function compileFixPlan(
       continue;
     }
 
+    // Sequential per-edit reads/parses (chainTextEdits, not a batch fn) are
+    // deliberate here: package.json is a tiny JSON doc, so re-parsing per op
+    // is cheap. Batching these parses is #36.
     const { content: current, changed, results } = chainTextEdits(contentBefore, ops, (text, op) =>
       removeDependency(text, op.depName, op.issueType),
     );

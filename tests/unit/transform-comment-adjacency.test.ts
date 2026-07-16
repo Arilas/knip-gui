@@ -38,7 +38,7 @@ describe('comment adjacency: a preceding statement trailing comment is never tou
     expect(out).toContain('/** @public */\nexport const pub = 2;');
   });
 
-  it('removeEnumMember takes the removed member own-line leading JSDoc with it', () => {
+  it('removeMember takes the removed member own-line leading JSDoc with it', () => {
     const content = 'enum E {\n  /** doc for A */\n  A = 1,\n  B = 2,\n}\n';
     const out = expectOk(removeMember({ filePath: 'a.ts', content, symbol: 'A', parentSymbol: 'E' }));
     // The doc belonged to A and must go; B keeps its place with no orphaned doc.

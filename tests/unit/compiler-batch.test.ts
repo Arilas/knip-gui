@@ -157,6 +157,60 @@ describe('compileFixPlan: batch compilation per file', () => {
       expect(plan.patches[0]!.contentAfter).toBe('const a = 1;\n');
     });
   });
+
+  it('multi-owner conflict cascade: a shared whole-statement edit fails both owners and drops their localSpan sweeps', async () => {
+    await withTmpDir(async (dir) => {
+      const content = 'function a() { return 1; }\nfunction b() { return 2; }\nexport { a, b };\n';
+      await seedFile(dir, 'src/cascade.ts', content);
+      const issues: Issue[] = [
+        makeIssue('i1', 'exports', 'src/cascade.ts', {
+          symbol: 'a',
+          pos: content.indexOf('a, b'),
+          fixModes: ['strip-export', 'delete-declaration'],
+        }),
+        makeIssue('i2', 'exports', 'src/cascade.ts', {
+          symbol: 'a',
+          pos: content.indexOf('a, b'),
+          fixModes: ['strip-export', 'delete-declaration'],
+        }),
+        makeIssue('i3', 'exports', 'src/cascade.ts', {
+          symbol: 'b',
+          pos: content.indexOf('b };'),
+          fixModes: ['strip-export', 'delete-declaration'],
+        }),
+      ];
+      const selection: FixSelection = {
+        issueIds: ['i1', 'i2', 'i3'],
+        modeOverrides: { i1: 'strip-export', i2: 'delete-declaration', i3: 'delete-declaration' },
+      };
+      const plan = await compileFixPlan(dir, issues, selection);
+
+      // strip-export runs first (fixed mode order) and wins: `a` comes out of
+      // the export list. delete-declaration's list group (i2 on `a`, i3 on `b`)
+      // then empties -> ONE whole-statement edit owned by BOTH i2 and i3, which
+      // overlaps i1's already-accepted edit. The conflict cascades to a fixpoint:
+      // both owners fail, and their OTHER edits (the localSpan sweeps deleting
+      // `function a` and `function b`) are dropped too, so both declarations
+      // survive.
+      expect(itemFor(plan.items, 'i1')).toEqual({ issueId: 'i1', ok: true, filePath: 'src/cascade.ts' });
+      expect(itemFor(plan.items, 'i2')).toEqual({
+        issueId: 'i2',
+        ok: false,
+        reason: 'conflicts with another selected fix in the same statement',
+        filePath: 'src/cascade.ts',
+      });
+      expect(itemFor(plan.items, 'i3')).toEqual({
+        issueId: 'i3',
+        ok: false,
+        reason: 'conflicts with another selected fix in the same statement',
+        filePath: 'src/cascade.ts',
+      });
+      expect(plan.patches).toHaveLength(1);
+      expect(plan.patches[0]!.contentAfter).toBe(
+        'function a() { return 1; }\nfunction b() { return 2; }\nexport { b };\n',
+      );
+    });
+  });
 });
 
 describe('compileIgnorePlan: batch tag insertion per file', () => {
