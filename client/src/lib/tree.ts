@@ -123,7 +123,18 @@ function rollupActionableIdsByType(children: TreeNode[]): Partial<Record<IssueTy
   const byType: Partial<Record<IssueType, string[]>> = {};
   for (const child of children) {
     for (const [type, ids] of Object.entries(child.actionableIdsByType) as [IssueType, string[]][]) {
-      byType[type] = [...(byType[type] ?? []), ...ids];
+      // Append into one accumulator per type (#38) instead of re-spreading
+      // the accumulated array for every child — the old
+      // `[...(byType[type] ?? []), ...ids]` re-copied everything gathered so
+      // far on EACH child, O(children²) across a wide dir (~5M element
+      // copies for a 1k-file directory). An element loop rather than
+      // `push(...ids)` sidesteps engines' argument-count limits when a
+      // child dir rolls up tens of thousands of ids. The accumulator always
+      // starts as a FRESH array — never a child's own array — so mutating
+      // it here can't corrupt a child node (pinned by tree.test.ts's
+      // no-aliasing test).
+      const acc = (byType[type] ??= []);
+      for (const id of ids) acc.push(id);
     }
   }
   return byType;

@@ -6,7 +6,7 @@
 // their own server query / session store rather than `issues`, since neither
 // is scan-report-derived: Ignored counts the project's current knip-config
 // ignore entries, Activity counts this session's logged actions.
-import type { ComponentType } from 'react';
+import { useMemo, type ComponentType } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { EyeOff, FileCode2, History, LayoutDashboard, Package } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
@@ -50,8 +50,20 @@ export function AppSidebar({ issues, workspaces }: AppSidebarProps) {
   // automatically via the root's retainSearchParams middleware.
   const activePath = useRouterState({ select: (s) => `/${s.location.pathname.replace(/^\//, '').split('/')[0]}` });
 
-  const codeCount = issues.filter((i) => CODE_TYPE_SET.has(i.type)).length;
-  const packagesCount = issues.filter((i) => PACKAGE_TYPE_SET.has(i.type)).length;
+  // One memoized pass (#38) instead of two O(n) filters re-run on every
+  // render — this component re-renders on every route change
+  // (useRouterState), every activity write, and every report poll.
+  // CODE_TYPES and PACKAGE_TYPES are disjoint (lib/filters.ts), so else-if
+  // counts each issue at most once.
+  const { codeCount, packagesCount } = useMemo(() => {
+    let code = 0;
+    let packages = 0;
+    for (const item of issues) {
+      if (CODE_TYPE_SET.has(item.type)) code += 1;
+      else if (PACKAGE_TYPE_SET.has(item.type)) packages += 1;
+    }
+    return { codeCount: code, packagesCount: packages };
+  }, [issues]);
 
   const items: NavItem[] = [
     { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, count: issues.length },

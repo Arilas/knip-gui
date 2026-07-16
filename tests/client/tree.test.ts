@@ -160,6 +160,20 @@ describe('buildTree', () => {
     expect(src.actionableIdsByType.files).toEqual([b.id]);
     expect(src.actionableIdsByType.nsExports).toBeUndefined();
   });
+
+  it('rollup byType arrays are fresh per dir, never aliased to a child node\'s own arrays (#38 append-based rollup)', () => {
+    const a = issue({ type: 'exports', filePath: 'src/a.ts', symbol: 'x', fixable: true, fixModes: ['strip-export'] });
+    const tree = buildTree([a]);
+    const src = findChild(tree, 'src') as DirNode;
+    const file = src.children[0] as FileNode;
+    // Same contents…
+    expect(src.actionableIdsByType.exports).toEqual(file.actionableIdsByType.exports);
+    expect(tree.actionableIdsByType.exports).toEqual(file.actionableIdsByType.exports);
+    // …but distinct arrays at every level: mutating a dir's rollup (or the
+    // root's) must never corrupt a child's own actionableIdsByType.
+    expect(src.actionableIdsByType.exports).not.toBe(file.actionableIdsByType.exports);
+    expect(tree.actionableIdsByType.exports).not.toBe(src.actionableIdsByType.exports);
+  });
 });
 
 describe('nodeSelectionState', () => {

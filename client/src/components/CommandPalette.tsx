@@ -15,6 +15,7 @@
 // Disabled items (busy/reviewing) render disabled with a `title` reason
 // rather than being hidden, and every action closes the palette.
 import { useMemo } from 'react';
+import { useCommandState } from 'cmdk';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { Check, EyeOff, FileCode2, Filter, History, LayoutDashboard, Package, RefreshCw } from 'lucide-react';
 import { ALL_WORKSPACES, useWorkspaceSwitch } from '../hooks/use-workspace-switch.js';
@@ -132,16 +133,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ))}
           </CommandGroup>
 
-          {filePaths.length > 0 && (
-            <CommandGroup heading="Files">
-              {filePaths.map((path) => (
-                <CommandItem key={path} value={path} onSelect={() => openFile(path)}>
-                  <FileCode2 className="size-4" />
-                  <span className="truncate">{path}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          )}
+          <FilesGroup filePaths={filePaths} onOpenFile={openFile} />
 
           <CommandGroup heading="Workspaces">
             {workspaceSwitch.entries.map((entry) => (
@@ -192,5 +184,57 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         onConfirm={workspaceSwitch.confirmSwitch}
       />
     </>
+  );
+}
+
+// Mounted-item cap for the Files group (#38): cmdk mounts a live
+// CommandItem per rendered child and re-scores every one per keystroke —
+// fine for pages/workspaces/actions (a handful), but 3–6k distinct file
+// paths made ⌘K-open and each keystroke pay hundreds of ms. Below the
+// cap nothing changes: every path mounts and cmdk's own fuzzy filter
+// ranks them exactly as before (command-palette.spec.ts's small-fixture
+// flow is byte-identical). Above it, a substring pre-limit over the FULL
+// path list picks at most FILE_RESULTS_CAP items to mount — searching
+// the whole list, not the capped slice, so a path outside the first 200
+// is still reachable by typing — and cmdk then ranks those survivors (a
+// substring match always scores positive under cmdk's command-score, so
+// the pre-limit never hides an item the ranker would keep). Trade-off,
+// accepted: above the cap, file matching is substring rather than
+// cmdk's subsequence-fuzzy ('sfr' no longer hits src/forms.ts) — the
+// alternative, shouldFilter={false}, is a whole-Command switch that
+// would force hand-rolling matching for every OTHER group too.
+const FILE_RESULTS_CAP = 200;
+
+function FilesGroup({ filePaths, onOpenFile }: { filePaths: string[]; onOpenFile: (path: string) => void }) {
+  // cmdk's live search text — this component renders inside
+  // CommandDialog's <Command> wrapper (ui/command.tsx), which is the
+  // context useCommandState needs. Subscribing here (rather than
+  // controlling CommandInput from CommandPalette) keeps the input
+  // uncontrolled, so its fresh-on-reopen behavior is untouched.
+  const search = useCommandState((state) => state.search);
+  const visiblePaths = useMemo(() => {
+    if (filePaths.length <= FILE_RESULTS_CAP) return filePaths;
+    const needle = search.trim().toLowerCase();
+    if (!needle) return filePaths.slice(0, FILE_RESULTS_CAP);
+    const out: string[] = [];
+    for (const path of filePaths) {
+      if (path.toLowerCase().includes(needle)) {
+        out.push(path);
+        if (out.length === FILE_RESULTS_CAP) break;
+      }
+    }
+    return out;
+  }, [filePaths, search]);
+
+  if (visiblePaths.length === 0) return null;
+  return (
+    <CommandGroup heading="Files">
+      {visiblePaths.map((path) => (
+        <CommandItem key={path} value={path} onSelect={() => onOpenFile(path)}>
+          <FileCode2 className="size-4" />
+          <span className="truncate">{path}</span>
+        </CommandItem>
+      ))}
+    </CommandGroup>
   );
 }

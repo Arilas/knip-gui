@@ -286,7 +286,16 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   // the activity-log write itself happens in handleApply via
   // buildApplyActivityEntry, not here; see that call's comment for why
   // logging moved out of render/effect scope. ---
-  const joinedRows = flow.status === 'applied' ? joinResults(flow.diffs, flow.results, flow.items) : [];
+  // Memoized on [flow] (#38): joinResults is O(plan), and worse, the old
+  // inline call minted a fresh array identity EVERY render — breaking the
+  // okPaths -> deletedOkPaths memo chain below it, so the whole chain rerun
+  // on each render the post-apply background rescan triggers (every 2s while
+  // the applied step is on screen). `flow` only changes identity through
+  // dispatch, so this now recomputes exactly on real flow transitions.
+  const joinedRows = useMemo(
+    () => (flow.status === 'applied' ? joinResults(flow.diffs, flow.results, flow.items) : []),
+    [flow],
+  );
   const okPaths = useMemo(() => joinedRows.filter((r) => r.status === 'ok').map((r) => r.filePath), [joinedRows]);
 
   // Deletion signal for handleLeave's shouldRestoreOpenFile call (#6): every
