@@ -729,4 +729,28 @@ describe('#33: applies do not serialize behind background rescans', () => {
     await waitFor(() => server.store.status === 'ready');
     expect(server.gated.calls).toBe(2); // no follow-up was queued
   });
+
+  it('preview succeeds during a background rescan (compiles against the previous report)', async () => {
+    const server = await makeGatedServer();
+    const fixPlan = await makePlan(server, 'fix', 'exports');
+    await server.app.request('/api/fix/apply', {
+      method: 'POST', headers: server.h, body: JSON.stringify({ planId: fixPlan }),
+    });
+    await waitFor(() => server.gated.blockedCount === 1);
+    expect(server.store.status).toBe('scanning');
+
+    // Pre-change: 409 'no report available'. The previous report is still
+    // in the store (setScanning doesn't clear it) and per-file hashBefore
+    // staleness protects apply-time correctness.
+    const previewRes = await server.app.request('/api/ignore/preview', {
+      method: 'POST',
+      headers: server.h,
+      body: JSON.stringify({ issueIds: [server.store.report!.issues.find((i) => i.type === 'files')!.id] }),
+    });
+    expect(previewRes.status).toBe(200);
+    expect((await previewRes.json()).planId).toEqual(expect.any(String));
+
+    server.gated.releaseOne();
+    await waitFor(() => server.store.status === 'ready');
+  });
 });

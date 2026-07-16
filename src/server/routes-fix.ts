@@ -135,7 +135,15 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   const { store, planStore, projectDir, sweep = runSweep } = ctx;
 
   app.post('/api/fix/preview', async (c) => {
-    if (store.status !== 'ready' || !store.report) return c.json({ error: 'no report available' }, 409);
+    // Requires a report to compile against, not a 'ready' status (#33):
+    // during a post-apply background rescan the store is 'scanning' but still
+    // holds the previous report, and gating on 'ready' here would
+    // re-serialize consecutive apply flows behind the very scan the rescan
+    // chain stopped blocking on. Compiling against a possibly-stale report is
+    // safe: every patch carries hashBefore, so applyPatches lands a per-file
+    // 'stale' result instead of clobbering content that moved (pinned by the
+    // "reports a per-file stale result" test in tests/unit/server-fix.test.ts).
+    if (!store.report) return c.json({ error: 'no report available' }, 409);
     const body = await readJsonObject(c);
     const issueIds = Array.isArray(body.issueIds) ? body.issueIds : [];
     // Patches (which can carry full post-fix file content) are deliberately
@@ -165,7 +173,15 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
   });
 
   app.post('/api/ignore/preview', async (c) => {
-    if (store.status !== 'ready' || !store.report) return c.json({ error: 'no report available' }, 409);
+    // Requires a report to compile against, not a 'ready' status (#33):
+    // during a post-apply background rescan the store is 'scanning' but still
+    // holds the previous report, and gating on 'ready' here would
+    // re-serialize consecutive apply flows behind the very scan the rescan
+    // chain stopped blocking on. Compiling against a possibly-stale report is
+    // safe: every patch carries hashBefore, so applyPatches lands a per-file
+    // 'stale' result instead of clobbering content that moved (pinned by the
+    // "reports a per-file stale result" test in tests/unit/server-fix.test.ts).
+    if (!store.report) return c.json({ error: 'no report available' }, 409);
     const body = await readJsonObject(c);
     const issueIds = Array.isArray(body.issueIds) ? body.issueIds : [];
     const plan = await compileIgnorePlan(projectDir, store.report.issues, issueIds);

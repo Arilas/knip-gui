@@ -254,13 +254,29 @@ export function useGitCommitMutation() {
   });
 }
 
+/**
+ * True while any scan/sweep/apply MUTATION this client started is in
+ * flight. Unlike useBusy, deliberately ignores a server-side background
+ * rescan (status 'scanning'): preview and apply are allowed under a rescan
+ * server-side (#33), so the Fix…/Ignore… review-entry buttons must not stay
+ * dead for a full monorepo scan after every apply. Controls that TRIGGER a
+ * scan/sweep (Re-run, sweep button, workspace switch) keep useBusy — those
+ * requests would 409 against the rescan chain anyway.
+ */
+export function useMutationBusy(): boolean {
+  return (
+    useIsMutating({
+      predicate: (mutation: Mutation) => BUSY_MUTATION_KEYS.includes(String(mutation.options.mutationKey?.[0])),
+    }) > 0
+  );
+}
+
 // True while a scan/sweep/apply mutation is in flight, or the last-known
-// report is still 'scanning' (covers the fire-and-forget rescan the server
-// kicks off after fix/ignore apply, which isn't itself one of our mutations).
+// report is still 'scanning' (covers the fire-and-forget rescan chain the
+// server runs after fix/ignore applies, which isn't itself one of our
+// mutations). Review ENTRY uses useMutationBusy instead — see its comment.
 export function useBusy(): boolean {
-  const mutating = useIsMutating({
-    predicate: (mutation: Mutation) => BUSY_MUTATION_KEYS.includes(String(mutation.options.mutationKey?.[0])),
-  });
+  const mutating = useMutationBusy();
   const { data } = useStatus();
-  return mutating > 0 || data?.status === 'scanning';
+  return mutating || data?.status === 'scanning';
 }

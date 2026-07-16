@@ -21,7 +21,7 @@ import { XIcon } from 'lucide-react';
 import type { Issue, IssueType } from '../../../src/core/types.js';
 import { typeLabel } from '../lib/filters.js';
 import { pluralizeType } from '../lib/pluralize.js';
-import { useBusy } from '../state/queries.js';
+import { useMutationBusy } from '../state/queries.js';
 import { summaryByType, useSelectionStore } from '../state/selection.js';
 import { useUiStore } from '../state/ui.js';
 import { Badge } from './ui/badge.js';
@@ -40,7 +40,12 @@ export function SelectionDock({ issues }: SelectionDockProps) {
   const selected = useSelectionStore((s) => s.selected);
   const clear = useSelectionStore((s) => s.clear);
   const toggle = useSelectionStore((s) => s.toggle);
-  const busy = useBusy();
+  // useMutationBusy, not useBusy (#33): a background rescan after an apply
+  // must not disable starting the NEXT fix/ignore review — the server now
+  // accepts preview/apply under a rescan and coalesces the follow-up. An
+  // apply mutation in flight still disables these (applies are mutually
+  // exclusive server-side).
+  const busy = useMutationBusy();
   const startReview = useUiStore((s) => s.startReview);
   const navigate = useNavigate();
   // Frozen at click time (like summary/count): the path to route back to on
