@@ -358,37 +358,15 @@ export function findTopLevelDeclarationSpan(program: Program, name: string): Spa
   return null;
 }
 
-// Removes item `index` from a comma-separated list of spans — export-list
-// specifiers (`export { a, b, c }`, `export { a } from '...'`) and variable
-// declarators (`export const a = 1, b = 2`) share the same comma hygiene: when
-// removing anything but the last item, the range extends through the start of the
-// next item (eating its own text plus the following ", "); when removing the last
-// item, the range starts at the end of the previous one (eating the preceding ", "
-// plus its own text). Callers must check `items.length > 1` first — a list becoming
-// empty means the whole statement should be removed instead (both stripExport and
-// deleteDeclaration need this, hence it lives here).
-export function removeListItem(s: MagicString, items: readonly Span[], index: number): void {
-  const isLast = index === items.length - 1;
-  if (isLast) {
-    const prev = items[index - 1];
-    const cur = items[index];
-    if (!prev || !cur) return;
-    s.remove(prev.end, cur.end);
-  } else {
-    const cur = items[index];
-    const next = items[index + 1];
-    if (!cur || !next) return;
-    s.remove(cur.start, next.start);
-  }
-}
-
-// Generalizes removeListItem to a batch of removed indices from one
-// comma-separated list, computed against ORIGINAL offsets. Comma hygiene:
-// each removed item with a surviving successor removes [cur.start,
-// next.start); a run of removed items at the END of the list collapses into
-// ONE edit [lastSurvivor.end, lastRemoved.end) so the edits never overlap.
-// Precondition: sortedIndices is ascending, non-empty, and a STRICT subset
-// of items — callers turn the all-items case into a whole-statement removal.
+// Removes a batch of indices from one comma-separated list of spans —
+// export-list specifiers (`export { a, b, c }`, `export { a } from '...'`)
+// and variable declarators (`export const a = 1, b = 2`) share the same comma
+// hygiene, computed against ORIGINAL offsets: each removed item with a
+// surviving successor removes [cur.start, next.start); a run of removed items
+// at the END of the list collapses into ONE edit [lastSurvivor.end,
+// lastRemoved.end) so the edits never overlap. Precondition: sortedIndices is
+// ascending, non-empty, and a STRICT subset of items — callers turn the
+// all-items case into a whole-statement removal.
 export function removeListItems(
   items: readonly Span[],
   sortedIndices: readonly number[],

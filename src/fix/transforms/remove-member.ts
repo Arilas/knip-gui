@@ -1,4 +1,3 @@
-import MagicString from 'magic-string';
 import type {
   Comment,
   Declaration,
@@ -10,26 +9,33 @@ import type {
   TSModuleBlock,
   TSModuleDeclaration,
 } from 'oxc-parser';
+import type {
+  ParsedSource,
+  SourceBatchResult,
+  SourceOp,
+  Span,
+  TransformInput,
+  TransformResult,
+} from './source.js';
+import type { BatchEdit, BatchOpResult } from './source.js';
 import {
+  applySingleOp,
   expandEndWithTrailingNewline,
   expandStartWithLeadingComments,
-  parseSource,
-  removeListItem,
-  type Span,
-  type TransformInput,
-  type TransformResult,
+  pushEdit,
+  removeListItems,
 } from './source.js';
 
 // Removes one member of an enum or namespace:
 // - enum member -> remove the member + its comma (comma-hygiene mirrors
-//   removeListItem's rule, but re-derived here rather than reused because enum
+//   removeListItems' rule, but re-derived here rather than reused because enum
 //   members commonly carry a same-line trailing `// comment` that
-//   removeListItem's generic algorithm would mis-attribute across the boundary
-//   — see `removeEnumMember` below).
+//   removeListItems' generic algorithm would mis-attribute across the boundary
+//   — see `removeMemberBatch` below).
 // - namespace member -> remove the member declaration statement inside the
 //   namespace body (with attached leading comments/JSDoc). A member that is one
 //   declarator of a multi-declarator `export const a = 1, b = 2;` removes only
-//   its own declarator (comma hygiene via removeListItem), never live siblings
+//   its own declarator (comma hygiene via removeListItems), never live siblings
 //   — same rule Task 3's deleteDeclaration applies at top level. Removal of a
 //   non-last member statement is bounded at the NEXT statement's start (like
 //   the enum path) so the survivor keeps exactly its own indentation; the last
@@ -41,48 +47,183 @@ import {
 // members (this is deliberately looser than locateExport's strict "pos, then
 // validate name" contract — see the brief: "Parent located by name, member by
 // name within parent (pos as tiebreak)").
-export function removeMember(input: TransformInput & { parentSymbol: string }): TransformResult {
-  const { filePath, content, symbol, parentSymbol, pos } = input;
-  const { program, comments } = parseSource(filePath, content);
+// Multi-op boundaries: consecutive removed members/statements collapse into
+// RUN edits so ranges never overlap; a trailing enum run is bounded by
+// lineTrailingEnd on both sides (comment-aware).
+export function removeMemberBatch(
+  parsed: ParsedSource,
+  content: string,
+  ops: readonly SourceOp[],
+): SourceBatchResult {
+  const { program, comments } = parsed;
+  const results: BatchOpResult[] = ops.map(() => ({ ok: true }));
+  const edits: BatchEdit[] = [];
 
-  const parent = findParent(program.body, parentSymbol);
-  if (!parent) return { ok: false, reason: `parent '${parentSymbol}' not found` };
+  interface EnumGroup {
+    decl: TSEnumDeclaration;
+    indexOwners: Map<number, number[]>; // member index -> op indexes
+  }
+  interface NsEntry {
+    match: NamespaceMemberMatch;
+    owners: number[];
+    declaratorOwners: Map<number, number[]>; // declarator index -> op indexes
+  }
+  interface NsGroup {
+    body: (Directive | Statement)[];
+    entries: Map<number, NsEntry>; // keyed by bodyIndex
+  }
+  const enumGroups = new Map<number, EnumGroup>(); // keyed by enum decl start
+  const nsGroups = new Map<number, NsGroup>(); // keyed by namespace decl start
 
-  const s = new MagicString(content);
-
-  if (parent.kind === 'enum') {
-    const members = parent.decl.body.members;
-    const index = findEnumMemberIndex(members, symbol, pos);
-    if (index === -1) {
-      return { ok: false, reason: `member '${symbol}' not found in enum '${parentSymbol}'` };
+  ops.forEach((op, opIndex) => {
+    if (op.parentSymbol === undefined) {
+      results[opIndex] = { ok: false, reason: 'remove-member requires a parentSymbol' };
+      return;
     }
-    removeEnumMember(s, content, comments, members, index);
-    return { ok: true, newContent: s.toString() };
+    const parent = findParent(program.body, op.parentSymbol);
+    if (!parent) {
+      results[opIndex] = { ok: false, reason: `parent '${op.parentSymbol}' not found` };
+      return;
+    }
+    if (parent.kind === 'enum') {
+      const index = findEnumMemberIndex(parent.decl.body.members, op.symbol, op.pos);
+      if (index === -1) {
+        results[opIndex] = { ok: false, reason: `member '${op.symbol}' not found in enum '${op.parentSymbol}'` };
+        return;
+      }
+      const group = enumGroups.get(parent.decl.start) ?? { decl: parent.decl, indexOwners: new Map() };
+      group.indexOwners.set(index, [...(group.indexOwners.get(index) ?? []), opIndex]);
+      enumGroups.set(parent.decl.start, group);
+      return;
+    }
+    const match = findNamespaceMember(parent.decl.body.body, op.symbol, op.pos);
+    if (!match) {
+      results[opIndex] = {
+        ok: false,
+        reason: `member '${op.symbol}' not found in namespace '${op.parentSymbol}'`,
+      };
+      return;
+    }
+    const group = nsGroups.get(parent.decl.start) ?? { body: parent.decl.body.body, entries: new Map() };
+    const entry = group.entries.get(match.bodyIndex) ?? { match, owners: [], declaratorOwners: new Map() };
+    entry.owners.push(opIndex);
+    if (match.declarators && match.declarators.length > 1 && match.declaratorIndex !== undefined) {
+      entry.declaratorOwners.set(match.declaratorIndex, [
+        ...(entry.declaratorOwners.get(match.declaratorIndex) ?? []),
+        opIndex,
+      ]);
+    }
+    group.entries.set(match.bodyIndex, entry);
+    nsGroups.set(parent.decl.start, group);
+  });
+
+  // --- enum edits: runs of consecutive removed members ---
+  for (const group of enumGroups.values()) {
+    const members = group.decl.body.members;
+    const sorted = [...group.indexOwners.keys()].sort((a, b) => a - b);
+    const runs: number[][] = [];
+    for (const index of sorted) {
+      const run = runs[runs.length - 1];
+      if (run && run[run.length - 1] === index - 1) run.push(index);
+      else runs.push([index]);
+    }
+    for (const run of runs) {
+      const first = members[run[0]!]!;
+      const last = members[run[run.length - 1]!]!;
+      const owners = run.flatMap((index) => group.indexOwners.get(index)!);
+      if (run[run.length - 1]! < members.length - 1) {
+        // A member survives after the run: the single-op non-last rule,
+        // applied to the whole run (own-line leading comments swept in,
+        // bounded at the survivor's start so it keeps its indentation).
+        pushEdit(
+          edits,
+          {
+            start: expandStartWithLeadingComments(content, comments, first.start),
+            end: members[run[run.length - 1]! + 1]!.start,
+          },
+          owners,
+        );
+      } else {
+        // Trailing run: comment-aware on both sides. The previous survivor's
+        // same-line trailing comment stays; the removed members' commas and
+        // trailing comments go. No previous survivor (whole list removed):
+        // a single sole member keeps the old single-op range byte-for-byte;
+        // a longer run sweeps the first member's leading comments too.
+        const prev = members[run[0]! - 1];
+        const start = prev
+          ? lineTrailingEnd(content, comments, prev.end)
+          : run.length === 1
+            ? first.start
+            : expandStartWithLeadingComments(content, comments, first.start);
+        pushEdit(edits, { start, end: lineTrailingEnd(content, comments, last.end) }, owners);
+      }
+    }
   }
 
-  const match = findNamespaceMember(parent.decl.body.body, symbol, pos);
-  if (!match) {
-    return { ok: false, reason: `member '${symbol}' not found in namespace '${parentSymbol}'` };
+  // --- namespace edits ---
+  for (const group of nsGroups.values()) {
+    const fullRemovals: { bodyIndex: number; match: NamespaceMemberMatch; owners: number[] }[] = [];
+    for (const [bodyIndex, entry] of group.entries) {
+      const declarators = entry.match.declarators;
+      const isPartial =
+        declarators !== undefined &&
+        declarators.length > 1 &&
+        entry.declaratorOwners.size > 0 &&
+        entry.declaratorOwners.size < declarators.length;
+      if (isPartial) {
+        // A strict subset of one statement's declarators: comma hygiene,
+        // never touching live siblings — same rule as top level.
+        const indices = [...entry.declaratorOwners.keys()].sort((a, b) => a - b);
+        for (const removal of removeListItems(declarators, indices)) {
+          pushEdit(
+            edits,
+            { start: removal.start, end: removal.end },
+            removal.itemIndices.flatMap((i) => entry.declaratorOwners.get(i)!),
+          );
+        }
+      } else {
+        fullRemovals.push({ bodyIndex, match: entry.match, owners: entry.owners });
+      }
+    }
+    fullRemovals.sort((a, b) => a.bodyIndex - b.bodyIndex);
+    let run: typeof fullRemovals = [];
+    const flush = (): void => {
+      if (run.length === 0) return;
+      const first = run[0]!;
+      const last = run[run.length - 1]!;
+      const owners = run.flatMap((r) => r.owners);
+      const from = expandStartWithLeadingComments(content, comments, first.match.stmt.start);
+      const nextStmt = group.body[last.bodyIndex + 1];
+      if (nextStmt) {
+        // Bound at the next (surviving) statement's start so the survivor
+        // keeps exactly one indentation — same rule as the single-op path.
+        pushEdit(edits, { start: from, end: nextStmt.start }, owners);
+      } else {
+        pushEdit(
+          edits,
+          { start: from, end: expandEndWithTrailingNewline(content, last.match.stmt.end) },
+          owners,
+        );
+      }
+      run = [];
+    };
+    for (const removal of fullRemovals) {
+      if (run.length > 0 && run[run.length - 1]!.bodyIndex !== removal.bodyIndex - 1) flush();
+      run.push(removal);
+    }
+    flush();
   }
-  if (match.declarators && match.declarators.length > 1 && match.declaratorIndex !== undefined) {
-    // One declarator of `export const a = 1, b = 2;` — surgically remove just
-    // it (same comma-hygiene helper as export lists and top-level declarators).
-    removeListItem(s, match.declarators, match.declaratorIndex);
-    return { ok: true, newContent: s.toString() };
-  }
-  const from = expandStartWithLeadingComments(content, comments, match.stmt.start);
-  if (match.next) {
-    // Non-last member: bound the removal at the next statement's start — the
-    // removed member's own leading indentation is left in place and becomes
-    // the survivor's indentation (whose own indent is consumed with the rest
-    // of the removed range), exactly like the enum path's non-last rule.
-    // Removing "statement + its trailing newline" here instead would splice
-    // the leftover indent onto the survivor's line, doubling its indentation.
-    s.remove(from, match.next.start);
-  } else {
-    s.remove(from, expandEndWithTrailingNewline(content, match.stmt.end));
-  }
-  return { ok: true, newContent: s.toString() };
+
+  return { results, edits };
+}
+
+export function removeMember(input: TransformInput & { parentSymbol: string }): TransformResult {
+  return applySingleOp(
+    input.filePath,
+    input.content,
+    { symbol: input.symbol, pos: input.pos, parentSymbol: input.parentSymbol },
+    removeMemberBatch,
+  );
 }
 
 // Locates a member's anchor — the start offset of the enum member itself, or
@@ -168,7 +309,7 @@ function findEnumMemberIndex(members: TSEnumMember[], symbol: string, pos?: numb
 // trailing comma, then through a same-line trailing `//` comment, stopping
 // before the newline. Used to compute exactly what "belongs" to one member's
 // own line, so comma-hygiene removal doesn't bleed into a NEIGHBOR's trailing
-// comment (see removeEnumMember).
+// comment (see removeMemberBatch's enum trailing-run edit).
 function lineTrailingEnd(content: string, comments: Comment[], pos: number): number {
   let i = pos;
   if (content[i] === ',') i++;
@@ -178,50 +319,11 @@ function lineTrailingEnd(content: string, comments: Comment[], pos: number): num
   return i;
 }
 
-// Comma-hygiene for enum members, same shape as removeListItem (remove through
-// the start of the next member; for the last member, remove from the end of
-// the previous one) EXCEPT the last-member case is comment-aware: it uses
-// `lineTrailingEnd` on both sides so a same-line trailing comment on the
-// PREVIOUS (kept) member is never swept away, while the REMOVED member's own
-// trailing comma + comment are. Plain removeListItem can't be reused here
-// because its last-item branch removes `[prev.end, cur.end)` unconditionally —
-// correct with no comments (verified against the real `used.ts` fixture below)
-// but wrong once either member has a same-line trailing `//` comment.
-function removeEnumMember(
-  s: MagicString,
-  content: string,
-  comments: Comment[],
-  members: TSEnumMember[],
-  index: number,
-): void {
-  const cur = members[index];
-  if (!cur) return;
-  const isLast = index === members.length - 1;
-  if (isLast) {
-    // The last-member range starts at the previous member's own line-trailing end,
-    // so cur's own leading comment (which sits between prev and cur) is already
-    // swept in; prev's trailing comment stays put.
-    const prev = members[index - 1];
-    const from = prev ? lineTrailingEnd(content, comments, prev.end) : cur.start;
-    const to = lineTrailingEnd(content, comments, cur.end);
-    s.remove(from, to);
-  } else {
-    const next = members[index + 1];
-    if (!next) return;
-    // Take cur's own-line leading JSDoc/comments with it — otherwise they orphan
-    // onto the following member. expandStartWithLeadingComments' own-line guard
-    // keeps a same-line trailing comment on the PREVIOUS member out of the range.
-    const from = expandStartWithLeadingComments(content, comments, cur.start);
-    s.remove(from, next.start);
-  }
-}
-
 interface NamespaceMemberMatch {
   // Span of the whole member statement (`export const ... ;` inside the body).
   stmt: Span;
-  // The statement FOLLOWING the member in the namespace body, if any — used to
-  // bound a non-last member's removal so the survivor's indentation survives.
-  next: Span | null;
+  // Index of the member statement in its namespace body — run/boundary math.
+  bodyIndex: number;
   // Present when the member's declaration is a VariableDeclaration and the
   // matched symbol is one of its declarators (same contract as source.ts's
   // 'declaration' ExportSite: spans of ALL declarators + which one matched).
@@ -257,10 +359,9 @@ function findNamespaceMember(
     const decl = stmt.declaration;
     for (const cand of namedDeclCandidates(decl)) {
       if (cand.name !== symbol) continue;
-      const nextStmt = body[i + 1];
       const match: NamespaceMemberMatch = {
         stmt: { start: stmt.start, end: stmt.end },
-        next: nextStmt ? { start: nextStmt.start, end: nextStmt.end } : null,
+        bodyIndex: i,
       };
       if (decl.type === 'VariableDeclaration' && cand.declaratorIndex !== undefined) {
         match.declarators = decl.declarations.map((d) => ({ start: d.start, end: d.end }));
