@@ -10,8 +10,9 @@
 // previous Sheet-based detail view (see git history) since a persistent
 // split, not a modal overlay, is what lets the table stay usable (selection,
 // search, filters) while a row's context is open.
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { X } from 'lucide-react';
 import type { Issue } from '../../../../src/core/types.js';
 import { filterIssues, groupByWorkspace, isActionable, PACKAGE_TYPES, typeLabel, type WorkspaceGroup } from '../../lib/filters.js';
@@ -28,13 +29,19 @@ import { Button } from '../ui/button.js';
 import { Input } from '../ui/input.js';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../ui/resizable.js';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.js';
 
 export interface PackagesPageProps {
   issues: Issue[];
 }
 
 const ALL_PACKAGE_TYPES = new Set(PACKAGE_TYPES);
+
+// Same threshold/row-height/overscan as Dashboard.tsx's workspace table —
+// one virtualization dialect in this app, not two. 36px is the measured
+// shadcn row height (p-2 cells + text line box + border), the same value
+// dashboard.spec.ts's scroll math empirically pins.
+const ROW_HEIGHT = 36;
+const VIRTUALIZE_THRESHOLD = 50;
 
 type SortKey = 'type' | 'symbol' | 'filePath';
 type SortDir = 'asc' | 'desc';
@@ -79,26 +86,36 @@ export function PackagesPage({ issues }: PackagesPageProps) {
   const previewPanelRef = usePanelRef();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: 'knip-packages-split' });
 
-  function openPreview(issue: Issue) {
-    setPreviewIssue(issue);
-    setPreviewNonce((n) => n + 1);
-    const panel = previewPanelRef.current;
-    if (!panel || !panel.isCollapsed()) return;
-    // `resize('35%')`, NOT `expand()` — observed live (production build,
-    // real e2e fixture): expand() on a panel sitting at its collapsedSize
-    // with no remembered prior size — exactly the state the mount-collapse
-    // effect below guarantees before the first open — takes its
-    // fallback-to-minSize path, and bare-number sizes are uniformly PIXELS
-    // in this library (react-resizable-panels.d.ts documents this for
-    // minSize/defaultSize alike), so `minSize={20}` produced a useless
-    // ~20px sliver. CodePage's split never hits that path because its
-    // panels mount at a nonzero defaultSize, so expand() there always has a
-    // real size to restore. An explicit percentage STRING is unambiguous
-    // per PanelImperativeHandle.resize's contract. Guarded on isCollapsed:
-    // a re-click while the panel is already open only bumps the nonce and
-    // must not stomp a width the user has dragged to.
-    panel.resize('35%');
-  }
+  // The ONE scrollport all workspace groups window against — each
+  // WorkspaceTable's virtualizer gets this element plus its own scrollMargin.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  const openPreview = useCallback(
+    (issue: Issue) => {
+      setPreviewIssue(issue);
+      setPreviewNonce((n) => n + 1);
+      const panel = previewPanelRef.current;
+      if (!panel || !panel.isCollapsed()) return;
+      // `resize('35%')`, NOT `expand()` — observed live (production build,
+      // real e2e fixture): expand() on a panel sitting at its collapsedSize
+      // with no remembered prior size — exactly the state the mount-collapse
+      // effect below guarantees before the first open — takes its
+      // fallback-to-minSize path, and bare-number sizes are uniformly PIXELS
+      // in this library (react-resizable-panels.d.ts documents this for
+      // minSize/defaultSize alike), so `minSize={20}` produced a useless
+      // ~20px sliver. CodePage's split never hits that path because its
+      // panels mount at a nonzero defaultSize, so expand() there always has a
+      // real size to restore. An explicit percentage STRING is unambiguous
+      // per PanelImperativeHandle.resize's contract. Guarded on isCollapsed:
+      // a re-click while the panel is already open only bumps the nonce and
+      // must not stomp a width the user has dragged to.
+      panel.resize('35%');
+    },
+    // Identity-stable on purpose: PackageIssueRow is memo'd on this handler —
+    // a fresh closure per render (every search keystroke) would defeat the
+    // memo for every rendered row. Setters and the panel ref never change.
+    [previewPanelRef],
+  );
 
   function closePreview() {
     setPreviewIssue(null);
@@ -203,7 +220,11 @@ export function PackagesPage({ issues }: PackagesPageProps) {
                   : 'No package issues found — knip is happy.'}
               </p>
             ) : (
-              <div className="min-h-0 flex-1 overflow-auto" data-testid="packages-scroll">
+              <div
+                ref={scrollerRef}
+                className="min-h-0 flex-1 overflow-auto [&_[data-slot=table-container]]:overflow-visible"
+                data-testid="packages-scroll"
+              >
                 <div className="flex flex-col gap-6 pb-2">
                   {groups.map((group) => (
                     <WorkspaceTable
@@ -217,6 +238,7 @@ export function PackagesPage({ issues }: PackagesPageProps) {
                       sortIndicator={sortIndicator}
                       activeIssueId={previewIssue?.id}
                       onRowClick={openPreview}
+                      scrollerRef={scrollerRef}
                     />
                   ))}
                 </div>
@@ -269,6 +291,7 @@ function WorkspaceTable({
   sortIndicator,
   activeIssueId,
   onRowClick,
+  scrollerRef,
 }: {
   group: WorkspaceGroup;
   selected: ReadonlySet<string>;
@@ -279,18 +302,100 @@ function WorkspaceTable({
   sortIndicator: (key: SortKey) => string;
   activeIssueId: string | undefined;
   onRowClick: (issue: Issue) => void;
+  scrollerRef: RefObject<HTMLDivElement | null>;
 }) {
   const actionableIds = useMemo(() => group.issues.filter(isActionable).map((i) => i.id), [group.issues]);
   const headerState = nodeSelectionState({ actionableIds }, selected);
   const sortedIssues = useMemo(() => sortIssues(group.issues, sortKey, sortDir), [group.issues, sortKey, sortDir]);
   const label = group.workspace === '.' ? '(root)' : group.workspace;
 
+  // Threshold-gated spacer-<tr> virtualization, Dashboard.tsx's pattern
+  // (#31) applied PER GROUP against the one shared packages-scroll
+  // scrollport. Small groups (the common case, and the whole e2e fixture)
+  // take the render-everything path and produce the same DOM as before.
+  const tbodyRef = useRef<HTMLTableSectionElement>(null);
+  const shouldVirtualize = sortedIssues.length > VIRTUALIZE_THRESHOLD;
+
+  // Where this group's tbody starts inside the scroller's content —
+  // react-virtual's `scrollMargin` for lists that don't start at their
+  // scrollport's top. rect-difference + scrollTop is scroll-invariant. The
+  // ResizeObserver on the scroller's content column re-measures when
+  // EARLIER groups change height (a filter/search shrinking a preceding
+  // table would otherwise leave this one windowing against a stale
+  // offset); the identity-guarded setState keeps the effect loop-free.
+  // Only window SELECTION depends on this — row positions come from the
+  // spacer rows' natural flow — so overscan(6) absorbs small measurement
+  // error by construction.
+  const [scrollMargin, setScrollMargin] = useState(0);
+  useLayoutEffect(() => {
+    if (!shouldVirtualize) return;
+    const tbody = tbodyRef.current;
+    const scroller = scrollerRef.current;
+    if (!tbody || !scroller) return;
+    const measure = () => {
+      const next = Math.round(
+        tbody.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop,
+      );
+      setScrollMargin((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    // jsdom (vitest) has no ResizeObserver; skip so tests don't crash —
+    // same guard as CodePane's CodeBlock.
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller.firstElementChild ?? scroller);
+    return () => observer.disconnect();
+  }, [shouldVirtualize, scrollerRef]);
+
+  const virtualizer = useVirtualizer({
+    count: sortedIssues.length,
+    getScrollElement: () => scrollerRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 6,
+    scrollMargin,
+  });
+  // Spacer <tr>s above/below the window, not absolutely-positioned rows —
+  // same rationale as Dashboard.tsx: absolute positioning pulls a <tr> out
+  // of table layout and its cells stop aligning with the header columns.
+  // With scrollMargin set, react-virtual folds it into every item's
+  // start/end (items live in the SCROLLER's coordinate space), so the
+  // spacer heights subtract it back out to get list-local pixels.
+  const virtualItems = virtualizer.getVirtualItems();
+  const renderedIndices = shouldVirtualize ? virtualItems.map((v) => v.index) : sortedIssues.map((_, index) => index);
+  const padTop = shouldVirtualize && virtualItems.length > 0 ? virtualItems[0]!.start - scrollMargin : 0;
+  const padBottom =
+    shouldVirtualize && virtualItems.length > 0
+      ? virtualizer.getTotalSize() - (virtualItems[virtualItems.length - 1]!.end - scrollMargin)
+      : 0;
+
+  const colCount = SORT_COLUMNS.length + 1; // +1 for the checkbox column
+
   return (
     <section data-testid={`workspace-group-${group.workspace}`}>
-      <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">{label}</h3>
-      <div className="overflow-hidden rounded-md border border-border">
+      {/* No overflow-hidden on this wrapper (it used to have it purely to
+          round the table's corners): any non-visible overflow would make
+          THIS div the sticky thead's containing scrollport, and since it
+          grows with the table the header would never pin. The ≤6px of
+          row-hover background that can now poke past the rounded corner is
+          cosmetic. */}
+      <div className="rounded-md border border-border">
         <Table>
-          <TableHeader>
+          {/* Sticky group header (#31): pins against packages-scroll while
+              this group's table intersects the top, then gets pushed out by
+              the next group's header (sticky is bounded by its own table).
+              The workspace label lives in the thead's first row now —
+              previously a loose <h3> above the table — so label, select-all
+              and sort buttons pin as one block. */}
+          <TableHeader className="sticky top-0 z-10 bg-background">
+            <TableRow>
+              <TableHead
+                colSpan={colCount}
+                className="h-8 text-xs font-medium text-muted-foreground"
+                data-testid={`packages-group-label-${group.workspace}`}
+              >
+                {label}
+              </TableHead>
+            </TableRow>
             <TableRow>
               <TableHead className="w-8">
                 <TriStateCheckbox
@@ -316,66 +421,110 @@ function WorkspaceTable({
               ))}
             </TableRow>
           </TableHeader>
-          <TableBody>
-            {sortedIssues.map((issue) => {
-              const actionable = isActionable(issue);
+          <TableBody ref={tbodyRef}>
+            {padTop > 0 && (
+              <tr aria-hidden style={{ height: padTop }}>
+                <td colSpan={colCount} />
+              </tr>
+            )}
+            {renderedIndices.map((index) => {
+              const issue = sortedIssues[index]!;
               return (
-                // Keyboard-operable row, same pattern as TreeNode.tsx's
-                // TreeNodeRow: role="button" + tabIndex=0 + Enter/Space both
-                // open the preview panel, so keyboard-only users can reach it
-                // (a bare onClick on a <tr> is mouse-only). The checkbox cell
-                // swallows click AND keydown (Space bubbles as keydown)
-                // below, so checking a box never also opens the panel.
-                // `data-state="selected"` piggybacks on ui/table.tsx's own
-                // `data-[state=selected]:bg-muted` TableRow styling — no new
-                // CSS needed for the active-row highlight; `aria-selected`
-                // alongside it for the same signal to assistive tech.
-                <TableRow
+                <PackageIssueRow
                   key={issue.id}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`View ${issue.filePath.split('/').pop() ?? 'package.json'} for ${issue.symbol ?? issue.filePath}`}
-                  aria-selected={issue.id === activeIssueId}
-                  data-state={issue.id === activeIssueId ? 'selected' : undefined}
-                  data-testid={`packages-row-${issue.type}-${issue.symbol ?? issue.id}`}
-                  className="cursor-pointer outline-none focus-visible:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={() => onRowClick(issue)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onRowClick(issue);
-                    }
-                  }}
-                >
-                  <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(issue.id)}
-                      disabled={!actionable}
-                      title={actionable ? undefined : unactionableReason(issue)}
-                      onChange={() => onToggleIds([issue.id])}
-                      className="disabled:cursor-not-allowed"
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span>{TYPE_BADGE_LABELS[issue.type]}</span>
-                      </TooltipTrigger>
-                      <TooltipContent>{typeLabel(issue.type)}</TooltipContent>
-                    </Tooltip>
-                  </TableCell>
-                  <TableCell className="font-medium">{issue.symbol ?? '—'}</TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">{issue.filePath}</TableCell>
-                </TableRow>
+                  issue={issue}
+                  isSelected={selected.has(issue.id)}
+                  isActive={issue.id === activeIssueId}
+                  onToggleIds={onToggleIds}
+                  onRowClick={onRowClick}
+                  height={shouldVirtualize ? ROW_HEIGHT : undefined}
+                />
               );
             })}
+            {padBottom > 0 && (
+              <tr aria-hidden style={{ height: padBottom }}>
+                <td colSpan={colCount} />
+              </tr>
+            )}
           </TableBody>
         </Table>
       </div>
     </section>
   );
 }
+
+// Memoized per-row component (#31), keyed on `isSelected`/`isActive`
+// BOOLEANS rather than the `selected` set itself: a checkbox toggle swaps
+// the set's identity but flips `selected.has(id)` for exactly one id, so
+// with memo exactly one row re-renders instead of all of them. This only
+// holds because every handler prop is identity-stable (zustand's `toggle`
+// action, PackagesPage's useCallback'd openPreview) and `issue` objects
+// come straight from the report array (filter/sort re-wrap the arrays, not
+// the elements). The old per-row Radix <Tooltip> — a live component
+// instance per row, ~5k of them on a big monorepo — is a plain `title`
+// attribute now; it only ever showed typeLabel text.
+const PackageIssueRow = memo(function PackageIssueRow({
+  issue,
+  isSelected,
+  isActive,
+  onToggleIds,
+  onRowClick,
+  height,
+}: {
+  issue: Issue;
+  isSelected: boolean;
+  isActive: boolean;
+  onToggleIds: (ids: string[]) => void;
+  onRowClick: (issue: Issue) => void;
+  /** Set (to ROW_HEIGHT) only when the parent group is virtualized, so the spacer math matches reality. */
+  height: number | undefined;
+}) {
+  const actionable = isActionable(issue);
+  return (
+    // Keyboard-operable row, same pattern as TreeNode.tsx's TreeNodeRow:
+    // role="button" + tabIndex=0 + Enter/Space both open the preview panel,
+    // so keyboard-only users can reach it (a bare onClick on a <tr> is
+    // mouse-only). The checkbox cell swallows click AND keydown (Space
+    // bubbles as keydown) below, so checking a box never also opens the
+    // panel. `data-state="selected"` piggybacks on ui/table.tsx's own
+    // `data-[state=selected]:bg-muted` TableRow styling — no new CSS needed
+    // for the active-row highlight; `aria-selected` alongside it for the
+    // same signal to assistive tech.
+    <TableRow
+      role="button"
+      tabIndex={0}
+      aria-label={`View ${issue.filePath.split('/').pop() ?? 'package.json'} for ${issue.symbol ?? issue.filePath}`}
+      aria-selected={isActive}
+      data-state={isActive ? 'selected' : undefined}
+      data-testid={`packages-row-${issue.type}-${issue.symbol ?? issue.id}`}
+      className="cursor-pointer outline-none focus-visible:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
+      style={height !== undefined ? { height } : undefined}
+      onClick={() => onRowClick(issue)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onRowClick(issue);
+        }
+      }}
+    >
+      <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          checked={isSelected}
+          disabled={!actionable}
+          title={actionable ? undefined : unactionableReason(issue)}
+          onChange={() => onToggleIds([issue.id])}
+          className="disabled:cursor-not-allowed"
+        />
+      </TableCell>
+      <TableCell>
+        <span title={typeLabel(issue.type)}>{TYPE_BADGE_LABELS[issue.type]}</span>
+      </TableCell>
+      <TableCell className="font-medium">{issue.symbol ?? '—'}</TableCell>
+      <TableCell className="font-mono text-xs text-muted-foreground">{issue.filePath}</TableCell>
+    </TableRow>
+  );
+});
 
 // The preview panel's body: a small header (type + symbol + filePath, close
 // button) above a REUSED CodePane showing just this one issue. CodePane
