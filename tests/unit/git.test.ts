@@ -166,6 +166,36 @@ describe('gitStatus', () => {
     const status = await gitStatus(dir);
     expect(status.branch).toBe('feature/sweep');
   });
+
+  it('collapses an untracked directory to a single "dir/" entry (--untracked-files=normal, #37)', async () => {
+    const dir = await makeTmpDir('knip-gui-git-untracked-dir-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'a.txt'), 'hello', 'utf8');
+    await commitAll(dir, 'initial');
+
+    await mkdir(join(dir, 'newdir'));
+    await writeFile(join(dir, 'newdir', 'one.txt'), '1', 'utf8');
+    await writeFile(join(dir, 'newdir', 'two.txt'), '2', 'utf8');
+
+    const status = await gitStatus(dir);
+    expect(status.dirty).toBe(true);
+    // One collapsed entry, not two enumerated files — the perf point of
+    // dropping --untracked-files=all. dirtyFiles consumers are display-only
+    // (GitFooter count, CommitBar warning list); commits post plan paths.
+    expect(status.dirtyFiles).toEqual(['newdir/']);
+  });
+
+  it('reports branch: undefined on a detached HEAD (porcelain v2 "(detached)" mapping)', async () => {
+    const dir = await makeTmpDir('knip-gui-git-detached-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'a.txt'), 'hello', 'utf8');
+    await commitAll(dir, 'initial');
+    await git(dir, ['checkout', '--detach']);
+
+    const status = await gitStatus(dir);
+    expect(status.isRepo).toBe(true);
+    expect(status.branch).toBeUndefined();
+  });
 });
 
 describe('gitCreateBranch', () => {

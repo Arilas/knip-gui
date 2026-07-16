@@ -55,29 +55,56 @@ async function tryGit(cwd: string, args: string[]): Promise<{ stdout: string; st
   }
 }
 
-// Parses NUL-delimited `git status --porcelain -z` output. Without -z, git
-// C-quotes any path containing spaces or special characters (literal
-// `"file with spaces.txt"`) and octal-escapes non-ASCII bytes
-// (`"caf\303\251.txt"`), so a naive line parser produces strings that fail
-// with exit 128 when fed back into `git add --` (the gitStatus →
-// gitCommitPaths round-trip). With -z, paths are always verbatim.
+// Parses NUL-delimited `git status --porcelain=v2 --branch -z` output — ONE
+// exec now carries what `branch --show-current` + `status --porcelain -z`
+// used to take two for (#37). With -z, paths are always verbatim (no
+// C-quoting of spaces, no octal escapes for non-ASCII) — the same property
+// the old v1 parser relied on for the gitStatus → gitCommitPaths round-trip.
 //
-// Record shapes: `XY path\0`, except renames/copies (X of R or C) which emit
-// TWO NUL-terminated fields: `XY newpath\0oldpath\0`. The old path must be
-// consumed with its record so it neither appears as a phantom entry nor
-// shifts parsing of subsequent records. We keep the new path (the one that
-// exists in the working tree now).
-function parsePorcelainZ(stdout: string): string[] {
+// Record shapes (git-status(1), "Porcelain Format Version 2"):
+//   `# <key> <value>`   headers; `# branch.head <name>` carries the branch,
+//                       where `(detached)` means detached HEAD → undefined.
+//   `1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`             changed
+//   `2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>`  rename/copy,
+//       followed by a SEPARATE NUL-terminated field: the original path,
+//       which must be consumed with its record (same two-field pitfall the
+//       old v1 parser handled). We keep the new path.
+//   `u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>`   unmerged
+//   `? <path>`                                                  untracked
+//   `! <path>` (ignored) can't appear without --ignored; skipped if it does.
+function parsePorcelainV2Z(stdout: string): { branch?: string; paths: string[] } {
   const fields = stdout.split('\0');
+  let branch: string | undefined;
   const paths: string[] = [];
   for (let i = 0; i < fields.length; i++) {
     const record = fields[i];
     if (!record) continue; // trailing empty field after the final NUL
-    paths.push(record.slice(3));
-    const x = record[0];
-    if (x === 'R' || x === 'C') i++; // skip the rename/copy source field
+    if (record.startsWith('# ')) {
+      const m = record.match(/^# branch\.head (.*)$/);
+      if (m) branch = m[1] === '(detached)' ? undefined : m[1];
+      continue;
+    }
+    const type = record[0];
+    if (type === '1') {
+      paths.push(restAfterNthSpace(record, 8));
+    } else if (type === '2') {
+      paths.push(restAfterNthSpace(record, 9));
+      i++; // skip the rename/copy source field
+    } else if (type === 'u') {
+      paths.push(restAfterNthSpace(record, 10));
+    } else if (type === '?') {
+      paths.push(record.slice(2));
+    }
   }
-  return paths;
+  return { branch, paths };
+}
+
+// The path is everything after the record's Nth space — indexOf-based so a
+// path containing spaces is never split.
+function restAfterNthSpace(record: string, n: number): string {
+  let idx = 0;
+  for (let k = 0; k < n; k++) idx = record.indexOf(' ', idx) + 1;
+  return record.slice(idx);
 }
 
 export async function gitStatus(projectDir: string): Promise<GitStatus> {
@@ -103,11 +130,16 @@ export async function gitStatus(projectDir: string): Promise<GitStatus> {
   }
   if (dirReal !== toplevelReal) return { isRepo: false };
 
-  const branchResult = await execGit(projectDir, ['branch', '--show-current']);
-  const branch = branchResult.stdout.trim() || undefined;
-
-  const statusResult = await execGit(projectDir, ['status', '--porcelain', '-z', '--untracked-files=all']);
-  const dirtyFiles = parsePorcelainZ(statusResult.stdout);
+  // One exec for branch + entries (#37). --untracked-files=normal, not
+  // =all: `all` enumerates every file of every untracked tree (seconds on
+  // big cold worktrees), while every consumer of dirtyFiles is display-only
+  // (GitFooter's count, CommitBar's "other dirty files" warning) and the
+  // commit flow posts plan paths, never dirtyFiles — so collapsed `dir/`
+  // entries are an acceptable, cheaper answer.
+  const statusResult = await execGit(projectDir, [
+    'status', '--porcelain=v2', '--branch', '-z', '--untracked-files=normal',
+  ]);
+  const { branch, paths: dirtyFiles } = parsePorcelainV2Z(statusResult.stdout);
 
   return { isRepo: true, branch, dirty: dirtyFiles.length > 0, dirtyFiles };
 }
