@@ -5,7 +5,13 @@
 // out per the plan's Global Constraints).
 import { describe, expect, it } from 'vitest';
 import type { Issue } from '../../src/core/types.js';
-import { issueLines, langForPath, SHIKI_THEMES } from '../../client/src/lib/highlighter.js';
+import {
+  HIGHLIGHT_MAX_CHARS,
+  isTooLargeToHighlight,
+  issueLines,
+  langForPath,
+  SHIKI_THEMES,
+} from '../../client/src/lib/highlighter.js';
 
 let idSeq = 0;
 function issue(partial: Partial<Issue> & Pick<Issue, 'type' | 'filePath'>): Issue {
@@ -76,5 +82,19 @@ describe('issueLines', () => {
 
   it('returns an empty map for a file with no issues', () => {
     expect(issueLines(issues, 'src/never-seen.ts').size).toBe(0);
+  });
+});
+
+describe('isTooLargeToHighlight (client-side highlight cap, #34)', () => {
+  it('small content is highlightable', () => {
+    expect(isTooLargeToHighlight('const a = 1;')).toBe(false);
+  });
+
+  it('content exactly at the cap is still highlightable (cap is exclusive)', () => {
+    expect(isTooLargeToHighlight('x'.repeat(HIGHLIGHT_MAX_CHARS))).toBe(false);
+  });
+
+  it('content one char over the cap is not', () => {
+    expect(isTooLargeToHighlight('x'.repeat(HIGHLIGHT_MAX_CHARS + 1))).toBe(true);
   });
 });

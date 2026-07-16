@@ -17,7 +17,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { Issue } from '../../../../src/core/types.js';
 import { ApiError } from '../../api.js';
 import { isFixable, isIgnorable, isLikelyTestFile } from '../../lib/filters.js';
-import { highlightToHtml, issueLines, langForPath } from '../../lib/highlighter.js';
+import { highlightToHtml, isTooLargeToHighlight, issueLines, langForPath } from '../../lib/highlighter.js';
 import { useFile } from '../../state/queries.js';
 import { TestFileHint, TYPE_BADGE_LABELS, unactionableReason } from './TreeNode.js';
 
@@ -288,6 +288,11 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
   const content = fileQuery.data?.content;
   const lang = filePath ? langForPath(filePath) : undefined;
 
+  // #34 item 3 (scoped to a cap — no web worker in this batch): over-cap
+  // files reuse the plain-<pre> + highlightNote path that non-highlightable
+  // extensions already take, so no new UI surface is invented.
+  const tooLargeToHighlight = content !== undefined && isTooLargeToHighlight(content);
+
   const highlightQuery = useQuery({
     // Keyed on the fetch's own timestamp, NOT the content string (#34 item 1):
     // TanStack computes queryHash via JSON.stringify(queryKey) on EVERY
@@ -304,7 +309,7 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
       }
       return highlightToHtml(content, filePath);
     },
-    enabled: filePath !== null && lang !== undefined && content !== undefined,
+    enabled: filePath !== null && lang !== undefined && content !== undefined && !tooLargeToHighlight,
     retry: false,
   });
 
@@ -383,6 +388,9 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
   if (lang === undefined) {
     html = plainHtml;
     highlightNote = 'No syntax highlighting available for this file type.';
+  } else if (tooLargeToHighlight) {
+    html = plainHtml;
+    highlightNote = 'Syntax highlighting is skipped for large files — showing plain text.';
   } else if (highlightQuery.data) {
     html = highlightQuery.data;
   } else if (highlightQuery.error) {

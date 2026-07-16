@@ -122,3 +122,22 @@ export async function highlightToHtml(content: string, path: string): Promise<st
 export async function highlightDiff(diff: string): Promise<string> {
   return highlightWithLang(diff, 'diff');
 }
+
+/**
+ * Client-side highlight cap (#34 item 3): shiki tokenizes synchronously on
+ * the main thread, so a 2MB/50k-line file is a multi-second freeze followed
+ * by ~500k tokenized-span DOM nodes. Files over this size skip shiki and
+ * render CodePane's existing plain-<pre> path with a notice instead.
+ * Measured in UTF-16 code units (`content.length`, O(1)) rather than true
+ * bytes — the ~200KB cap is a ballpark, not a contract, and an exact byte
+ * count would cost an O(n) encode pass per check. Moving shiki to a Web
+ * Worker so large files can be highlighted without blocking is the
+ * follow-up (out of scope for this batch — see the plan's out-of-scope
+ * section).
+ */
+export const HIGHLIGHT_MAX_CHARS = 200_000;
+
+/** Pure: true when `content` is too large to shiki-highlight on the main thread. */
+export function isTooLargeToHighlight(content: string): boolean {
+  return content.length > HIGHLIGHT_MAX_CHARS;
+}
