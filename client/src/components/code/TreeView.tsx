@@ -39,7 +39,7 @@
 // (clearing the chip), same as a rescan introducing it fresh. Only genuinely
 // new paths get merged in, additively — see ui.ts's `expandDirs` doc comment
 // for why this can't undo a Collapse all.
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronsDownUp, ChevronsUpDown, PanelRightClose, PanelRightOpen, Search } from 'lucide-react';
 import type { Issue, IssueType } from '../../../../src/core/types.js';
@@ -167,14 +167,30 @@ export function TreeView({
   // it reappears, since the one-time seed effect below never re-runs.
   const scopedIssues = useMemo(() => filterByScope(issues, scope), [issues, scope]);
 
+  // Deferred search (#35): the controlled Input echoes each keystroke
+  // urgently (it renders from `search` directly, below), while the whole
+  // rebuild pipeline — filter -> buildTree -> expansion policy -> flatten ->
+  // selection summaries — consumes the DEFERRED value, so React commits the
+  // echoed keystroke first and rebuilds the tree in a separate,
+  // interruptible render. The seed-delta machinery is untouched: it reads
+  // scopedIssues, which never depended on search (by design — see the top
+  // doc comment).
+  const deferredSearch = useDeferredValue(search);
+
   // FilterChips' own live counts intentionally use the FULL type set (only
   // search/scope-scoped) so a chip shows "how many exist" even while it's off
-  // — the tree itself, below, uses the real `enabledTypes`.
-  const chipScopeIssues = useMemo(() => filterIssues(scopedIssues, ALL_CODE_TYPES, search), [scopedIssues, search]);
-  const filtered = useMemo(
-    () => filterIssues(scopedIssues, enabledTypes, search),
-    [scopedIssues, enabledTypes, search],
+  // — the tree itself, below, uses the real `enabledTypes`. `filtered` is
+  // DERIVED from chipScopeIssues rather than a second filterIssues pass
+  // (#35's shared pass): every issue here already passed the ALL_CODE_TYPES
+  // gate (CodePage pre-filters `issues` to code types, and scope only
+  // narrows) and the substring match — the expensive part — so narrowing to
+  // the enabled chips is a cheap Set check, and both lists are guaranteed to
+  // reflect the SAME search snapshot.
+  const chipScopeIssues = useMemo(
+    () => filterIssues(scopedIssues, ALL_CODE_TYPES, deferredSearch),
+    [scopedIssues, deferredSearch],
   );
+  const filtered = useMemo(() => chipScopeIssues.filter((i) => enabledTypes.has(i.type)), [chipScopeIssues, enabledTypes]);
   const tree = useMemo(() => buildTree(filtered), [filtered]);
 
   // Lifted expand state (ui store) — see this file's top doc comment and

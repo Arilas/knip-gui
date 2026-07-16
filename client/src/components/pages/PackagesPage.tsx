@@ -10,7 +10,7 @@
 // previous Sheet-based detail view (see git history) since a persistent
 // split, not a modal overlay, is what lets the table stay usable (selection,
 // search, filters) while a row's context is open.
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { X } from 'lucide-react';
@@ -165,11 +165,28 @@ export function PackagesPage({ issues }: PackagesPageProps) {
     // `previewIssue` (open vs. closed) is the only real trigger here.
   }, [previewIssue]);
 
+  // Deferred search (#35), same shape as TreeView's: the input echoes
+  // urgently, the refilter/regroup/resort pipeline consumes the deferred
+  // value in an interruptible render.
+  const deferredSearch = useDeferredValue(search);
+
   // FilterChips' own live counts intentionally use the FULL package type set
   // (only search-scoped) so a chip shows "how many exist" even while it's
   // off — same pattern as TreeView.tsx's chipScopeIssues for the Code page.
-  const chipScopeIssues = useMemo(() => filterIssues(issues, ALL_PACKAGE_TYPES, search), [issues, search]);
-  const filtered = useMemo(() => filterIssues(issues, packagesFilters, search), [issues, packagesFilters, search]);
+  // `filtered` derives from chipScopeIssues (one substring pass, #35's
+  // shared pass) — sound because packagesFilters ⊆ PACKAGE_TYPES by
+  // construction: it defaults to the full set (state/ui.ts) and its only
+  // writers pass PACKAGE_TYPES members (FilterChips/CommandPalette's
+  // togglePackagesFilter, Dashboard's setPackagesFilters([type]) on
+  // package-routed cells).
+  const chipScopeIssues = useMemo(
+    () => filterIssues(issues, ALL_PACKAGE_TYPES, deferredSearch),
+    [issues, deferredSearch],
+  );
+  const filtered = useMemo(
+    () => chipScopeIssues.filter((i) => packagesFilters.has(i.type)),
+    [chipScopeIssues, packagesFilters],
+  );
   const groups = useMemo(() => groupByWorkspace(filtered), [filtered]);
 
   function toggleSort(key: SortKey) {
