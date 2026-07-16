@@ -7,7 +7,7 @@ import type {
   ModuleExportName,
   Program,
 } from 'oxc-parser';
-import type MagicString from 'magic-string';
+import MagicString from 'magic-string';
 
 export interface TransformInput {
   filePath: string;
@@ -18,6 +18,30 @@ export interface TransformInput {
 }
 
 export type TransformResult = { ok: true; newContent: string } | { ok: false; reason: string };
+
+/** A removal ([start,end) deleted), an insertion (start===end, text added),
+ *  or a replacement (start<end with text — applied as an overwrite; needed
+ *  for the public-tag single-line-JSDoc expansion). */
+export interface SourceEdit {
+  start: number;
+  end: number;
+  text?: string;
+}
+export type BatchOpResult = { ok: true } | { ok: false; reason: string };
+/** One transform op, compiler-agnostic (no issueId/mode). */
+export interface SourceOp {
+  symbol: string;
+  pos?: number;
+  parentSymbol?: string;
+}
+/** An edit plus the indices (into the batch's `ops`) of the op(s) that produced it. */
+export interface BatchEdit extends SourceEdit {
+  owners: number[];
+}
+export interface SourceBatchResult {
+  results: BatchOpResult[];
+  edits: BatchEdit[];
+}
 
 export interface ParsedSource {
   program: Program;
@@ -356,6 +380,83 @@ export function removeListItem(s: MagicString, items: readonly Span[], index: nu
     if (!cur || !next) return;
     s.remove(cur.start, next.start);
   }
+}
+
+// Generalizes removeListItem to a batch of removed indices from one
+// comma-separated list, computed against ORIGINAL offsets. Comma hygiene:
+// each removed item with a surviving successor removes [cur.start,
+// next.start); a run of removed items at the END of the list collapses into
+// ONE edit [lastSurvivor.end, lastRemoved.end) so the edits never overlap.
+// Precondition: sortedIndices is ascending, non-empty, and a STRICT subset
+// of items — callers turn the all-items case into a whole-statement removal.
+export function removeListItems(
+  items: readonly Span[],
+  sortedIndices: readonly number[],
+): (SourceEdit & { itemIndices: number[] })[] {
+  const removed = new Set(sortedIndices);
+  let firstTrailing = items.length;
+  while (firstTrailing > 0 && removed.has(firstTrailing - 1)) firstTrailing--;
+  const edits: (SourceEdit & { itemIndices: number[] })[] = [];
+  for (const index of sortedIndices) {
+    if (index >= firstTrailing) continue; // folded into the trailing-run edit below
+    edits.push({ start: items[index]!.start, end: items[index + 1]!.start, itemIndices: [index] });
+  }
+  if (firstTrailing < items.length) {
+    const lastSurvivor = items[firstTrailing - 1]!; // exists: strict subset
+    const lastRemoved = items[items.length - 1]!;
+    edits.push({
+      start: lastSurvivor.end,
+      end: lastRemoved.end,
+      itemIndices: sortedIndices.filter((i) => i >= firstTrailing),
+    });
+  }
+  return edits;
+}
+
+// Appends an edit, deduping byte-identical edits onto shared owners. Two ops
+// can legitimately compute the SAME edit (both declarators of one statement
+// being strip-exported; two export-list bindings deleting one shared local
+// declaration; two tag ops resolving to one anchor) — one edit, all owners.
+export function pushEdit(edits: BatchEdit[], edit: SourceEdit, owners: readonly number[]): void {
+  const existing = edits.find((e) => e.start === edit.start && e.end === edit.end && e.text === edit.text);
+  if (existing) {
+    for (const owner of owners) if (!existing.owners.includes(owner)) existing.owners.push(owner);
+    return;
+  }
+  const next: BatchEdit = { start: edit.start, end: edit.end, owners: [...owners] };
+  if (edit.text !== undefined) next.text = edit.text;
+  edits.push(next);
+}
+
+// Applies a set of non-overlapping edits to one MagicString: removal
+// (no text), insertion (start===end), or replacement (start<end + text).
+// Callers guarantee non-overlap (batch coordination + the compiler's
+// conflict rule) — magic-string is never handed overlapping removals.
+export function applyEdits(content: string, edits: readonly SourceEdit[]): string {
+  const s = new MagicString(content);
+  for (const edit of edits) {
+    if (edit.text !== undefined && edit.start < edit.end) s.overwrite(edit.start, edit.end, edit.text);
+    else if (edit.text !== undefined) s.appendLeft(edit.start, edit.text);
+    else s.remove(edit.start, edit.end);
+  }
+  return s.toString();
+}
+
+// Adapts a batch transform to the legacy one-op TransformResult contract:
+// parse, run the batch with a single op, apply its edits. The entire
+// pre-batch test suite runs through this wrapper — it is the regression
+// harness proving the batch functions reproduce single-op behavior exactly.
+export function applySingleOp(
+  filePath: string,
+  content: string,
+  op: SourceOp,
+  batchFn: (parsed: ParsedSource, content: string, ops: readonly SourceOp[]) => SourceBatchResult,
+): TransformResult {
+  const parsed = parseSource(filePath, content);
+  const { results, edits } = batchFn(parsed, content, [op]);
+  const first = results[0]!;
+  if (!first.ok) return first;
+  return { ok: true, newContent: applyEdits(content, edits) };
 }
 
 // Attached-comment detection for deleteDeclaration: a comment is "attached" to a node

@@ -1,12 +1,22 @@
-import MagicString from 'magic-string';
+import type {
+  ExportSite,
+  ParsedSource,
+  SourceBatchResult,
+  SourceEdit,
+  SourceOp,
+  TransformInput,
+  TransformResult,
+} from './source.js';
+import type { BatchEdit, BatchOpResult } from './source.js';
 import {
+  applySingleOp,
   findExportedFunctionSites,
   locateExport,
-  parseSource,
-  removeListItem,
-  type TransformInput,
-  type TransformResult,
+  pushEdit,
+  removeListItems,
 } from './source.js';
+
+type SpecifierSite = Extract<ExportSite, { kind: 'specifier' }>;
 
 // Mirrors `knip --fix`'s strip-export behavior:
 // - `export const/function/class/type/interface/enum X` -> remove the `export ` keyword.
@@ -15,40 +25,75 @@ import {
 // - `export default <expr|function|class>` -> remove the `export default ` prefix
 //   when the declaration is named; otherwise remove the whole statement (an anonymous
 //   default's value is dead code without its export).
-export function stripExport(input: TransformInput): TransformResult {
-  const { filePath, content, symbol, pos } = input;
-  const { program } = parseSource(filePath, content);
-  const located = locateExport(program, symbol, pos);
-  if ('error' in located) return { ok: false, reason: located.error };
-  const site = located.site;
+// Batch contract: one parse, all of the file's strip-export ops, edits
+// against ORIGINAL offsets. Ops covering several bindings of one export
+// list are coordinated here (subset -> generalized comma hygiene; ALL
+// bindings -> whole-statement removal, the same range the single-op path
+// uses for a sole specifier).
+export function stripExportBatch(
+  parsed: ParsedSource,
+  _content: string,
+  ops: readonly SourceOp[],
+): SourceBatchResult {
+  const { program } = parsed;
+  const results: BatchOpResult[] = ops.map(() => ({ ok: true }));
+  const edits: BatchEdit[] = [];
+  // One export-list statement can absorb several ops; collect them per
+  // statement (keyed by statementStart) and coordinate below.
+  const listGroups = new Map<number, { site: SpecifierSite; opIndex: number }[]>();
 
-  const s = new MagicString(content);
-  if (site.kind === 'declaration') {
-    // Exported function overload set: strip `export ` from every signature and the
-    // implementation, not just the located one, or the result fails TS2383.
-    const fnSites = findExportedFunctionSites(program, symbol);
-    if (fnSites.length > 1) {
-      for (const fn of fnSites) s.remove(fn.exportStart, fn.declStart);
-      return { ok: true, newContent: s.toString() };
+  ops.forEach((op, opIndex) => {
+    const located = locateExport(program, op.symbol, op.pos);
+    if ('error' in located) {
+      results[opIndex] = { ok: false, reason: located.error };
+      return;
     }
-    // Note: for a multi-declarator `export const a = 1, b = 2;` this unexports the
-    // WHOLE statement even when only one declarator is unused — that mirrors
-    // knip --fix exactly and is intentional (pinned by a test); per-declarator
-    // surgery is a deleteDeclaration behavior only.
-    s.remove(site.exportStart, site.declStart);
-  } else if (site.kind === 'specifier') {
-    if (site.specifiers.length === 1) {
-      s.remove(site.statementStart, site.statementEnd);
+    const site = located.site;
+    if (site.kind === 'declaration') {
+      const fnSites = findExportedFunctionSites(program, op.symbol);
+      if (fnSites.length > 1) {
+        for (const fn of fnSites) pushEdit(edits, { start: fn.exportStart, end: fn.declStart }, [opIndex]);
+        return;
+      }
+      // Multi-declarator statements produce the same whole-statement
+      // unexport for every declarator's op — pushEdit dedupes them.
+      pushEdit(edits, { start: site.exportStart, end: site.declStart }, [opIndex]);
+    } else if (site.kind === 'specifier') {
+      const group = listGroups.get(site.statementStart) ?? [];
+      group.push({ site, opIndex });
+      listGroups.set(site.statementStart, group);
+    } else if (site.isNamed) {
+      pushEdit(edits, { start: site.statementStart, end: site.declStart }, [opIndex]);
     } else {
-      removeListItem(s, site.specifiers, site.index);
+      pushEdit(edits, { start: site.statementStart, end: site.statementEnd }, [opIndex]);
     }
-  } else {
-    if (site.isNamed) {
-      s.remove(site.statementStart, site.declStart);
-    } else {
-      s.remove(site.statementStart, site.statementEnd);
+  });
+
+  for (const group of listGroups.values()) {
+    const site = group[0]!.site;
+    const indexOwners = new Map<number, number[]>();
+    for (const g of group) indexOwners.set(g.site.index, [...(indexOwners.get(g.site.index) ?? []), g.opIndex]);
+    if (indexOwners.size === site.specifiers.length) {
+      pushEdit(
+        edits,
+        { start: site.statementStart, end: site.statementEnd },
+        group.map((g) => g.opIndex),
+      );
+      continue;
+    }
+    const indices = [...indexOwners.keys()].sort((a, b) => a - b);
+    for (const removal of removeListItems(site.specifiers, indices)) {
+      pushEdit(
+        edits,
+        { start: removal.start, end: removal.end } satisfies SourceEdit,
+        removal.itemIndices.flatMap((i) => indexOwners.get(i)!),
+      );
     }
   }
 
-  return { ok: true, newContent: s.toString() };
+  return { results, edits };
+}
+
+export function stripExport(input: TransformInput): TransformResult {
+  return applySingleOp(input.filePath, input.content, { symbol: input.symbol, pos: input.pos }, stripExportBatch);
 }
