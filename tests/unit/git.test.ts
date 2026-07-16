@@ -180,8 +180,13 @@ describe('gitStatus', () => {
     const status = await gitStatus(dir);
     expect(status.dirty).toBe(true);
     // One collapsed entry, not two enumerated files — the perf point of
-    // dropping --untracked-files=all. dirtyFiles consumers are display-only
-    // (GitFooter count, CommitBar warning list); commits post plan paths.
+    // dropping --untracked-files=all. Most consumers are display-only
+    // (GitFooter count, CommitBar warning list), but CommitDialog builds its
+    // checklist from dirtyFiles and posts checked paths straight to
+    // gitCommitPaths — so committing a collapsed `dir/` row from there is
+    // all-or-nothing for the whole subtree (a `:(literal)dir/` pathspec
+    // stages+commits it cleanly). knip-gui's own fixes/ignores only touch
+    // already-tracked files, so the common flow is unaffected.
     expect(status.dirtyFiles).toEqual(['newdir/']);
   });
 

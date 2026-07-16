@@ -35,6 +35,15 @@ export const BUSY_OP_LABELS: Record<BusyOp, string> = {
 
 export class ReportStore {
   status: 'idle' | 'scanning' | 'ready' | 'error' = 'idle';
+  /**
+   * Monotonic within a chain: only setReady assigns it, and nothing ever
+   * clears it back to undefined once a scan has landed — a later 'scanning'
+   * or 'error' status leaves the previous report in place. The preview
+   * routes in routes-fix.ts lean on this: they gate on `store.report` being
+   * present, not on `status === 'ready'`, precisely so a background rescan
+   * (or a failed one) doesn't yank a still-usable report out from under an
+   * in-flight preview/apply.
+   */
   report?: Report;
   error?: StoreError;
   /**
@@ -83,7 +92,14 @@ export class ReportStore {
    * runRescanChain in routes-fix.ts). Scan and sweep have NO corrective
    * mechanism — a stale chain landing could clobber their fresh results — so
    * their routes 409 while this is true, reported as op 'scan', exactly the
-   * wire shape the old latch-holding rescan produced.
+   * wire shape the old latch-holding rescan produced. That no-observable-
+   * intermediate-landing guarantee holds WITHIN one chain; it does not
+   * extend across two back-to-back chains — if an apply lands its queued
+   * follow-up just as one chain exits and a new one starts, a 2s status poll
+   * can in principle observe a transient 'ready' or 'error' for a few
+   * milliseconds before the new chain's setScanning() runs. It's a narrow,
+   * self-correcting window (the next poll sees 'scanning' again, then the
+   * new chain's own 'ready'), not a state the system gets stuck in.
    */
   rescanActive = false;
   /**
@@ -152,5 +168,8 @@ export class ReportStore {
   abortActive(): void {
     this.activeAbort?.abort();
     this.activeSweepAbort?.abort();
+    // A close() mid-chain must not let the rescan loop consume a queued
+    // follower and respawn a knip child that nothing will be left to reap.
+    this.rescanQueued = false;
   }
 }

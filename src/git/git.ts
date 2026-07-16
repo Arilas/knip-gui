@@ -142,10 +142,15 @@ export async function gitStatus(projectDir: string): Promise<GitStatus> {
 
   // One exec for branch + entries (#37). --untracked-files=normal, not
   // =all: `all` enumerates every file of every untracked tree (seconds on
-  // big cold worktrees), while every consumer of dirtyFiles is display-only
-  // (GitFooter's count, CommitBar's "other dirty files" warning) and the
-  // commit flow posts plan paths, never dirtyFiles — so collapsed `dir/`
-  // entries are an acceptable, cheaper answer.
+  // big cold worktrees). Most consumers are display-only (GitFooter's count,
+  // CommitBar's "other dirty files" warning), but CommitDialog is a real
+  // exception — it builds its checklist FROM dirtyFiles and posts the
+  // checked paths straight to gitCommitPaths. The accepted degradation: an
+  // untracked directory surfaces as one collapsed `dir/` row, so committing
+  // it from that dialog is all-or-nothing for the whole subtree (verified: a
+  // `:(literal)dir/` pathspec stages+commits the subtree cleanly, nothing
+  // partial). knip-gui's own fixes/ignores only ever touch already-tracked
+  // files, so the common flow never hits this path at all.
   const statusResult = await execGit(projectDir, [
     'status', '--porcelain=v2', '--branch', '-z', '--untracked-files=normal',
   ]);
@@ -202,7 +207,8 @@ export async function gitCommitPaths(
   const root = await realpath(resolve(projectDir));
   // Independent per-path checks — realpath walks, no shared state — so run
   // them concurrently instead of one await per path (#37). Promise.all
-  // rejects with the first GitError, same observable contract as the loop.
+  // rejects with the first rejection to settle (the named path may differ
+  // from the old serial order), same observable contract as the loop.
   await Promise.all(paths.map((p) => assertContained(root, p)));
 
   // The commit itself is pathspec-scoped (`git commit -m <msg> -- <paths>`),

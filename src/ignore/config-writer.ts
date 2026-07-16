@@ -133,7 +133,7 @@ function assertParsable(content: string): { ok: true } | { ok: false; reason: st
   };
 }
 
-export type BatchEditOutcome = { ok: true } | { ok: false; reason: string };
+type BatchEditOutcome = { ok: true } | { ok: false; reason: string };
 
 export interface AddIgnoresBatchResult {
   /** Final content — equal to the input when nothing changed or the config itself was refused. */

@@ -143,12 +143,18 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     // safe: every patch carries hashBefore, so applyPatches lands a per-file
     // 'stale' result instead of clobbering content that moved (pinned by the
     // "reports a per-file stale result" test in tests/unit/server-fix.test.ts).
+    // The same relaxation also admits status === 'error' — a failed rescan
+    // leaves the prior report in place (store.report is monotonic; see its
+    // field doc in store.ts) rather than clearing it, and that stale-but-
+    // present report is exactly as safe to compile against as a stale-but-
+    // 'scanning' one, for the same hashBefore backstop.
     if (!store.report) return c.json({ error: 'no report available' }, 409);
+    const report = store.report; // narrowed once, used below — avoids narrowing across an await
     const body = await readJsonObject(c);
     const issueIds = Array.isArray(body.issueIds) ? body.issueIds : [];
     // Patches (which can carry full post-fix file content) are deliberately
     // withheld from the response — only planId, diffs and items go over the wire.
-    const plan = await compileFixPlan(projectDir, store.report.issues, {
+    const plan = await compileFixPlan(projectDir, report.issues, {
       issueIds,
       modeOverrides: body.modeOverrides as Record<string, FixMode> | undefined,
     });
@@ -181,10 +187,16 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     // safe: every patch carries hashBefore, so applyPatches lands a per-file
     // 'stale' result instead of clobbering content that moved (pinned by the
     // "reports a per-file stale result" test in tests/unit/server-fix.test.ts).
+    // The same relaxation also admits status === 'error' — a failed rescan
+    // leaves the prior report in place (store.report is monotonic; see its
+    // field doc in store.ts) rather than clearing it, and that stale-but-
+    // present report is exactly as safe to compile against as a stale-but-
+    // 'scanning' one, for the same hashBefore backstop.
     if (!store.report) return c.json({ error: 'no report available' }, 409);
+    const report = store.report; // narrowed once, used below — avoids narrowing across an await
     const body = await readJsonObject(c);
     const issueIds = Array.isArray(body.issueIds) ? body.issueIds : [];
-    const plan = await compileIgnorePlan(projectDir, store.report.issues, issueIds);
+    const plan = await compileIgnorePlan(projectDir, report.issues, issueIds);
     planStore.put(plan);
     return c.json({ planId: plan.planId, diffs: plan.diffs, items: plan.items } satisfies PreviewResponse);
   });
