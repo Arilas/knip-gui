@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PlanStore } from '../../src/fix/plan-store.js';
-import type { FixPlan } from '../../src/fix/compiler.js';
+import type { FixPlan } from '../../src/fix/plan.js';
 
 // Minimal fake plans — only planId matters to the store, the rest is never
 // read by put/take/delete. Cast to satisfy FixPlan's shape without dragging

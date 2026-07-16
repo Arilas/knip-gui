@@ -20,7 +20,7 @@ export const ISSUE_TYPES = [
 export type IssueType = (typeof ISSUE_TYPES)[number];
 
 // The issue types the ignore engine can suppress via knip config or a member-
-// precise @public tag (compileIgnorePlan in src/fix/compiler.ts). The SINGLE
+// precise @public tag (compileIgnorePlan in src/ignore/compile.ts). The SINGLE
 // source of truth for "is this ignorable", shared by the server (which guards
 // its per-type ignore switch with it) and the client (filters.ts's isIgnorable /
 // the SelectionDock's Ignore button). Anything not listed here — unlisted,

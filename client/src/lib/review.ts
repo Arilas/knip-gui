@@ -186,7 +186,7 @@ export interface ShouldRestoreOpenFileArgs {
  *     merely `deletedOkPaths.includes(...)` on its own, since a caller could
  *     otherwise (harmlessly, but incorrectly) compute deletedOkPaths ahead of
  *     an apply that hasn't happened yet — e.g. an ignore-mode plan never
- *     deletes anything (compileIgnorePlan, src/fix/compiler.ts, has no
+ *     deletes anything (compileIgnorePlan, src/ignore/compile.ts, has no
  *     delete-file branch), so an 'ignore' review can always restore even
  *     though issue.fixModes (a fix-mode concept) might coincidentally still
  *     say 'delete-file' for a files-type issue — ReviewPage.tsx accounts for

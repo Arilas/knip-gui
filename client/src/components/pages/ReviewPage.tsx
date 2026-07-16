@@ -303,7 +303,7 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   // with what's on screen right now instead of with what the apply that just
   // ran actually did. Only computed for 'fix' reviews: filesToDelete's
   // delete-file signal comes from an issue's fixModes, which is meaningless
-  // for an 'ignore' review (compileIgnorePlan, src/fix/compiler.ts, never
+  // for an 'ignore' review (compileIgnorePlan, src/ignore/compile.ts, never
   // deletes a file) — a files-type issue's fixModes[0] can still be
   // 'delete-file' even when this review is an ignore, which would otherwise
   // falsely flag its file as deleted and block the restore that ignore

@@ -5,7 +5,7 @@
 // per Plan 3's Global Constraints (heavy rendering tests stay out).
 import { describe, expect, it } from 'vitest';
 import type { Issue } from '../../src/core/types.js';
-import type { PlanItem } from '../../src/fix/compiler.js';
+import type { PlanItem } from '../../src/fix/plan.js';
 import type { PatchResult } from '../../src/fix/patch.js';
 import {
   appliedOkIssueIds,

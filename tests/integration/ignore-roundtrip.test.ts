@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { runScan } from '../../src/core/knip-runner.js';
 import { normalize } from '../../src/core/normalize.js';
 import type { Issue } from '../../src/core/types.js';
-import { compileIgnorePlan } from '../../src/fix/compiler.js';
+import { compileIgnorePlan } from '../../src/ignore/compile.js';
 import { applyPatches } from '../../src/fix/patch.js';
 
 // Lives under the repo's own .tmp-tests/ (not the OS tmpdir) so the copied

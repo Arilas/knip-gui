@@ -14,7 +14,7 @@
 import type { Issue, Report } from '../../src/core/types.js';
 import type { FixMode } from '../../src/core/types.js';
 import type { StoreError } from '../../src/server/store.js';
-import type { PlanItem } from '../../src/fix/compiler.js';
+import type { PlanItem } from '../../src/fix/plan.js';
 import type { PatchResult } from '../../src/fix/patch.js';
 import type { SweepCapabilities } from '../../src/fix/sweep.js';
 import type { GitStatus } from '../../src/git/git.js';

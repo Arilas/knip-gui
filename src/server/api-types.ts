@@ -4,7 +4,7 @@
 // Vite elides it; keep this module free of value exports the client would
 // pull in at runtime).
 import type { Report } from '../core/types.js';
-import type { FixPlan, PlanItem } from '../fix/compiler.js';
+import type { FixPlan, PlanItem } from '../fix/plan.js';
 import type { PatchResult } from '../fix/patch.js';
 import type { StoreError } from './store.js';
 

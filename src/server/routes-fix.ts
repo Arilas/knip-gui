@@ -1,6 +1,7 @@
 import type { Context, Hono } from 'hono';
 import { runScan } from '../core/knip-runner.js';
-import { compileFixPlan, compileIgnorePlan } from '../fix/compiler.js';
+import { compileFixPlan } from '../fix/compiler.js';
+import { compileIgnorePlan } from '../ignore/compile.js';
 import type { FixMode } from '../core/types.js';
 import { applyPatches, type PatchResult } from '../fix/patch.js';
 import type { PlanStore } from '../fix/plan-store.js';

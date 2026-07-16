@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { compileRemoveIgnoresPlan } from '../fix/compiler.js';
+import { compileRemoveIgnoresPlan } from '../ignore/compile.js';
 import { listIgnores } from '../ignore/config-writer.js';
 import { applyPlanHandler, type FixRoutesCtx } from './routes-fix.js';
 import { readJsonObject } from './body.js';

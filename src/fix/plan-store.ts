@@ -1,4 +1,4 @@
-import type { FixPlan } from './compiler.js';
+import type { FixPlan } from './plan.js';
 
 const DEFAULT_MAX_PLANS = 20;
 const DEFAULT_TTL_MS = 15 * 60 * 1000;

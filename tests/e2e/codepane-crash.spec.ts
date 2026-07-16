@@ -54,7 +54,7 @@ test('code pane reopened after an ignore survives the rescan that prunes its iss
   await page.getByTestId('review-preview').click();
 
   // Ignoring an enumMember inserts an @public JSDoc tag directly into the
-  // source file (see src/fix/compiler.ts's compileIgnorePlan enumMembers
+  // source file (see src/ignore/compile.ts's compileIgnorePlan enumMembers
   // case) rather than editing the knip config.
   const diff = page.getByTestId('diff-view-src/used.ts');
   await expect(diff).toBeVisible({ timeout: 10_000 });

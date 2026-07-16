@@ -9,7 +9,7 @@
 // rendering is verified live (Plan 3's Global Constraints keep heavy
 // rendering tests out of this vitest run).
 import type { FixMode, Issue } from '../../../src/core/types.js';
-import type { PlanItem } from '../../../src/fix/compiler.js';
+import type { PlanItem } from '../../../src/fix/plan.js';
 import type { PatchResult } from '../../../src/fix/patch.js';
 import { summaryByType } from '../state/selection.js';
 
