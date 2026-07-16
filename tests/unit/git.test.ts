@@ -375,4 +375,39 @@ describe('gitCommitPaths', () => {
 
     await expect(gitCommitPaths(dir, ['../outside.txt'], 'escape attempt')).rejects.toBeInstanceOf(GitError);
   });
+
+  it('commits thousands of paths in one call (stdin pathspecs — no ARG_MAX exposure, #37)', async () => {
+    const dir = await makeTmpDir('knip-gui-git-many-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'base.txt'), 'base', 'utf8');
+    await commitAll(dir, 'initial');
+
+    // Long-ish names so the equivalent argv form would measure in the
+    // hundreds of KB — the regime where a single argv exec gets risky.
+    const paths: string[] = [];
+    for (let i = 0; i < 2500; i++) paths.push(`some/deeply/nested-path-segment/file-number-${String(i).padStart(5, '0')}.txt`);
+    await mkdir(join(dir, 'some/deeply/nested-path-segment'), { recursive: true });
+    await Promise.all(paths.map((p) => writeFile(join(dir, p), 'x', 'utf8')));
+
+    const result = await gitCommitPaths(dir, paths, 'bulk commit');
+    expect(result.sha).toMatch(/^[0-9a-f]{40}$/);
+    const { stdout } = await git(dir, ['show', '--name-only', '--pretty=format:', 'HEAD']);
+    expect(stdout.split('\n').filter(Boolean)).toHaveLength(2500);
+    const after = await gitStatus(dir);
+    expect(after.dirty).toBe(false);
+  });
+
+  it('round-trips a filename containing a newline (NUL-separated stdin pathspecs)', async () => {
+    const dir = await makeTmpDir('knip-gui-git-newline-');
+    await initRepo(dir);
+    await writeFile(join(dir, 'base.txt'), 'base', 'utf8');
+    await commitAll(dir, 'initial');
+
+    const weird = 'weird\nname.txt';
+    await writeFile(join(dir, weird), 'newline in name', 'utf8');
+    const result = await gitCommitPaths(dir, [weird], 'commit newline file');
+    expect(result.sha).toMatch(/^[0-9a-f]{40}$/);
+    const after = await gitStatus(dir);
+    expect(after.dirty).toBe(false);
+  });
 });

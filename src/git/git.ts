@@ -19,9 +19,13 @@ export interface GitStatus {
   dirtyFiles?: string[];
 }
 
-function execGit(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+function execGit(
+  cwd: string,
+  args: string[],
+  opts: { stdin?: string } = {},
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, reject) => {
-    execFile('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const child = execFile('git', args, { cwd, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       const exitCode = (error as NodeJS.ErrnoException & { code?: number | string })?.code;
       if (error && typeof exitCode !== 'number') {
         return reject(new GitError(String(error.message), { stderr, code: 'spawn-failed' }));
@@ -41,6 +45,12 @@ function execGit(cwd: string, args: string[]): Promise<{ stdout: string; stderr:
       }
       resolvePromise({ stdout, stderr });
     });
+    if (opts.stdin !== undefined) {
+      // If git exits before draining stdin, the write EPIPEs — swallow it;
+      // the exit-code branch above reports the real failure.
+      child.stdin?.on('error', () => {});
+      child.stdin?.end(opts.stdin);
+    }
   });
 }
 
@@ -190,9 +200,10 @@ export async function gitCommitPaths(
     throw new GitError('no paths given to commit', { code: 'empty-paths' });
   }
   const root = await realpath(resolve(projectDir));
-  for (const p of paths) {
-    await assertContained(root, p);
-  }
+  // Independent per-path checks — realpath walks, no shared state — so run
+  // them concurrently instead of one await per path (#37). Promise.all
+  // rejects with the first GitError, same observable contract as the loop.
+  await Promise.all(paths.map((p) => assertContained(root, p)));
 
   // The commit itself is pathspec-scoped (`git commit -m <msg> -- <paths>`),
   // NOT a bare `git commit`: a bare commit commits the ENTIRE index, so
@@ -213,10 +224,17 @@ export async function gitCommitPaths(
   // passes strings like `:/` (repo-root magic), `:(top)`, or a bare `*` that git then
   // expands to widen the commit past the requested files — defeating the scoping this
   // function exists to guarantee. A literal path that isn't a real file simply fails
-  // to match instead of escaping scope.
-  const specs = paths.map((p) => `:(literal)${p}`);
-  await execGit(projectDir, ['add', '--', ...specs]);
-  await execGit(projectDir, ['commit', '-m', message, '--', ...specs]);
+  // to match instead of escaping scope. Pathspecs travel over stdin
+  // (--pathspec-from-file=- --pathspec-file-nul, git >= 2.25) rather than argv: a
+  // single commit's pathspec cannot be chunked across invocations, and ~10k paths as
+  // argv brushes ARG_MAX (1MB on macOS including env). NUL separation keeps every
+  // byte of a path literal — spaces, quotes, even newlines. Pathspec magic still
+  // applies to stdin entries, so :(literal) keeps doing the scope-guarantee work
+  // described above.
+  const specsNul = paths.map((p) => `:(literal)${p}`).join('\0');
+  const pathspecArgs = ['--pathspec-from-file=-', '--pathspec-file-nul'];
+  await execGit(projectDir, ['add', ...pathspecArgs], { stdin: specsNul });
+  await execGit(projectDir, ['commit', '-m', message, ...pathspecArgs], { stdin: specsNul });
   const { stdout } = await execGit(projectDir, ['rev-parse', 'HEAD']);
   return { sha: stdout.trim() };
 }
