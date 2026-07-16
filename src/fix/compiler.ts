@@ -1,14 +1,23 @@
 import { join, resolve } from 'node:path';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { FixMode, Issue } from '../core/types.js';
 import { renderDiff } from './diff.js';
 import { hashContent, type FilePatch } from './patch.js';
-import { newPlanId, readFileOrNull, type FixPlan, type PlanItem } from './plan.js';
-import { deleteDeclaration } from './transforms/delete-declaration.js';
+import { chainTextEdits, newPlanId, readFileOrNull, type FixPlan, type PlanItem } from './plan.js';
+import { deleteDeclarationBatch } from './transforms/delete-declaration.js';
 import { removeDependency, type PackageJsonIssueType } from './transforms/package-json.js';
-import { removeDuplicate } from './transforms/remove-duplicate.js';
-import { removeMember } from './transforms/remove-member.js';
-import type { TransformInput, TransformResult } from './transforms/source.js';
-import { stripExport } from './transforms/strip-export.js';
+import { removeDuplicateBatch } from './transforms/remove-duplicate.js';
+import { removeMemberBatch } from './transforms/remove-member.js';
+import {
+  applyEdits,
+  parseSource,
+  type BatchOpResult,
+  type ParsedSource,
+  type SourceBatchResult,
+  type SourceEdit,
+  type SourceOp,
+} from './transforms/source.js';
+import { stripExportBatch } from './transforms/strip-export.js';
 
 export interface FixSelection {
   issueIds: string[];
@@ -17,82 +26,103 @@ export interface FixSelection {
 
 // --- fix plan ---
 
-interface SourceOp {
+const CONFLICT_REASON = 'conflicts with another selected fix in the same statement';
+
+// Fixed processing order = the determinism guarantee of the conflict rule.
+const SOURCE_MODE_ORDER = ['strip-export', 'delete-declaration', 'remove-duplicate', 'remove-member'] as const;
+type SourceMode = (typeof SOURCE_MODE_ORDER)[number];
+
+const BATCH_BY_MODE: Record<
+  SourceMode,
+  (parsed: ParsedSource, content: string, ops: readonly SourceOp[]) => SourceBatchResult
+> = {
+  'strip-export': stripExportBatch,
+  'delete-declaration': deleteDeclarationBatch,
+  'remove-duplicate': removeDuplicateBatch,
+  'remove-member': removeMemberBatch,
+};
+
+interface CompilerSourceOp extends SourceOp {
   issueId: string;
-  mode: FixMode;
-  symbol: string;
-  pos?: number;
-  parentSymbol?: string;
+  mode: SourceMode;
 }
 
-function runSourceTransform(mode: FixMode, input: TransformInput, parentSymbol?: string): TransformResult {
-  switch (mode) {
-    case 'strip-export':
-      return stripExport(input);
-    case 'delete-declaration':
-      return deleteDeclaration(input);
-    case 'remove-duplicate':
-      return removeDuplicate(input);
-    case 'remove-member':
-      if (parentSymbol === undefined) {
-        return { ok: false, reason: 'remove-member requires a parentSymbol' };
-      }
-      return removeMember({ ...input, parentSymbol });
-    default:
-      // 'delete-file' and 'remove-dependency' are handled by dedicated code
-      // paths in compileFixPlan and never reach this dispatcher.
-      return { ok: false, reason: `unsupported fix mode '${mode}'` };
-  }
+// Half-open [start,end): touching ranges do NOT overlap — adjacent
+// list-item removals from one coordinated batch legitimately touch.
+function overlapsAny(edit: SourceEdit, accepted: readonly SourceEdit[]): boolean {
+  return accepted.some((a) => a.start < edit.end && edit.start < a.end);
 }
 
-// Runs a file's queued source-transform ops in descending-pos order, threading
-// content from one transform to the next: transform 1 runs on the original
-// content, transform 2 on transform 1's output, etc. Only the FIRST transform
-// in the whole sequence is given `pos` — the content it operates on is still
-// byte-identical to what knip measured `pos` against. Every later transform's
-// target has potentially shifted, so it is re-located by `symbol` name alone
-// (every transform module already supports symbol-only lookup for this reason).
-// A transform failure does not abort the chain: it's recorded against that
-// op's issueId and the chain continues from the last successfully-produced
-// content. Multiple ops can share one issueId (a `duplicates` issue explodes
-// into one op per alias in `duplicateMembers[1..]`) — the final item for that
-// issueId is ok:true only if ALL of its ops succeeded.
-function runSourceChain(
+// Compiles ALL of one file's source ops against ONE parse: group by mode
+// (fixed order), run each mode's batch function, merge edits under the
+// conflict rule, apply once. Every op locates against the ORIGINAL
+// content with its own `pos` — no op-to-op content threading.
+function compileSourceFile(
   filePath: string,
-  contentBefore: string,
-  ops: SourceOp[],
+  content: string,
+  ops: CompilerSourceOp[],
 ): { content: string; changed: boolean; items: PlanItem[] } {
-  const sorted = [...ops].sort((a, b) => (b.pos ?? -1) - (a.pos ?? -1));
-  const resultsByIssue = new Map<string, TransformResult[]>();
-  let current = contentBefore;
-  let changed = false;
+  const parsed = parseSource(filePath, content);
+  const acceptedEdits: SourceEdit[] = [];
+  const resultsByIssue = new Map<string, BatchOpResult[]>();
 
-  sorted.forEach((op, idx) => {
-    const input: TransformInput = {
-      filePath,
-      content: current,
-      symbol: op.symbol,
-      pos: idx === 0 ? op.pos : undefined,
-    };
-    const result = runSourceTransform(op.mode, input, op.parentSymbol);
-    if (result.ok) {
-      current = result.newContent;
-      changed = true;
+  for (const mode of SOURCE_MODE_ORDER) {
+    const modeOps = ops.filter((op) => op.mode === mode);
+    if (modeOps.length === 0) continue;
+    const { results, edits } = BATCH_BY_MODE[mode](parsed, content, modeOps);
+
+    // Conflict rule: an edit overlapping an already-accepted edit (from
+    // an earlier mode) fails every op that produced it...
+    const failed = new Set<number>();
+    for (const edit of edits) {
+      if (overlapsAny(edit, acceptedEdits)) for (const owner of edit.owners) failed.add(owner);
     }
-    const list = resultsByIssue.get(op.issueId) ?? [];
-    list.push(result);
-    resultsByIssue.set(op.issueId, list);
-  });
+    // ...and a failed op's OTHER edits are dropped too. Dropping a shared
+    // (multi-owner) edit would leave its co-owners half-applied, so the
+    // failure propagates across shared edits to a fixpoint.
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const edit of edits) {
+        if (!edit.owners.some((owner) => failed.has(owner))) continue;
+        for (const owner of edit.owners) {
+          if (!failed.has(owner)) {
+            failed.add(owner);
+            grew = true;
+          }
+        }
+      }
+    }
 
+    modeOps.forEach((op, i) => {
+      const result = results[i]!;
+      // A locate failure keeps its own reason; only ok ops downgraded by
+      // the conflict rule get the conflict reason.
+      const finalResult: BatchOpResult =
+        result.ok && failed.has(i) ? { ok: false, reason: CONFLICT_REASON } : result;
+      const list = resultsByIssue.get(op.issueId) ?? [];
+      list.push(finalResult);
+      resultsByIssue.set(op.issueId, list);
+    });
+    for (const edit of edits) {
+      if (!edit.owners.some((owner) => failed.has(owner))) acceptedEdits.push(edit);
+    }
+  }
+
+  // Multiple ops can share one issueId (a `duplicates` issue explodes into
+  // one op per alias) — the issue is ok:true only if ALL its ops succeeded.
   const items: PlanItem[] = [];
   for (const [issueId, results] of resultsByIssue) {
-    const failed = results.find((r): r is { ok: false; reason: string } => !r.ok);
+    const failedResult = results.find((r): r is { ok: false; reason: string } => !r.ok);
     items.push(
-      failed ? { issueId, ok: false, reason: failed.reason, filePath } : { issueId, ok: true, filePath },
+      failedResult
+        ? { issueId, ok: false, reason: failedResult.reason, filePath }
+        : { issueId, ok: true, filePath },
     );
   }
 
-  return { content: current, changed, items };
+  const newContent = acceptedEdits.length > 0 ? applyEdits(content, acceptedEdits) : content;
+  return { content: newContent, changed: newContent !== content, items };
 }
 
 export async function compileFixPlan(
@@ -105,7 +135,7 @@ export async function compileFixPlan(
   const patches: FilePatch[] = [];
   const diffs: { filePath: string; diff: string }[] = [];
 
-  const sourceOpsByFile = new Map<string, SourceOp[]>();
+  const sourceOpsByFile = new Map<string, CompilerSourceOp[]>();
   const deleteFileIssuesByFile = new Map<string, string[]>();
   interface DepOp {
     issueId: string;
@@ -158,14 +188,20 @@ export async function compileFixPlan(
         continue;
       }
       const list = sourceOpsByFile.get(issue.filePath) ?? [];
-      for (const m of members) list.push({ issueId, mode, symbol: m.symbol, pos: m.pos });
+      for (const m of members) list.push({ issueId, mode: mode as SourceMode, symbol: m.symbol, pos: m.pos });
       sourceOpsByFile.set(issue.filePath, list);
       continue;
     }
 
     // strip-export | delete-declaration | remove-member
     const list = sourceOpsByFile.get(issue.filePath) ?? [];
-    list.push({ issueId, mode, symbol: issue.symbol!, pos: issue.pos, parentSymbol: issue.parentSymbol });
+    list.push({
+      issueId,
+      mode: mode as SourceMode,
+      symbol: issue.symbol!,
+      pos: issue.pos,
+      parentSymbol: issue.parentSymbol,
+    });
     sourceOpsByFile.set(issue.filePath, list);
   }
 
@@ -191,18 +227,25 @@ export async function compileFixPlan(
     for (const id of fileIssueIds) items.push({ issueId: id, ok: true, filePath });
   }
 
-  for (const [filePath, ops] of sourceOpsByFile) {
-    const abs = resolve(projectDir, filePath);
-    const contentBefore = await readFileOrNull(abs);
+  const sourceEntries = [...sourceOpsByFile];
+  const sourceContents = await Promise.all(
+    sourceEntries.map(([filePath]) => readFileOrNull(resolve(projectDir, filePath))),
+  );
+  for (let fileIndex = 0; fileIndex < sourceEntries.length; fileIndex++) {
+    const [filePath, ops] = sourceEntries[fileIndex]!;
+    const contentBefore = sourceContents[fileIndex]!;
     if (contentBefore === null) {
       for (const id of new Set(ops.map((op) => op.issueId))) {
         items.push({ issueId: id, ok: false, reason: 'file-not-found', filePath });
       }
       continue;
     }
+    // Parsing + applying is synchronous per file; yield between files so a
+    // "select all" over many files can't stall the event loop.
+    if (fileIndex > 0) await yieldToEventLoop();
 
-    const { content, changed, items: chainItems } = runSourceChain(filePath, contentBefore, ops);
-    items.push(...chainItems);
+    const { content, changed, items: fileItems } = compileSourceFile(filePath, contentBefore, ops);
+    items.push(...fileItems);
 
     if (changed) {
       const patch: FilePatch = { filePath, kind: 'modify', hashBefore: hashContent(contentBefore), contentAfter: content };
@@ -219,18 +262,17 @@ export async function compileFixPlan(
       continue;
     }
 
-    let current = contentBefore;
-    let changed = false;
-    for (const op of ops) {
-      const result = removeDependency(current, op.depName, op.issueType);
-      if (result.ok) {
-        if (result.newContent !== current) changed = true;
-        current = result.newContent;
-        items.push({ issueId: op.issueId, ok: true, filePath: pkgPath });
-      } else {
-        items.push({ issueId: op.issueId, ok: false, reason: result.reason, filePath: pkgPath });
-      }
-    }
+    const { content: current, changed, results } = chainTextEdits(contentBefore, ops, (text, op) =>
+      removeDependency(text, op.depName, op.issueType),
+    );
+    ops.forEach((op, i) => {
+      const result = results[i]!;
+      items.push(
+        result.ok
+          ? { issueId: op.issueId, ok: true, filePath: pkgPath }
+          : { issueId: op.issueId, ok: false, reason: result.reason, filePath: pkgPath },
+      );
+    });
 
     if (changed) {
       const patch: FilePatch = { filePath: pkgPath, kind: 'modify', hashBefore: hashContent(contentBefore), contentAfter: current };

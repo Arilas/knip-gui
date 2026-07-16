@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { IGNORABLE_ISSUE_TYPES, type Issue } from '../core/types.js';
 import { renderDiff } from '../fix/diff.js';
 import { hashContent, type FilePatch } from '../fix/patch.js';
-import { newPlanId, readFileOrNull, type FixPlan, type PlanItem } from '../fix/plan.js';
-import type { TransformInput } from '../fix/transforms/source.js';
+import { chainTextEdits, newPlanId, readFileOrNull, type FixPlan, type PlanItem } from '../fix/plan.js';
+import { applyEdits, parseSource, type BatchOpResult } from '../fix/transforms/source.js';
 import {
   addIgnores,
   findKnipConfig,
@@ -13,7 +14,7 @@ import {
   type IgnoreEntry,
   type KnipConfigKind,
 } from './config-writer.js';
-import { insertMemberPublicTag, insertPublicTag } from './public-tag.js';
+import { insertMemberPublicTagBatch, insertPublicTagBatch } from './public-tag.js';
 
 // --- ignore plan ---
 
@@ -121,22 +122,21 @@ export async function compileIgnorePlan(
       const abs = config.path!;
       const relPath = relative(projectDir, abs);
       const contentBefore = await readFile(abs, 'utf8');
-      let current = contentBefore;
-      let changed = false;
       // Applied one edit at a time (rather than one addIgnores call with the
       // whole batch) so a single bad edit — e.g. a workspace's `ignore` key
       // already holding a non-array value — fails only its own issue and
       // doesn't discard edits that already succeeded earlier in the batch.
-      for (const { issueId, edit } of configEdits) {
-        const result = addIgnores(current, configKind, [edit]);
-        if (result.ok) {
-          if (result.newContent !== current) changed = true;
-          current = result.newContent;
-          items.push({ issueId, ok: true, filePath: relPath });
-        } else {
-          items.push({ issueId, ok: false, reason: result.reason, filePath: relPath });
-        }
-      }
+      const { content: current, changed, results } = chainTextEdits(contentBefore, configEdits, (text, { edit }) =>
+        addIgnores(text, configKind, [edit]),
+      );
+      configEdits.forEach(({ issueId }, i) => {
+        const result = results[i]!;
+        items.push(
+          result.ok
+            ? { issueId, ok: true, filePath: relPath }
+            : { issueId, ok: false, reason: result.reason, filePath: relPath },
+        );
+      });
       if (changed) {
         const patch: FilePatch = { filePath: relPath, kind: 'modify', hashBefore: hashContent(contentBefore), contentAfter: current };
         patches.push(patch);
@@ -145,38 +145,45 @@ export async function compileIgnorePlan(
     }
   }
 
-  for (const [filePath, ops] of tagOpsByFile) {
-    const abs = resolve(projectDir, filePath);
-    const contentBefore = await readFileOrNull(abs);
+  const tagEntries = [...tagOpsByFile];
+  const tagContents = await Promise.all(
+    tagEntries.map(([filePath]) => readFileOrNull(resolve(projectDir, filePath))),
+  );
+  for (let fileIndex = 0; fileIndex < tagEntries.length; fileIndex++) {
+    const [filePath, ops] = tagEntries[fileIndex]!;
+    const contentBefore = tagContents[fileIndex]!;
     if (contentBefore === null) {
       for (const op of ops) items.push({ issueId: op.issueId, ok: false, reason: 'file-not-found', filePath });
       continue;
     }
+    if (fileIndex > 0) await yieldToEventLoop();
 
-    const sorted = [...ops].sort((a, b) => (b.pos ?? -1) - (a.pos ?? -1));
-    let current = contentBefore;
-    let changed = false;
-    sorted.forEach((op, idx) => {
-      const input: TransformInput = {
-        filePath,
-        content: current,
-        symbol: op.symbol,
-        pos: idx === 0 ? op.pos : undefined,
-      };
-      const result = op.parentSymbol !== undefined
-        ? insertMemberPublicTag({ ...input, parentSymbol: op.parentSymbol })
-        : insertPublicTag(input);
-      if (result.ok) {
-        if (result.newContent !== current) changed = true;
-        current = result.newContent;
-        items.push({ issueId: op.issueId, ok: true, filePath });
-      } else {
-        items.push({ issueId: op.issueId, ok: false, reason: result.reason, filePath });
-      }
+    // ONE parse per file; member ops and top-level ops run as two batches
+    // against it. Tag plans contain only insertions, which never conflict.
+    const parsed = parseSource(filePath, contentBefore);
+    const memberIndexes: number[] = [];
+    const topIndexes: number[] = [];
+    ops.forEach((op, i) => (op.parentSymbol !== undefined ? memberIndexes : topIndexes).push(i));
+    const memberOut = insertMemberPublicTagBatch(parsed, contentBefore, memberIndexes.map((i) => ops[i]!));
+    const topOut = insertPublicTagBatch(parsed, contentBefore, topIndexes.map((i) => ops[i]!));
+
+    const resultByOp = new Array<BatchOpResult>(ops.length);
+    memberIndexes.forEach((original, j) => { resultByOp[original] = memberOut.results[j]!; });
+    topIndexes.forEach((original, j) => { resultByOp[original] = topOut.results[j]!; });
+
+    const edits = [...memberOut.edits, ...topOut.edits];
+    const newContent = edits.length > 0 ? applyEdits(contentBefore, edits) : contentBefore;
+    ops.forEach((op, i) => {
+      const result = resultByOp[i]!;
+      items.push(
+        result.ok
+          ? { issueId: op.issueId, ok: true, filePath }
+          : { issueId: op.issueId, ok: false, reason: result.reason, filePath },
+      );
     });
 
-    if (changed) {
-      const patch: FilePatch = { filePath, kind: 'modify', hashBefore: hashContent(contentBefore), contentAfter: current };
+    if (newContent !== contentBefore) {
+      const patch: FilePatch = { filePath, kind: 'modify', hashBefore: hashContent(contentBefore), contentAfter: newContent };
       patches.push(patch);
       diffs.push({ filePath, diff: renderDiff(patch, contentBefore) });
     }
