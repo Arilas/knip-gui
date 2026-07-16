@@ -39,35 +39,74 @@ function performRescan(
   });
 }
 
-// Fire-and-forget rescan after a fix/ignore apply, mirroring the CLI's
-// fire-and-forget initial scan (src/cli.ts) and respecting the shared busy latch:
-// if a scan, sweep, or another apply is already in flight, this is a no-op (the
-// in-flight op's own result — or its own subsequent rescan — will stand) and the
-// route reports rescanning:false. In practice, from its single call site in
-// applyPlanHandler below (shared by all three apply routes), that branch can't
-// fire: the handler releases its own op's latch and calls this synchronously in
-// the same tick (no intervening await), so nothing else can have grabbed the latch
-// by the time tryBeginOp('scan') here runs. Kept as a real guard anyway rather
-// than an assert, since it's cheap insurance against a future caller that isn't
-// as careful about the gap.
-// Exported for routes-ignores.ts's remove/apply route, which needs the exact
-// same latch behavior after applying a remove-ignores patch — reused rather
-// than duplicated.
+// Fire-and-forget rescan chain after a fix/ignore apply (#33). Unlike the
+// pre-#33 version, this does NOT take the shared busy latch: holding
+// tryBeginOp('scan') through a 60–120s monorepo rescan made every
+// subsequent apply 409 behind it. Instead the chain runs under the store's
+// rescanActive flag; an apply landing mid-chain sets rescanQueued and gets
+// exactly one corrective follow-up iteration (see runRescanChain).
+// Scan/sweep routes 409 while the chain runs (their guards check
+// rescanActive) because a stale chain landing could clobber their fresh
+// results and they have no follow-up mechanism to correct it.
+// Exported for routes-ignores.ts via applyPlanHandler, same as before.
 export function triggerBackgroundRescan(ctx: FixRoutesCtx): boolean {
-  if (!ctx.store.tryBeginOp('scan')) return false;
-  ctx.store.setScanning();
-  // Fire-and-forget: nothing awaits this, so the latch can only be released from
-  // inside the promise chain itself, not a surrounding try/finally.
-  void performRescan(ctx).finally(() => ctx.store.endOp());
+  const { store } = ctx;
+  if (store.rescanActive) {
+    // Coalesce: the running chain observes this once its current iteration
+    // lands and runs ONE corrective follow-up over the final disk state.
+    store.rescanQueued = true;
+    return true;
+  }
+  // Cheap insurance, same spirit as the tryBeginOp('scan') guard this
+  // replaces: from applyPlanHandler this can't fire (the handler released
+  // its own op synchronously in the same tick, and nothing else can have
+  // claimed the latch with no await in the gap), but a future caller
+  // arriving while a sweep or manual scan holds the latch must not start a
+  // chain that races it.
+  if (store.activeOp) return false;
+  store.rescanActive = true;
+  // Synchronous with the apply that triggered us: the apply's HTTP response
+  // is sent after this returns, so a client polling right after an apply
+  // always observes 'scanning' (codepane-crash.spec.ts pins exactly this).
+  store.setScanning();
+  void runRescanChain(ctx);
   return true;
+}
+
+// The chain loop. Queued-follow-up was chosen over abort-and-restart
+// (store.activeAbort) deliberately: no abort-vs-failure classification in
+// runScanIntoStore, no latch-ownership transfer out of a preempted finally,
+// no killed-child semantics — the price is one doomed iteration's remaining
+// runtime before the corrective one, paid only when applies actually
+// overlap a rescan.
+//
+// Status is never observably wrong mid-chain: between an iteration's own
+// setReady/setError (inside runScanIntoStore) and the loop's next
+// setScanning there are only synchronous frames and already-resolved-
+// promise await resumptions — pure microtasks, which Node drains before
+// any macrotask, and an incoming HTTP request is a macrotask. Observers
+// therefore see 'scanning' continuously from the first apply until the
+// FINAL landing.
+async function runRescanChain(ctx: FixRoutesCtx): Promise<void> {
+  const { store } = ctx;
+  try {
+    do {
+      store.rescanQueued = false;
+      store.setScanning();
+      await performRescan(ctx);
+    } while (store.rescanQueued);
+  } finally {
+    store.rescanActive = false;
+  }
 }
 
 // The one apply handler all three plan-consuming routes share (#41): latch →
 // planStore.take → applyPatches → endOp → triggerBackgroundRescan. The latch
 // invariants live HERE, once: no await between tryBeginOp and acting on it,
 // and endOp() released synchronously with no await before
-// triggerBackgroundRescan's own tryBeginOp('scan') — nothing can slip into
-// that gap. Exported for routes-ignores.ts.
+// triggerBackgroundRescan — so nothing can claim the latch in the gap, which
+// is what lets triggerBackgroundRescan treat a held activeOp as "a caller
+// other than us" (see its insurance guard). Exported for routes-ignores.ts.
 export function applyPlanHandler(ctx: FixRoutesCtx, op: BusyOp) {
   return async (c: Context) => {
     const { store, planStore, projectDir } = ctx;
@@ -144,6 +183,14 @@ export function registerFixRoutes(app: Hono, ctx: FixRoutesCtx): void {
     // the sweep child itself) — the sweep and its rescan are one operation, so a
     // scan or apply request arriving mid-rescan must still see 'sweep' as the
     // blocking op, not slip in once the sweep child exits.
+    // #33: the background rescan chain doesn't hold the shared latch, but a
+    // sweep rewriting files under a chain iteration's knip read — and the
+    // stale chain landing then clobbering the sweep's own awaited rescan
+    // result — is exactly the race the latch used to prevent. Same 409 wire
+    // shape the latch-holding rescan produced.
+    if (store.rescanActive) {
+      return c.json({ error: `${BUSY_OP_LABELS.scan} in progress`, op: 'scan' }, 409);
+    }
     if (!store.tryBeginOp('sweep')) {
       return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
     }

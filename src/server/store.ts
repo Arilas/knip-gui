@@ -65,8 +65,34 @@ export class ReportStore {
    * instead of each inventing its own local flag — a sweep rewriting files and a
    * fix apply rewriting files at the same time is a data race regardless of which
    * two ops collide, so one latch has to cover all of them, not one per route.
+   * The one deliberate exception is the post-apply background rescan chain,
+   * which reads (never writes) the project and coordinates through
+   * rescanActive/rescanQueued below instead — see their comments for why
+   * that is safe for applies and why scan/sweep still block on it.
    */
   activeOp?: BusyOp;
+  /**
+   * True while the post-apply background rescan chain is running (#33). The
+   * chain deliberately does NOT hold `activeOp` — that is the entire fix:
+   * applies (fast, disk-write-bounded, still individually latched via their
+   * own op) no longer serialize behind a full knip scan. The cost is that an
+   * iteration overlapped by an apply may land a stale (or torn-read error)
+   * result; `rescanQueued` guarantees a corrective follow-up lands afterwards,
+   * and no HTTP observer can catch the intermediate landing (the chain flips
+   * status back to 'scanning' within the same microtask turn — see
+   * runRescanChain in routes-fix.ts). Scan and sweep have NO corrective
+   * mechanism — a stale chain landing could clobber their fresh results — so
+   * their routes 409 while this is true, reported as op 'scan', exactly the
+   * wire shape the old latch-holding rescan produced.
+   */
+  rescanActive = false;
+  /**
+   * Set by triggerBackgroundRescan when an apply lands while `rescanActive`;
+   * consumed (once) by the chain loop to run one follow-up rescan. A boolean,
+   * not a counter: N applies overlapping one iteration need exactly ONE
+   * corrective rescan of the final on-disk state.
+   */
+  rescanQueued = false;
 
   /**
    * Synchronous check-and-set. Returns false without mutating state if another op

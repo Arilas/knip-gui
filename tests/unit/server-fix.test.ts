@@ -593,3 +593,140 @@ describe('git routes', () => {
     expect(`${body.error} ${body.stderr ?? ''}`).toContain('nothing to commit');
   });
 });
+
+describe('#33: applies do not serialize behind background rescans', () => {
+  // Scan double whose FIRST call (the initial /api/scan) resolves
+  // immediately and whose every later call (chain iterations) blocks until
+  // released one at a time — lets a test hold a rescan "in flight".
+  function makeGatedScan() {
+    const pending: Array<() => void> = [];
+    let calls = 0;
+    return {
+      scan: async () => {
+        calls++;
+        if (calls > 1) await new Promise<void>((r) => pending.push(r));
+        return fakeRaw;
+      },
+      releaseOne: () => pending.shift()?.(),
+      get calls() { return calls; },
+      get blockedCount() { return pending.length; },
+    };
+  }
+
+  async function waitFor(cond: () => boolean): Promise<void> {
+    for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
+    expect(cond()).toBe(true);
+  }
+
+  async function makeGatedServer() {
+    const dir = await makeProject();
+    const gated = makeGatedScan();
+    const server = createServer({ projectDir: dir, scan: gated.scan });
+    const h = jsonHeaders(server.token);
+    const scanRes = await server.app.request('/api/scan', { method: 'POST', headers: h, body: '{}' });
+    expect(scanRes.status).toBe(200);
+    return { ...server, dir, h, gated };
+  }
+
+  async function makePlan(server: Awaited<ReturnType<typeof makeGatedServer>>, kind: 'fix' | 'ignore', issueType: string) {
+    const issue = server.store.report!.issues.find((i) => i.type === issueType)!;
+    const res = await server.app.request(`/api/${kind}/preview`, {
+      method: 'POST',
+      headers: server.h,
+      body: JSON.stringify({ issueIds: [issue.id] }),
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()).planId as string;
+  }
+
+  it('a second apply lands (200) while the first apply\'s rescan is in flight, and coalesces to ONE follow-up', async () => {
+    const server = await makeGatedServer();
+    // Both plans compiled up front, while the store is still 'ready'
+    // (preview-during-scanning is Task 2's change, not this one's).
+    const fixPlan = await makePlan(server, 'fix', 'exports');
+    const ignorePlan = await makePlan(server, 'ignore', 'files');
+
+    const apply1 = await server.app.request('/api/fix/apply', {
+      method: 'POST', headers: server.h, body: JSON.stringify({ planId: fixPlan }),
+    });
+    expect(apply1.status).toBe(200);
+    expect((await apply1.json()).rescanning).toBe(true);
+    // Chain iteration 1 is now blocked inside the gated scan.
+    await waitFor(() => server.gated.blockedCount === 1);
+    expect(server.store.status).toBe('scanning');
+    expect(server.store.rescanActive).toBe(true);
+
+    // THE #33 pin: pre-change this 409'd with {error:'scan in progress'}.
+    const apply2 = await server.app.request('/api/ignore/apply', {
+      method: 'POST', headers: server.h, body: JSON.stringify({ planId: ignorePlan }),
+    });
+    expect(apply2.status).toBe(200);
+    expect((await apply2.json()).rescanning).toBe(true);
+    expect(server.store.rescanQueued).toBe(true);
+
+    // Status stays 'scanning' the whole time (client polling contract).
+    const statusMid = await server.app.request('/api/status', { headers: server.h });
+    expect((await statusMid.json()).status).toBe('scanning');
+
+    server.gated.releaseOne(); // iteration 1 lands (stale) → follow-up starts
+    await waitFor(() => server.gated.blockedCount === 1);
+    server.gated.releaseOne(); // corrective iteration lands
+    await waitFor(() => server.store.status === 'ready');
+    expect(server.store.rescanActive).toBe(false);
+    // initial scan + iteration 1 + ONE corrective follow-up = 3.
+    expect(server.gated.calls).toBe(3);
+  });
+
+  it('N applies during one in-flight rescan coalesce to exactly ONE follow-up (rescanQueued is a flag, not a counter)', async () => {
+    const server = await makeGatedServer();
+    const fixPlan = await makePlan(server, 'fix', 'exports');
+    const ignorePlan = await makePlan(server, 'ignore', 'files');
+    // A second ignore plan against the same files issue — it compiles
+    // independently, and by the time it applies the knip.json it hashed has
+    // moved (the first ignore apply rewrote it), so its patch lands a
+    // per-file 'stale' result. That's fine: the latch/queue path — apply
+    // 200s, rescanQueued coalesces — is what's under test here, and a
+    // stale-result apply still triggers the rescan.
+    const ignorePlan2 = await makePlan(server, 'ignore', 'files');
+
+    await server.app.request('/api/fix/apply', {
+      method: 'POST', headers: server.h, body: JSON.stringify({ planId: fixPlan }),
+    });
+    await waitFor(() => server.gated.blockedCount === 1);
+
+    for (const planId of [ignorePlan, ignorePlan2]) {
+      const res = await server.app.request('/api/ignore/apply', {
+        method: 'POST', headers: server.h, body: JSON.stringify({ planId }),
+      });
+      expect(res.status).toBe(200);
+    }
+
+    server.gated.releaseOne();
+    await waitFor(() => server.gated.blockedCount === 1);
+    server.gated.releaseOne();
+    await waitFor(() => server.store.status === 'ready');
+    // initial + iteration 1 + ONE follow-up — not one per apply.
+    expect(server.gated.calls).toBe(3);
+  });
+
+  it('scan and sweep 409 while the chain is active, naming op "scan" (same wire shape as the old latch-holding rescan)', async () => {
+    const server = await makeGatedServer();
+    const fixPlan = await makePlan(server, 'fix', 'exports');
+    await server.app.request('/api/fix/apply', {
+      method: 'POST', headers: server.h, body: JSON.stringify({ planId: fixPlan }),
+    });
+    await waitFor(() => server.gated.blockedCount === 1);
+
+    const scanRes = await server.app.request('/api/scan', { method: 'POST', headers: server.h, body: '{}' });
+    expect(scanRes.status).toBe(409);
+    expect(await scanRes.json()).toEqual({ error: 'scan in progress', op: 'scan' });
+
+    const sweepRes = await server.app.request('/api/sweep', { method: 'POST', headers: server.h, body: '{}' });
+    expect(sweepRes.status).toBe(409);
+    expect(await sweepRes.json()).toEqual({ error: 'scan in progress', op: 'scan' });
+
+    server.gated.releaseOne();
+    await waitFor(() => server.store.status === 'ready');
+    expect(server.gated.calls).toBe(2); // no follow-up was queued
+  });
+});

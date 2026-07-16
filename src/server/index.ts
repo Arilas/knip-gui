@@ -170,6 +170,14 @@ export function createServer(opts: {
     // either — all of them mutate the project or this store. readJsonObject can't
     // throw and runScanIntoStore owns the begin/end-scan lifecycle + error
     // landing, so the only thing this route itself must guarantee is endOp().
+    // #33: a manual scan racing a background rescan chain would mean two knip
+    // children landing results in ambiguous order. Same 409 wire shape the
+    // latch-holding rescan produced; the client's Re-run control is disabled
+    // while status is 'scanning' anyway (useBusy), so this is unreachable
+    // from the UI.
+    if (store.rescanActive) {
+      return c.json({ error: `${BUSY_OP_LABELS.scan} in progress`, op: 'scan' }, 409);
+    }
     if (!store.tryBeginOp('scan')) {
       return c.json({ error: `${BUSY_OP_LABELS[store.activeOp!]} in progress`, op: store.activeOp }, 409);
     }
