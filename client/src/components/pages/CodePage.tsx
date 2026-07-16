@@ -15,7 +15,7 @@
 // disappears too. `paneCollapsed` is tracked here via the Panel's onResize
 // callback (fires on mount too, so a layout persisted as collapsed from a
 // previous session is reflected immediately) and threaded down as a prop.
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { X } from 'lucide-react';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
@@ -90,15 +90,23 @@ export function CodePage({ issues, file }: CodePageProps) {
     [issues, openFile],
   );
 
-  function onOpenFile(path: string) {
-    // Bump the nonce on EVERY explicit open, even re-clicking the already-open
-    // row: the router won't re-render on a navigation to an identical URL, so
-    // the nonce (a store write) is what re-fires CodePane's scroll/pulse. `ws`
-    // rides along via retainSearchParams; other search params are untouched.
-    bumpOpenFileNonce();
-    navigate({ to: '/code', search: (prev) => ({ ...prev, file: path }) });
-    codePanelRef.current?.expand();
-  }
+  // useCallback (#35): threaded through TreeView into every memo'd
+  // TreeNodeRow (and TreeView's own Enter-key handler) — a fresh closure per
+  // CodePage render would defeat the row memo. All three deps are stable:
+  // bumpOpenFileNonce is a zustand action, navigate is TanStack Router's
+  // stable navigate function, codePanelRef is a ref object.
+  const onOpenFile = useCallback(
+    (path: string) => {
+      // Bump the nonce on EVERY explicit open, even re-clicking the already-open
+      // row: the router won't re-render on a navigation to an identical URL, so
+      // the nonce (a store write) is what re-fires CodePane's scroll/pulse. `ws`
+      // rides along via retainSearchParams; other search params are untouched.
+      bumpOpenFileNonce();
+      navigate({ to: '/code', search: (prev) => ({ ...prev, file: path }) });
+      codePanelRef.current?.expand();
+    },
+    [bumpOpenFileNonce, navigate, codePanelRef],
+  );
 
   function closeFile() {
     navigate({ to: '/code', search: (prev) => ({ ...prev, file: undefined }) });

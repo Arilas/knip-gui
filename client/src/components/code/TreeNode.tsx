@@ -8,14 +8,12 @@
 // TreeView.tsx so the virtualization/expand-state plumbing there stays
 // readable.
 import type { ComponentType } from 'react';
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { File, FileCode2, FileJson, FileText, FlaskConical, Folder, FolderOpen } from 'lucide-react';
 import type { Issue, IssueType } from '../../../../src/core/types.js';
 import { isFixable, isIgnorable, isLikelyTestFile, typeLabel } from '../../lib/filters.js';
 import { pluralizeType } from '../../lib/pluralize.js';
 import {
-  nodeSelectionState,
-  scopedActionableIds,
   toggleNodeSelection,
   type DirNode,
   type FileNode,
@@ -42,6 +40,14 @@ export interface TreeNodeRowProps {
   onActivate: (index: number) => void;
   selected: ReadonlySet<string>;
   enabledTypes: ReadonlySet<IssueType>;
+  /**
+   * This row's tri-state, from TreeView's single buildSelectionSummaries
+   * walk (#35) — replaces the per-row nodeSelectionState call (O(subtree)
+   * per row; O(total issues) for a root-level dir row).
+   */
+  selectionState: 'none' | 'some' | 'all';
+  /** True when the row has zero enabled-type actionable ids (same walk) — replaces the per-row scopedActionableIds().length === 0 check. */
+  checkboxDisabled: boolean;
   onToggleExpand: (path: string) => void;
   onToggleIds: (ids: string[]) => void;
   onAddFileFiltered: (fileIssues: Issue[], enabled: ReadonlySet<IssueType>) => void;
@@ -263,7 +269,28 @@ export function unactionableReason(issue: Issue): string {
 const ROW_BASE =
   'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 overflow-hidden rounded-sm px-2 text-sm outline-none hover:bg-muted focus-visible:bg-muted focus-visible:ring-1 focus-visible:ring-ring';
 
-export function TreeNodeRow({
+// React.memo boundary (#35): with every prop a primitive or an
+// identity-stable reference, an arrow-key press (activeIndex change)
+// re-renders exactly the two rows whose `active` flipped instead of all
+// ~40 mounted rows, and a poll that changes nothing re-renders none.
+// Stability contract, per prop — breaking ANY of these silently defeats
+// the memo (and re-introduces per-keystroke full-window renders):
+//   row              TreeView's `rows` useMemo (changes on tree/expansion)
+//   registerRowRef   useCallback([]) in TreeView
+//   onActivate       React setState dispatcher (stable by contract)
+//   selected         selection-store set (changes on real toggles only —
+//                    a toggle re-rendering the mounted window is accepted;
+//                    ancestor tri-states legitimately change then anyway)
+//   enabledTypes     ui-store chip set (changes on chip toggles only)
+//   onToggleExpand   TreeView's useCallback'd toggleDir
+//   onToggleIds / onAddFileFiltered   zustand actions (stable)
+//   onOpenFile       CodePage's useCallback'd onOpenFile
+// Focus-follow (tree-keyboard.spec.ts) is unaffected: a memo-skipped row
+// keeps its mounted DOM node and its rowRefs registration; the rows that
+// DO re-render are exactly the ones whose tabIndex/data-active must
+// change, and moveActive's rAF chain reads rowRefs, which memoization
+// never empties.
+export const TreeNodeRow = memo(function TreeNodeRow({
   row,
   index,
   active,
@@ -271,6 +298,8 @@ export function TreeNodeRow({
   onActivate,
   selected,
   enabledTypes,
+  selectionState,
+  checkboxDisabled,
   onToggleExpand,
   onToggleIds,
   onAddFileFiltered,
@@ -308,8 +337,6 @@ export function TreeNodeRow({
 
   if (row.kind === 'dir') {
     const { node, expanded, setSize, posInSet } = row;
-    const state = nodeSelectionState(node, selected, enabledTypes);
-    const disabled = scopedActionableIds(node, enabledTypes).length === 0;
     const FolderIcon = expanded ? FolderOpen : Folder;
     return (
       <div
@@ -343,10 +370,10 @@ export function TreeNodeRow({
           <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <TriStateCheckbox
-          state={state}
-          disabled={disabled}
+          state={selectionState}
+          disabled={checkboxDisabled}
           ariaLabel={`Select all issues in ${node.path}/`}
-          title={disabled ? 'No fixable or ignorable issues in this directory' : undefined}
+          title={checkboxDisabled ? 'No fixable or ignorable issues in this directory' : undefined}
           onChange={() => handleCheckboxChange(node)}
         />
         <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
@@ -364,8 +391,6 @@ export function TreeNodeRow({
   }
 
   const { node, setSize, posInSet } = row;
-  const state = nodeSelectionState(node, selected, enabledTypes);
-  const disabled = scopedActionableIds(node, enabledTypes).length === 0;
   const FileIcon = iconForPath(node.path);
   return (
     <div
@@ -386,10 +411,10 @@ export function TreeNodeRow({
     >
       <span className="w-3 shrink-0" />
       <TriStateCheckbox
-        state={state}
-        disabled={disabled}
+        state={selectionState}
+        disabled={checkboxDisabled}
         ariaLabel={`Select issues in ${node.path}`}
-        title={disabled ? 'No fixable or ignorable issues in this file' : undefined}
+        title={checkboxDisabled ? 'No fixable or ignorable issues in this file' : undefined}
         onChange={() => handleCheckboxChange(node)}
       />
       <FileIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
@@ -399,4 +424,4 @@ export function TreeNodeRow({
       <CountBadges counts={node.counts} excludeFiles />
     </div>
   );
-}
+});

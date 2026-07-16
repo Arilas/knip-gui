@@ -47,6 +47,7 @@ import { registerCodeTreeFilterInput } from '../../lib/code-tree-focus.js';
 import { CODE_TYPES, filterIssues } from '../../lib/filters.js';
 import {
   autoExpandDepth,
+  buildSelectionSummaries,
   buildTree,
   countFiles,
   filterByScope,
@@ -243,6 +244,16 @@ export function TreeView({
     return out;
   }, [tree, expandedDirs]);
 
+  // One post-order walk for every row's tri-state + disabled flag (#35):
+  // recomputed only when the tree, the selection cart, or the enabled chips
+  // actually change — never per row, never per arrow-key render. Each row
+  // gets two primitives out of this map (see the render loop below), which
+  // is what lets React.memo(TreeNodeRow) skip rows whose state didn't move.
+  const selectionSummaries = useMemo(
+    () => buildSelectionSummaries(tree, selected, enabledTypes),
+    [tree, selected, enabledTypes],
+  );
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -318,14 +329,19 @@ export function TreeView({
   // looking at rather than an empty store set. initExpandedDirs/
   // storeToggleDir are both synchronous zustand `set` calls, so the store
   // reflects the seed before storeToggleDir reads it.
-  function toggleDir(path: string) {
-    if (!expandedDirsInitialized) initExpandedDirs(policyExpandedDirs);
-    storeToggleDir(path);
-  }
+  // useCallback (#35): passed to every memo'd TreeNodeRow as onToggleExpand —
+  // a fresh closure per render would defeat the row memo wholesale.
+  const toggleDir = useCallback(
+    (path: string) => {
+      if (!expandedDirsInitialized) initExpandedDirs(policyExpandedDirs);
+      storeToggleDir(path);
+    },
+    [expandedDirsInitialized, initExpandedDirs, policyExpandedDirs, storeToggleDir],
+  );
 
-  function expandAll() {
+  const expandAll = useCallback(() => {
     storeExpandAll(allDirPaths(tree));
-  }
+  }, [storeExpandAll, tree]);
 
   function collapseAll() {
     storeCollapseAll();
@@ -453,6 +469,10 @@ export function TreeView({
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index]!;
+              // Fallback can only fire if a row's path somehow isn't in the walk's map
+              // (it always is — both are built from the same `tree`); 'none'+disabled
+              // is the safe render for an impossible state.
+              const summary = selectionSummaries.get(row.node.path) ?? { state: 'none' as const, disabled: true };
               return (
                 <div
                   key={rowKey(row)}
@@ -473,6 +493,8 @@ export function TreeView({
                     onActivate={setActiveIndex}
                     selected={selected}
                     enabledTypes={enabledTypes}
+                    selectionState={summary.state}
+                    checkboxDisabled={summary.disabled}
                     onToggleExpand={toggleDir}
                     onToggleIds={onToggleIds}
                     onAddFileFiltered={onAddFileFiltered}
