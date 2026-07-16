@@ -43,9 +43,11 @@ export function newPlanId(): string {
 // Chains genuinely-sequential text edits over tiny JSON documents
 // (package.json dependency removals, knip-config ignore edits), where each
 // step re-parses the current text — that per-step re-parse is fine for
-// documents this small (batching THOSE parses is #36). NOT for oxc source
-// transforms: those go through the per-mode batch functions, which see one
-// parse and original offsets.
+// documents this small (the ignore-config path is batched via
+// addIgnoresBatch since #37; package.json dependency removals in
+// fix/compiler.ts still chain here, and stay cheap at that document size).
+// NOT for oxc source transforms: those go through the per-mode batch
+// functions, which see one parse and original offsets.
 export function chainTextEdits<T>(
   contentBefore: string,
   ops: readonly T[],

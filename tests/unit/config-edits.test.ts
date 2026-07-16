@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { removeDependency } from '../../src/fix/transforms/package-json.js';
 import {
   addIgnores,
+  addIgnoresBatch,
   findKnipConfig,
   listIgnores,
   removeIgnores,
@@ -570,5 +571,79 @@ describe('listIgnores', () => {
     writeFileSync(join(dir, 'knip.json'), JSON.stringify({ ignoreDependencies: ['left-pad'] }));
     const result = await listIgnores(dir);
     expect(result.configPath).toBe('knip.json');
+  });
+});
+
+describe('addIgnoresBatch (#37: one parse, per-edit outcomes)', () => {
+  it('reports per-edit failures without discarding sibling successes (the contract addIgnores cannot offer)', () => {
+    // `ignoreDependencies` already holds a non-array → both edits targeting
+    // it fail with the same reason the sequential loop produced, while the
+    // `ignore` edit succeeds and lands in the output content.
+    const content = `{\n  "ignoreDependencies": "not-an-array"\n}\n`;
+    const { content: out, changed, results } = addIgnoresBatch(content, 'knip.json', [
+      { kind: 'ignoreDependencies', value: 'lodash' },
+      { kind: 'ignore', value: 'src/gen/**' },
+      { kind: 'ignoreDependencies', value: 'react' },
+    ]);
+    expect(results[0]).toEqual({ ok: false, reason: "expected an array at 'ignoreDependencies', found string" });
+    expect(results[1]).toEqual({ ok: true });
+    expect(results[2]).toEqual({ ok: false, reason: "expected an array at 'ignoreDependencies', found string" });
+    expect(changed).toBe(true);
+    expect(JSON.parse(out).ignore).toEqual(['src/gen/**']);
+    expect(JSON.parse(out).ignoreDependencies).toBe('not-an-array'); // untouched
+  });
+
+  it('produces the same content as sequential single-edit addIgnores calls for a mixed batch', () => {
+    const content = `{\n  "ignore": ["existing/**"]\n}\n`;
+    const edits = [
+      { kind: 'ignore' as const, value: 'a/**' },
+      { kind: 'ignoreDependencies' as const, value: 'left-pad' },
+      { kind: 'ignore' as const, value: 'a/**' }, // dedupe within batch
+      { kind: 'ignoreBinaries' as const, value: 'rimraf', workspace: 'packages/app' },
+      { kind: 'ignoreDependencies' as const, value: 'lodash' },
+    ];
+    let sequential = content;
+    for (const edit of edits) {
+      const r = addIgnores(sequential, 'knip.json', [edit]);
+      if (r.ok) sequential = r.newContent;
+    }
+    const batch = addIgnoresBatch(content, 'knip.json', edits);
+    expect(batch.results.every((r) => r.ok)).toBe(true);
+    expect(batch.content).toBe(sequential);
+  });
+
+  it('coerces a string-form root `ignore` once and appends the rest of the batch to it', () => {
+    const content = `{\n  "ignore": "solo.ts"\n}\n`;
+    const { content: out, results } = addIgnoresBatch(content, 'knip.json', [
+      { kind: 'ignore', value: 'first/**' },
+      { kind: 'ignore', value: 'second/**' },
+    ]);
+    expect(results).toEqual([{ ok: true }, { ok: true }]);
+    expect(JSON.parse(out).ignore).toEqual(['solo.ts', 'first/**', 'second/**']);
+  });
+
+  it('an all-no-op batch is a byte-exact passthrough (changed: false)', () => {
+    const content = `{\n  "ignore": ["a.ts"]\n}\n`;
+    const { content: out, changed, results } = addIgnoresBatch(content, 'knip.json', [
+      { kind: 'ignore', value: 'a.ts' },
+    ]);
+    expect(results).toEqual([{ ok: true }]);
+    expect(changed).toBe(false);
+    expect(out).toBe(content);
+  });
+
+  it('a malformed config fails EVERY edit with the line/column reason and leaves content untouched', () => {
+    const content = `{\n  "ignore": ["a.ts",\n`;
+    const { content: out, changed, results } = addIgnoresBatch(content, 'knip.json', [
+      { kind: 'ignore', value: 'b.ts' },
+      { kind: 'ignoreDependencies', value: 'x' },
+    ]);
+    expect(changed).toBe(false);
+    expect(out).toBe(content);
+    expect(results).toHaveLength(2);
+    for (const r of results) {
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/JSON syntax error at line \d+, column \d+/);
+    }
   });
 });

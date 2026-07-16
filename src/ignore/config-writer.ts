@@ -133,49 +133,104 @@ function assertParsable(content: string): { ok: true } | { ok: false; reason: st
   };
 }
 
+export type BatchEditOutcome = { ok: true } | { ok: false; reason: string };
+
+export interface AddIgnoresBatchResult {
+  /** Final content — equal to the input when nothing changed or the config itself was refused. */
+  content: string;
+  changed: boolean;
+  /** One outcome per edit, same order as the input. */
+  results: BatchEditOutcome[];
+}
+
+// Batched variant (#37): ONE assertParsable + ONE parse for the whole batch,
+// an in-memory model of each touched path's final array, and one
+// modify/applyEdits per touched PATH (bounded by workspaces × 3 kinds) —
+// versus the old per-edit convention's full re-parse per edit, O(edits ×
+// configSize²) on large ignore batches. Per-edit semantics are replayed
+// exactly: dedupe against existing values AND within the batch, knip's
+// string-form `ignore` coerced into an array seed on first touch, a
+// non-array at a target path failing every edit aimed at it (each with the
+// same reason string the sequential loop produced) without touching sibling
+// paths. Key-creation order in the emitted document matches the sequential
+// version too: paths are materialized in first-touch order.
+export function addIgnoresBatch(
+  content: string,
+  configKind: 'knip.json' | 'knip.jsonc' | 'package.json',
+  edits: IgnoreEdit[],
+): AddIgnoresBatchResult {
+  const parsable = assertParsable(content);
+  if (!parsable.ok) {
+    return { content, changed: false, results: edits.map(() => ({ ok: false, reason: parsable.reason })) };
+  }
+  const root = parse(content, undefined, VALIDATE_OPTIONS);
+  if (root === undefined) {
+    // Unreachable post-assertParsable; kept for the same belt-and-braces
+    // reason the per-edit loop kept it.
+    return { content, changed: false, results: edits.map(() => ({ ok: false, reason: 'invalid-json' })) };
+  }
+  const formattingOptions = detectFormatting(content);
+
+  type PathState =
+    | { path: (string | number)[]; values: unknown[]; dirty: boolean }
+    | { mismatch: string };
+  const states = new Map<string, PathState>();
+  const results: BatchEditOutcome[] = [];
+
+  for (const edit of edits) {
+    const path = ignorePath(configKind, edit);
+    const key = JSON.stringify(path);
+    let state = states.get(key);
+    if (state === undefined) {
+      const existing = getAtPath(root, path);
+      if (typeof existing === 'string' && edit.kind === 'ignore') {
+        // knip's own schema allows `ignore` (only `ignore`) to be a single
+        // glob string — coerce it into the array seed, mirroring the
+        // single-edit path.
+        state = { path, values: [existing], dirty: false };
+      } else if (existing !== undefined && !Array.isArray(existing)) {
+        state = { mismatch: `expected an array at '${path.join('.')}', found ${typeof existing}` };
+      } else {
+        state = { path, values: Array.isArray(existing) ? [...existing] : [], dirty: false };
+      }
+      states.set(key, state);
+    }
+    if ('mismatch' in state) {
+      results.push({ ok: false, reason: state.mismatch });
+      continue;
+    }
+    if (state.values.includes(edit.value)) {
+      results.push({ ok: true }); // already ignored — no-op
+      continue;
+    }
+    state.values.push(edit.value);
+    state.dirty = true;
+    results.push({ ok: true });
+  }
+
+  let newContent = content;
+  for (const state of states.values()) {
+    if ('mismatch' in state || !state.dirty) continue;
+    newContent = applyEdits(newContent, modify(newContent, state.path, state.values, { formattingOptions }));
+  }
+  return { content: newContent, changed: newContent !== content, results };
+}
+
 // Appends each edit's `value` to the array at its target path — creating the array
 // (and any missing intermediate objects, e.g. `workspaces['pkg']`) if absent, and
 // deduping against values already present. Uses jsonc-parser's `modify`/`applyEdits`
 // so untouched formatting (and, for `knip.jsonc`, comments) survive byte-for-byte.
+// Atomic contract, unchanged since before #37: the FIRST failing edit's reason
+// fails the whole call and no partial content is returned — callers that need
+// per-edit outcomes use addIgnoresBatch directly (compileIgnorePlan does).
 export function addIgnores(
   content: string,
   configKind: 'knip.json' | 'knip.jsonc' | 'package.json',
   edits: IgnoreEdit[],
 ): TransformResult {
-  const parsable = assertParsable(content);
-  if (!parsable.ok) return parsable;
-
-  const formattingOptions = detectFormatting(content);
-  let newContent = content;
-
-  for (const edit of edits) {
-    const path = ignorePath(configKind, edit);
-    // Same VALIDATE_OPTIONS as the up-front assertParsable check, so a config
-    // this writer already accepted as parsable is read back identically
-    // between edits (belt-and-braces: `root === undefined` here should be
-    // unreachable post-assertParsable, but costs nothing to keep).
-    const root = parse(newContent, undefined, VALIDATE_OPTIONS);
-    if (root === undefined) return { ok: false, reason: 'invalid-json' };
-    const existing = getAtPath(root, path);
-    // knip's own schema allows `ignore` (only `ignore` — not
-    // ignoreDependencies/ignoreBinaries, which are array-only) to be a single
-    // glob string instead of an array. Coerce that string into the first
-    // element of the new array rather than rejecting it as a type mismatch.
-    if (existing !== undefined && typeof existing === 'string' && edit.kind === 'ignore') {
-      if (existing === edit.value) continue; // already ignored — no-op
-      const nextValues = [existing, edit.value];
-      newContent = applyEdits(newContent, modify(newContent, path, nextValues, { formattingOptions }));
-      continue;
-    }
-    if (existing !== undefined && !Array.isArray(existing)) {
-      return { ok: false, reason: `expected an array at '${path.join('.')}', found ${typeof existing}` };
-    }
-    const values: string[] = Array.isArray(existing) ? existing : [];
-    if (values.includes(edit.value)) continue; // already ignored — no-op
-    const nextValues = [...values, edit.value];
-    newContent = applyEdits(newContent, modify(newContent, path, nextValues, { formattingOptions }));
-  }
-
+  const { content: newContent, results } = addIgnoresBatch(content, configKind, edits);
+  const firstFailure = results.find((r) => !r.ok);
+  if (firstFailure && !firstFailure.ok) return { ok: false, reason: firstFailure.reason };
   return { ok: true, newContent };
 }
 

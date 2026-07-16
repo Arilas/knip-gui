@@ -4,10 +4,10 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { IGNORABLE_ISSUE_TYPES, type Issue } from '../core/types.js';
 import { renderDiff } from '../fix/diff.js';
 import { hashContent, type FilePatch } from '../fix/patch.js';
-import { chainTextEdits, newPlanId, readFileOrNull, type FixPlan, type PlanItem } from '../fix/plan.js';
+import { newPlanId, readFileOrNull, type FixPlan, type PlanItem } from '../fix/plan.js';
 import { applyEdits, parseSource, type BatchOpResult } from '../fix/transforms/source.js';
 import {
-  addIgnores,
+  addIgnoresBatch,
   findKnipConfig,
   removeIgnores,
   type IgnoreEdit,
@@ -122,15 +122,17 @@ export async function compileIgnorePlan(
       const abs = config.path!;
       const relPath = relative(projectDir, abs);
       const contentBefore = await readFile(abs, 'utf8');
-      // Applied one edit at a time (rather than one addIgnores call with the
-      // whole batch) so a single bad edit — e.g. a workspace's `ignore` key
-      // already holding a non-array value — fails only its own issue and
-      // doesn't discard edits that already succeeded earlier in the batch.
-      // Sequential per-edit reads/parses (chainTextEdits, not a batch fn) are
-      // deliberate here too: the knip config is a tiny JSON/YAML doc, so
-      // re-parsing per op is cheap. Batching these parses is #36.
-      const { content: current, changed, results } = chainTextEdits(contentBefore, configEdits, (text, { edit }) =>
-        addIgnores(text, configKind, [edit]),
+      // ONE parse for the whole batch (#37): addIgnoresBatch models every
+      // edit against a single parsed tree and applies one text edit per
+      // touched array, while still reporting per-edit failures — a single
+      // bad edit (e.g. a workspace's `ignore` key already holding a
+      // non-array value) fails only its own issue and never discards
+      // sibling edits, exactly like the old per-edit chainTextEdits loop,
+      // minus its O(edits × configSize) re-parses.
+      const { content: current, changed, results } = addIgnoresBatch(
+        contentBefore,
+        configKind,
+        configEdits.map((e) => e.edit),
       );
       configEdits.forEach(({ issueId }, i) => {
         const result = results[i]!;
