@@ -1,15 +1,26 @@
-import MagicString from 'magic-string';
+import type {
+  ExportSite,
+  ParsedSource,
+  SourceBatchResult,
+  SourceEdit,
+  SourceOp,
+  TransformInput,
+  TransformResult,
+} from './source.js';
+import type { BatchEdit, BatchOpResult } from './source.js';
 import {
+  applySingleOp,
   expandEndWithTrailingNewline,
   expandStartWithLeadingComments,
   findExportedFunctionSites,
   findTopLevelDeclarationSpan,
   locateExport,
-  parseSource,
-  removeListItem,
-  type TransformInput,
-  type TransformResult,
+  pushEdit,
+  removeListItems,
 } from './source.js';
+
+type SpecifierSite = Extract<ExportSite, { kind: 'specifier' }>;
+type DeclarationSite = Extract<ExportSite, { kind: 'declaration' }>;
 
 // Removes the entire declaration statement (including attached leading JSDoc/comments,
 // class decorators, and the trailing newline) rather than just unexporting it:
@@ -26,47 +37,101 @@ import {
 // - `export { a, b }` list binding -> delete the local declaration (if any — a
 //   re-export has none) AND remove it from the list (emptying the list removes the
 //   whole statement, same comma-hygiene rule as stripExport).
-export function deleteDeclaration(input: TransformInput): TransformResult {
-  const { filePath, content, symbol, pos } = input;
-  const { program, comments } = parseSource(filePath, content);
-  const located = locateExport(program, symbol, pos);
-  if ('error' in located) return { ok: false, reason: located.error };
-  const site = located.site;
+export function deleteDeclarationBatch(
+  parsed: ParsedSource,
+  content: string,
+  ops: readonly SourceOp[],
+): SourceBatchResult {
+  const { program, comments } = parsed;
+  const results: BatchOpResult[] = ops.map(() => ({ ok: true }));
+  const edits: BatchEdit[] = [];
+  const sweep = (start: number, end: number): SourceEdit => ({
+    start: expandStartWithLeadingComments(content, comments, start),
+    end: expandEndWithTrailingNewline(content, end),
+  });
 
-  const s = new MagicString(content);
-  const removeWithComments = (start: number, end: number): void => {
-    const from = expandStartWithLeadingComments(content, comments, start);
-    const to = expandEndWithTrailingNewline(content, end);
-    s.remove(from, to);
-  };
+  // declaration ops on one multi-declarator statement, keyed by exportStart
+  const declaratorGroups = new Map<number, { site: DeclarationSite; declIndex: number; opIndex: number }[]>();
+  // specifier ops per export-list statement, keyed by statementStart
+  const listGroups = new Map<number, { site: SpecifierSite; opIndex: number }[]>();
 
-  if (site.kind === 'declaration') {
-    // Exported function overload set: delete every signature and the implementation,
-    // not just the located one, or the leftover statements reference a now-missing
-    // export (and fail TS2383 if any `export` survives).
-    const fnSites = findExportedFunctionSites(program, symbol);
-    if (fnSites.length > 1) {
-      for (const fn of fnSites) removeWithComments(fn.deleteStart, fn.statementEnd);
-      return { ok: true, newContent: s.toString() };
+  ops.forEach((op, opIndex) => {
+    const located = locateExport(program, op.symbol, op.pos);
+    if ('error' in located) {
+      results[opIndex] = { ok: false, reason: located.error };
+      return;
     }
-    if (site.declarators && site.declarators.length > 1 && site.declaratorIndex !== undefined) {
-      removeListItem(s, site.declarators, site.declaratorIndex);
+    const site = located.site;
+    if (site.kind === 'declaration') {
+      const fnSites = findExportedFunctionSites(program, op.symbol);
+      if (fnSites.length > 1) {
+        for (const fn of fnSites) pushEdit(edits, sweep(fn.deleteStart, fn.statementEnd), [opIndex]);
+        return;
+      }
+      if (site.declarators && site.declarators.length > 1 && site.declaratorIndex !== undefined) {
+        const group = declaratorGroups.get(site.exportStart) ?? [];
+        group.push({ site, declIndex: site.declaratorIndex, opIndex });
+        declaratorGroups.set(site.exportStart, group);
+        return;
+      }
+      pushEdit(edits, sweep(site.deleteStart, site.statementEnd), [opIndex]);
+    } else if (site.kind === 'default') {
+      pushEdit(edits, sweep(site.statementStart, site.statementEnd), [opIndex]);
     } else {
-      removeWithComments(site.deleteStart, site.statementEnd);
+      if (!site.isReexport) {
+        const localSpan = findTopLevelDeclarationSpan(program, site.localName);
+        // Two list bindings can share one local declaration
+        // (`export { f }; export { f as g };`) — pushEdit dedupes the sweep.
+        if (localSpan) pushEdit(edits, sweep(localSpan.start, localSpan.end), [opIndex]);
+      }
+      const group = listGroups.get(site.statementStart) ?? [];
+      group.push({ site, opIndex });
+      listGroups.set(site.statementStart, group);
     }
-  } else if (site.kind === 'default') {
-    removeWithComments(site.statementStart, site.statementEnd);
-  } else {
-    if (!site.isReexport) {
-      const localSpan = findTopLevelDeclarationSpan(program, site.localName);
-      if (localSpan) removeWithComments(localSpan.start, localSpan.end);
+  });
+
+  for (const group of declaratorGroups.values()) {
+    const site = group[0]!.site;
+    const declarators = site.declarators!;
+    const indexOwners = new Map<number, number[]>();
+    for (const g of group) indexOwners.set(g.declIndex, [...(indexOwners.get(g.declIndex) ?? []), g.opIndex]);
+    if (indexOwners.size === declarators.length) {
+      // Every declarator of the statement is flagged -> the whole statement
+      // goes (with attached comments), exactly like the sole-declarator path.
+      pushEdit(edits, sweep(site.deleteStart, site.statementEnd), group.map((g) => g.opIndex));
+      continue;
     }
-    if (site.specifiers.length === 1) {
-      removeWithComments(site.statementStart, site.statementEnd);
-    } else {
-      removeListItem(s, site.specifiers, site.index);
+    const indices = [...indexOwners.keys()].sort((a, b) => a - b);
+    for (const removal of removeListItems(declarators, indices)) {
+      pushEdit(
+        edits,
+        { start: removal.start, end: removal.end },
+        removal.itemIndices.flatMap((i) => indexOwners.get(i)!),
+      );
     }
   }
 
-  return { ok: true, newContent: s.toString() };
+  for (const group of listGroups.values()) {
+    const site = group[0]!.site;
+    const indexOwners = new Map<number, number[]>();
+    for (const g of group) indexOwners.set(g.site.index, [...(indexOwners.get(g.site.index) ?? []), g.opIndex]);
+    if (indexOwners.size === site.specifiers.length) {
+      pushEdit(edits, sweep(site.statementStart, site.statementEnd), group.map((g) => g.opIndex));
+      continue;
+    }
+    const indices = [...indexOwners.keys()].sort((a, b) => a - b);
+    for (const removal of removeListItems(site.specifiers, indices)) {
+      pushEdit(
+        edits,
+        { start: removal.start, end: removal.end },
+        removal.itemIndices.flatMap((i) => indexOwners.get(i)!),
+      );
+    }
+  }
+
+  return { results, edits };
+}
+
+export function deleteDeclaration(input: TransformInput): TransformResult {
+  return applySingleOp(input.filePath, input.content, { symbol: input.symbol, pos: input.pos }, deleteDeclarationBatch);
 }

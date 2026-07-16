@@ -1,13 +1,23 @@
-import MagicString from 'magic-string';
+import type {
+  ExportSite,
+  ParsedSource,
+  SourceBatchResult,
+  SourceEdit,
+  SourceOp,
+  TransformInput,
+  TransformResult,
+} from './source.js';
+import type { BatchEdit, BatchOpResult } from './source.js';
 import {
+  applySingleOp,
   expandEndWithTrailingNewline,
   expandStartWithLeadingComments,
   locateExport,
-  parseSource,
-  removeListItem,
-  type TransformInput,
-  type TransformResult,
+  pushEdit,
+  removeListItems,
 } from './source.js';
+
+type SpecifierSite = Extract<ExportSite, { kind: 'specifier' }>;
 
 // Removes ONE aliasing binding from knip's `duplicates` report — the
 // non-canonical name in a duplicate-export group (e.g. `dupeAlias` in
@@ -24,44 +34,59 @@ import {
 // `export { a as b }` never produces a `duplicates` issue in knip 6.26.0. The
 // `export { x as y }` specifier form is still handled here (per the brief)
 // since other projects/future knip versions may produce duplicates that way.
-export function removeDuplicate(input: TransformInput): TransformResult {
-  const { filePath, content, symbol, pos } = input;
-  const { program, comments } = parseSource(filePath, content);
-  const located = locateExport(program, symbol, pos);
-  if ('error' in located) return { ok: false, reason: located.error };
-  const site = located.site;
+export function removeDuplicateBatch(
+  parsed: ParsedSource,
+  content: string,
+  ops: readonly SourceOp[],
+): SourceBatchResult {
+  const { program, comments } = parsed;
+  const results: BatchOpResult[] = ops.map(() => ({ ok: true }));
+  const edits: BatchEdit[] = [];
+  const sweep = (start: number, end: number): SourceEdit => ({
+    start: expandStartWithLeadingComments(content, comments, start),
+    end: expandEndWithTrailingNewline(content, end),
+  });
+  const listGroups = new Map<number, { site: SpecifierSite; opIndex: number }[]>();
 
-  const s = new MagicString(content);
-  const removeWithComments = (start: number, end: number): void => {
-    const from = expandStartWithLeadingComments(content, comments, start);
-    const to = expandEndWithTrailingNewline(content, end);
-    s.remove(from, to);
-  };
-
-  if (site.kind === 'declaration') {
-    // `export const dupeAlias = dupeSource;` — the aliasing statement IS the
-    // duplicate; remove it whole (comments + trailing newline). Does not reuse
-    // deleteDeclaration's multi-declarator/decorator machinery: per the ground
-    // truth above, a duplicate alias is always a single, undecorated
-    // `export const`.
-    removeWithComments(site.deleteStart, site.statementEnd);
-  } else if (site.kind === 'default') {
-    // `export default dupeSource;` aliasing form — remove the whole statement;
-    // a default export has no separate local declaration to preserve.
-    removeWithComments(site.statementStart, site.statementEnd);
-  } else {
-    // `export { dupeSource as dupeAlias }` — remove ONLY the specifier
-    // (comma-hygiene; whole statement if it empties). Unlike
-    // deleteDeclaration's specifier branch, this deliberately does NOT delete
-    // `site.localName`'s declaration: for a duplicate alias, `localName` is the
-    // CANONICAL original (`dupeSource`) — the thing being kept, not the
-    // duplicate being removed.
-    if (site.specifiers.length === 1) {
-      removeWithComments(site.statementStart, site.statementEnd);
+  ops.forEach((op, opIndex) => {
+    const located = locateExport(program, op.symbol, op.pos);
+    if ('error' in located) {
+      results[opIndex] = { ok: false, reason: located.error };
+      return;
+    }
+    const site = located.site;
+    if (site.kind === 'declaration') {
+      pushEdit(edits, sweep(site.deleteStart, site.statementEnd), [opIndex]);
+    } else if (site.kind === 'default') {
+      pushEdit(edits, sweep(site.statementStart, site.statementEnd), [opIndex]);
     } else {
-      removeListItem(s, site.specifiers, site.index);
+      const group = listGroups.get(site.statementStart) ?? [];
+      group.push({ site, opIndex });
+      listGroups.set(site.statementStart, group);
+    }
+  });
+
+  for (const group of listGroups.values()) {
+    const site = group[0]!.site;
+    const indexOwners = new Map<number, number[]>();
+    for (const g of group) indexOwners.set(g.site.index, [...(indexOwners.get(g.site.index) ?? []), g.opIndex]);
+    if (indexOwners.size === site.specifiers.length) {
+      pushEdit(edits, sweep(site.statementStart, site.statementEnd), group.map((g) => g.opIndex));
+      continue;
+    }
+    const indices = [...indexOwners.keys()].sort((a, b) => a - b);
+    for (const removal of removeListItems(site.specifiers, indices)) {
+      pushEdit(
+        edits,
+        { start: removal.start, end: removal.end },
+        removal.itemIndices.flatMap((i) => indexOwners.get(i)!),
+      );
     }
   }
 
-  return { ok: true, newContent: s.toString() };
+  return { results, edits };
+}
+
+export function removeDuplicate(input: TransformInput): TransformResult {
+  return applySingleOp(input.filePath, input.content, { symbol: input.symbol, pos: input.pos }, removeDuplicateBatch);
 }
