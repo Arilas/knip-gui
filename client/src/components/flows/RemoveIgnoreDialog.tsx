@@ -154,7 +154,7 @@ export function RemoveIgnoreDialog({ entry, onOpenChange }: RemoveIgnoreDialogPr
               <p className="text-sm text-muted-foreground">No file changes to preview.</p>
             )}
             {flow.diffs.map((d) => (
-              <DiffView key={d.filePath} diff={d} />
+              <DiffView key={d.filePath} diff={d} planId={flow.planId} />
             ))}
             {flow.items.some((i) => !i.ok) && (
               <p className="rounded border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">

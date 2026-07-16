@@ -322,10 +322,9 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
   }, [flow, review.summary]);
 
   const selectedRow = railRows.find((r) => r.filePath === selectedFilePath);
-  const selectedDiff =
-    flow.status === 'previewed' || flow.status === 'applying' || flow.status === 'applied'
-      ? flow.diffs.find((d) => d.filePath === selectedFilePath)
-      : undefined;
+  const previewedFlow =
+    flow.status === 'previewed' || flow.status === 'applying' || flow.status === 'applied' ? flow : undefined;
+  const selectedDiff = previewedFlow?.diffs.find((d) => d.filePath === selectedFilePath);
 
   function renderMain() {
     if (flow.status === 'idle' || flow.status === 'previewing' || flow.status === 'failed') {
@@ -338,8 +337,8 @@ export function ReviewPage({ issues, review }: ReviewPageProps) {
     if (railRows.length === 0) {
       return <p className="p-4 text-sm text-muted-foreground">No file changes to preview.</p>;
     }
-    if (selectedDiff) {
-      return <DiffView key={selectedDiff.filePath} diff={selectedDiff} />;
+    if (selectedDiff && previewedFlow) {
+      return <DiffView key={selectedDiff.filePath} diff={selectedDiff} planId={previewedFlow.planId} />;
     }
     if (selectedRow?.status === 'compile-failed') {
       return (

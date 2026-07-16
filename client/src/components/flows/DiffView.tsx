@@ -17,14 +17,23 @@ import { Button } from '../ui/button.js';
 
 export interface DiffViewProps {
   diff: DiffEntry;
+  /**
+   * Id of the compiled plan this diff belongs to (#34 item 1, DiffView
+   * variant): the highlight query used to key on the FULL diff string,
+   * paying a JSON.stringify of it on every render of the preview step. A
+   * plan's diffs are immutable once compiled — every re-preview mints a
+   * fresh planId (src/fix/plan.ts's newPlanId) — so planId+filePath
+   * identifies the diff text exactly.
+   */
+  planId: string;
   defaultOpen?: boolean;
 }
 
-export function DiffView({ diff, defaultOpen = true }: DiffViewProps) {
+export function DiffView({ diff, planId, defaultOpen = true }: DiffViewProps) {
   const [open, setOpen] = useState(defaultOpen);
 
   const highlightQuery = useQuery({
-    queryKey: ['diff-highlight', diff.filePath, diff.diff],
+    queryKey: ['diff-highlight', planId, diff.filePath],
     queryFn: () => highlightDiff(diff.diff),
     enabled: open,
     retry: false,

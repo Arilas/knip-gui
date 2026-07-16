@@ -12,7 +12,7 @@
 // always lines up with the actual rendered line regardless of font/theme —
 // simpler than teaching a transformer to splice checkbox/badge markup (with
 // working React event handlers) into a raw HTML string.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { Issue } from '../../../../src/core/types.js';
 import { ApiError } from '../../api.js';
@@ -289,7 +289,15 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
   const lang = filePath ? langForPath(filePath) : undefined;
 
   const highlightQuery = useQuery({
-    queryKey: ['highlight', filePath, lang, content] as const,
+    // Keyed on the fetch's own timestamp, NOT the content string (#34 item 1):
+    // TanStack computes queryHash via JSON.stringify(queryKey) on EVERY
+    // render, and CodePane re-renders on every gutter-checkbox toggle,
+    // selection change, and poll landing — a 2MB content string in the key
+    // made each of those pay an O(2MB) stringify. `fileQuery.dataUpdatedAt`
+    // is bumped by react-query on every successful file fetch, so it changes
+    // exactly when `content` can have changed; `content` itself is read via
+    // closure in queryFn, which is safe under that invariant.
+    queryKey: ['highlight', filePath, lang, fileQuery.dataUpdatedAt] as const,
     queryFn: async () => {
       if (!filePath || !lang || content === undefined) {
         throw new Error('highlight query ran without a file path/language/content');
@@ -299,6 +307,14 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
     enabled: filePath !== null && lang !== undefined && content !== undefined,
     retry: false,
   });
+
+  // Memoized plain-<pre> fallback (#34 item 2): plainCodeHtml over a 2MB file
+  // is O(content) string work, and its result's IDENTITY matters — the old
+  // inline call in render returned a fresh string each time, so React rewrote
+  // the container's entire innerHTML (dangerouslySetInnerHTML diffs by string
+  // identity) and re-fired CodeBlock's marker-measuring layout effect on
+  // every checkbox toggle. undefined until content lands.
+  const plainHtml = useMemo(() => (content === undefined ? undefined : plainCodeHtml(content)), [content]);
 
   if (filePath === null) {
     return (
@@ -365,12 +381,12 @@ export function CodePane({ filePath, issues, selected, onToggleIds, openFileNonc
   let html: string | undefined;
   let highlightNote: string | undefined;
   if (lang === undefined) {
-    html = plainCodeHtml(content);
+    html = plainHtml;
     highlightNote = 'No syntax highlighting available for this file type.';
   } else if (highlightQuery.data) {
     html = highlightQuery.data;
   } else if (highlightQuery.error) {
-    html = plainCodeHtml(content);
+    html = plainHtml;
     highlightNote = 'Syntax highlighting failed — showing plain text.';
   }
 
