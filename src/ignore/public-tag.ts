@@ -1,13 +1,20 @@
-import MagicString from 'magic-string';
 import type { Comment } from 'oxc-parser';
 import { locateMemberAnchor } from '../fix/transforms/remove-member.js';
+import type {
+  ParsedSource,
+  SourceBatchResult,
+  SourceEdit,
+  SourceOp,
+  TransformInput,
+  TransformResult,
+} from '../fix/transforms/source.js';
+import type { BatchEdit, BatchOpResult } from '../fix/transforms/source.js';
 import {
+  applySingleOp,
   findTopLevelDeclarationSpan,
   locateExport,
-  parseSource,
+  pushEdit,
   startsOwnLine,
-  type TransformInput,
-  type TransformResult,
 } from '../fix/transforms/source.js';
 
 // Tags a declaration as intentionally public (exempt from further unused-export
@@ -23,36 +30,51 @@ import {
 //   statement itself — a re-export (`export { x } from './y.js'`, no local
 //   declaration to tag) fails with `ok:false`.
 // - `export default ...` -> tag goes above the whole statement.
+export function insertPublicTagBatch(
+  parsed: ParsedSource,
+  content: string,
+  ops: readonly SourceOp[],
+): SourceBatchResult {
+  const { program, comments } = parsed;
+  const results: BatchOpResult[] = ops.map(() => ({ ok: true }));
+  const edits: BatchEdit[] = [];
+  ops.forEach((op, opIndex) => {
+    const located = locateExport(program, op.symbol, op.pos);
+    if ('error' in located) {
+      results[opIndex] = { ok: false, reason: located.error };
+      return;
+    }
+    const site = located.site;
+    let anchor: number;
+    if (site.kind === 'declaration') {
+      anchor = site.deleteStart;
+    } else if (site.kind === 'default') {
+      anchor = site.statementStart;
+    } else {
+      if (site.isReexport) {
+        results[opIndex] = {
+          ok: false,
+          reason: `symbol '${op.symbol}' is a re-export with no local declaration to tag`,
+        };
+        return;
+      }
+      const localSpan = findTopLevelDeclarationSpan(program, site.localName);
+      if (!localSpan) {
+        results[opIndex] = { ok: false, reason: `no local declaration found for '${site.localName}'` };
+        return;
+      }
+      anchor = localSpan.start;
+    }
+    const edit = publicTagEditAtAnchor(content, comments, anchor);
+    // Two ops resolving to one anchor produce one identical insertion —
+    // pushEdit dedupes it (batch-internal idempotency).
+    if (edit) pushEdit(edits, edit, [opIndex]);
+  });
+  return { results, edits };
+}
+
 export function insertPublicTag(input: TransformInput): TransformResult {
-  const { filePath, content, symbol, pos } = input;
-  const { program, comments } = parseSource(filePath, content);
-  const located = locateExport(program, symbol, pos);
-  if ('error' in located) return { ok: false, reason: located.error };
-  const site = located.site;
-
-  let anchor: number;
-  if (site.kind === 'declaration') {
-    anchor = site.deleteStart;
-  } else if (site.kind === 'default') {
-    anchor = site.statementStart;
-  } else {
-    if (site.isReexport) {
-      return {
-        ok: false,
-        reason: `symbol '${symbol}' is a re-export with no local declaration to tag`,
-      };
-    }
-    const localSpan = findTopLevelDeclarationSpan(program, site.localName);
-    if (!localSpan) {
-      return {
-        ok: false,
-        reason: `no local declaration found for '${site.localName}'`,
-      };
-    }
-    anchor = localSpan.start;
-  }
-
-  return applyPublicTagAtAnchor(content, comments, anchor);
+  return applySingleOp(input.filePath, input.content, { symbol: input.symbol, pos: input.pos }, insertPublicTagBatch);
 }
 
 // Tags ONE member of an enum or namespace as @public — knip's per-member tag
@@ -64,38 +86,55 @@ export function insertPublicTag(input: TransformInput): TransformResult {
 // (parent by name — top-level or nested, bare or exported — member by name
 // within it, `pos` only as a same-name tiebreak); JSDoc creation/merge and
 // idempotency follow exactly the same rules as insertPublicTag.
+export function insertMemberPublicTagBatch(
+  parsed: ParsedSource,
+  content: string,
+  ops: readonly SourceOp[],
+): SourceBatchResult {
+  const { program, comments } = parsed;
+  const results: BatchOpResult[] = ops.map(() => ({ ok: true }));
+  const edits: BatchEdit[] = [];
+  ops.forEach((op, opIndex) => {
+    if (op.parentSymbol === undefined) {
+      results[opIndex] = { ok: false, reason: 'member public tag requires a parentSymbol' };
+      return;
+    }
+    const located = locateMemberAnchor(program, op.parentSymbol, op.symbol, op.pos);
+    if ('error' in located) {
+      results[opIndex] = { ok: false, reason: located.error };
+      return;
+    }
+    const edit = publicTagEditAtAnchor(content, comments, located.anchor);
+    if (edit) pushEdit(edits, edit, [opIndex]);
+  });
+  return { results, edits };
+}
+
 export function insertMemberPublicTag(
   input: TransformInput & { parentSymbol: string },
 ): TransformResult {
-  const { filePath, content, symbol, parentSymbol, pos } = input;
-  const { program, comments } = parseSource(filePath, content);
-  const located = locateMemberAnchor(program, parentSymbol, symbol, pos);
-  if ('error' in located) return { ok: false, reason: located.error };
-  return applyPublicTagAtAnchor(content, comments, located.anchor);
+  return applySingleOp(
+    input.filePath,
+    input.content,
+    { symbol: input.symbol, pos: input.pos, parentSymbol: input.parentSymbol },
+    insertMemberPublicTagBatch,
+  );
 }
 
-// Inserts `@public` into the JSDoc attached directly above `anchor`, creating
-// a fresh `/** @public */` line (matching the anchor line's indentation) when
-// no JSDoc exists. Idempotent: an existing JSDoc already documenting @public
-// is returned untouched. Shared by insertPublicTag (top-level declarations)
-// and insertMemberPublicTag (enum/namespace members) — the two differ only in
-// how the anchor is located.
-function applyPublicTagAtAnchor(
-  content: string,
-  comments: Comment[],
-  anchor: number,
-): TransformResult {
+// Computes the SourceEdit that inserts `@public` into the JSDoc attached
+// directly above `anchor` (creating a fresh `/** @public */` line when
+// none exists), or null when the JSDoc already documents @public
+// (idempotent no-op). Shared by insertPublicTagBatch (top-level declarations)
+// and insertMemberPublicTagBatch (enum/namespace members) — the two differ
+// only in how the anchor is located.
+function publicTagEditAtAnchor(content: string, comments: Comment[], anchor: number): SourceEdit | null {
   // Per-file newline convention, used both for a fresh `/** @public */` line
   // and for the new `* @public` line merged into an existing JSDoc.
   const nl = content.includes('\r\n') ? '\r\n' : '\n';
-
   const existing = findAdjacentJSDoc(content, comments, anchor);
   if (existing) {
     // Idempotent: this node's JSDoc already documents @public -> no-op.
-    if (/@public\b/.test(existing.value)) {
-      return { ok: true, newContent: content };
-    }
-    const s = new MagicString(content);
+    if (/@public\b/.test(existing.value)) return null;
     // Comment span includes the delimiters (verified against oxc-parser
     // 0.137.0: `end` lands exactly after the closing `*/`), so `end - 2` is the
     // start of the closing `*/` itself.
@@ -111,12 +150,11 @@ function applyPublicTagAtAnchor(
       // downstream tag parser.)
       const inner = existing.value.replace(/^\*/, '').trim();
       const innerLine = inner === '' ? '' : `${commentIndent} * ${inner}${nl}`;
-      s.overwrite(
-        existing.start,
-        existing.end,
-        `/**${nl}${innerLine}${commentIndent} * @public${nl}${commentIndent} */`,
-      );
-      return { ok: true, newContent: s.toString() };
+      return {
+        start: existing.start,
+        end: existing.end,
+        text: `/**${nl}${innerLine}${commentIndent} * @public${nl}${commentIndent} */`,
+      };
     }
     const closingLineStart = lastLineStart(content, closingStart);
     const closingPrefix = content.slice(closingLineStart, closingStart);
@@ -124,24 +162,19 @@ function applyPublicTagAtAnchor(
       // Closing `*/` on its own line (the normal multi-line JSDoc shape):
       // insert a `* @public` line just above it, reusing that line's existing
       // indentation so the new line matches the JSDoc's style.
-      s.appendLeft(closingLineStart, `${closingPrefix}* @public${nl}`);
-    } else {
-      // Closing `*/` shares its line with comment text (e.g. `/**\n * Doc. */`,
-      // or a single-line JSDoc not starting its own line): inserting a whole
-      // line here would split the comment mid-text, so fall back to an inline
-      // `@public ` right before the `*/`.
-      const before = content[closingStart - 1] ?? '';
-      const pad = before === ' ' || before === '\t' ? '' : ' ';
-      s.appendLeft(closingStart, `${pad}@public `);
+      return { start: closingLineStart, end: closingLineStart, text: `${closingPrefix}* @public${nl}` };
     }
-    return { ok: true, newContent: s.toString() };
+    // Closing `*/` shares its line with comment text (e.g. `/**\n * Doc. */`,
+    // or a single-line JSDoc not starting its own line): inserting a whole
+    // line here would split the comment mid-text, so fall back to an inline
+    // `@public ` right before the `*/`.
+    const before = content[closingStart - 1] ?? '';
+    const pad = before === ' ' || before === '\t' ? '' : ' ';
+    return { start: closingStart, end: closingStart, text: `${pad}@public ` };
   }
-
-  const s = new MagicString(content);
   const lineStart = lastLineStart(content, anchor);
   const indent = content.slice(lineStart, anchor);
-  s.appendLeft(lineStart, `${indent}/** @public */${nl}`);
-  return { ok: true, newContent: s.toString() };
+  return { start: lineStart, end: lineStart, text: `${indent}/** @public */${nl}` };
 }
 
 // Finds the single Block comment directly attached above `start` — only
